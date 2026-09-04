@@ -238,12 +238,12 @@ pub struct SignInFailure(pub SignInProblem);
 impl std::fmt::Display for SignInFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let reason = match self.0 {
-            SignInProblem::Premium => "the account has no Spotify Premium",
+            SignInProblem::Premium => "the account has no premium subscription",
             SignInProblem::Region => "the account is out of its home region",
             SignInProblem::Credentials => "the stored credentials are no longer valid",
-            SignInProblem::Network => "Spotify could not be reached",
+            SignInProblem::Network => "the service could not be reached",
             SignInProblem::Cancelled => "authorization was cancelled in the browser",
-            SignInProblem::Refused => "Spotify refused the session",
+            SignInProblem::Refused => "the service refused the session",
         };
         write!(f, "{reason}")
     }
@@ -286,4 +286,28 @@ pub trait MusicProvider: Send + Sync {
     ) -> Result<ProviderSession>;
     fn abandon(&self) {}
     fn sign_out(&self);
+}
+
+#[cfg(test)]
+mod sign_in_failure_tests {
+    use super::{SignInFailure, SignInProblem};
+
+    #[test]
+    fn names_no_provider() {
+        let problems = [
+            SignInProblem::Premium,
+            SignInProblem::Region,
+            SignInProblem::Credentials,
+            SignInProblem::Network,
+            SignInProblem::Cancelled,
+            SignInProblem::Refused,
+        ];
+        for problem in problems {
+            let message = SignInFailure(problem).to_string();
+            assert!(
+                !message.contains("Spotify"),
+                "{problem:?} still names a provider: {message}"
+            );
+        }
+    }
 }
