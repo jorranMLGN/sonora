@@ -266,3 +266,47 @@ The user probed against had created no sets of their own, so both `/playlists` a
 returned an empty collection. Their shapes are therefore unverified — an implementation must
 tolerate an empty collection, and should not assume the element type without checking against
 a user who has published something.
+
+## The write endpoints are probably wrong, and cannot be settled without writing
+
+The design's write paths were never verified, because verifying one modifies a real account.
+They can, however, be probed for *existence* with a GET, which changes nothing.
+
+Calibration first, so the codes mean something:
+
+| Probe | Status |
+| ----- | ------ |
+| `GET /definitely/not/a/route` | 404 |
+| `GET /me` | 401 |
+| `GET /users/{id}/track_likes` | 200 |
+
+So this API answers 401 for a route that exists but needs authentication, and 404 for one
+that does not exist. That distinction is what makes the next table readable.
+
+| Write path the design assumes | GET status |
+| ----------------------------- | ---------- |
+| `/likes/tracks/{id}` | 404 |
+| `/me/followings/{id}` | 404 |
+| `/me/library/albums_and_playlists/{id}` | 404 |
+
+All three behave like the nonsense route rather than like `/me`. Two of them are also `/me/…`
+paths, and every `/me/…` path except `/me` itself has already been shown not to exist.
+
+**This is suggestive, not conclusive.** A route registered only for PUT and DELETE could in
+principle answer 404 to a GET rather than 405. But the design had no evidence for these paths
+to begin with, and the evidence there is now points away from them.
+
+The likely shape, by analogy with the reads, is `/users/{me}/track_likes/{track}` — the same
+`/users/{id}/…` prefix every library read uses. That is an inference, not a finding, and it is
+recorded here as an inference.
+
+Settling this needs one of two things, both requiring a real account's owner to agree:
+
+1. A self-reversing live test: like a track, confirm, unlike it, confirm. Net zero change, but
+   still a write against someone's account.
+2. Capturing what the web player sends when the like button is pressed, from a browser's
+   network panel.
+
+Until then, every write method in the provider is built on an unverified path that current
+evidence suggests is wrong. They will fail loudly with an HTTP error rather than corrupting
+anything, but they will fail.
