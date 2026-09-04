@@ -9,6 +9,7 @@ pub mod lyrics;
 mod models;
 pub mod musixmatch;
 pub mod netease;
+pub mod soundcloud;
 mod spectrum;
 pub mod spotify;
 pub mod youtube;

@@ -61,6 +61,7 @@ fn main() {
         let providers: Vec<Arc<dyn music::MusicProvider>> = vec![
             Arc::new(music::spotify::SpotifyProvider::from_env()),
             Arc::new(music::youtube::YouTubeProvider::new()),
+            Arc::new(music::soundcloud::SoundCloudProvider::new()),
         ];
         let local_provider: Arc<dyn music::MusicProvider> =
             Arc::new(music::local::LocalProvider::new(
