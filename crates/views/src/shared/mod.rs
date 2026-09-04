@@ -54,6 +54,7 @@ pub(crate) fn firefox_note(cx: &App) -> Div {
 
 pub(crate) fn provider_logo(slug: &str) -> &'static str {
     match slug {
+        "soundcloud" => "icons/soundcloud.svg",
         "spotify" => "icons/spotify.svg",
         "youtube" => "icons/youtubemusic.svg",
         _ => "icons/music.svg",
