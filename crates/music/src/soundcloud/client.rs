@@ -1,24 +1,29 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 
+use super::http::Http;
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, MediaKind, MusicApi, Playlist, PlaylistDetail,
     SavedArtist, Track, UserProfile,
 };
 
-pub struct SoundCloudClient {}
-
-impl SoundCloudClient {
-    pub fn new() -> Self {
-        Self {}
-    }
+#[allow(dead_code)]
+pub struct SoundCloudClient {
+    http: Arc<Http>,
+    user: Option<String>,
 }
 
-impl Default for SoundCloudClient {
-    fn default() -> Self {
-        Self::new()
+impl SoundCloudClient {
+    pub fn new(http: Arc<Http>) -> Self {
+        Self { http, user: None }
+    }
+
+    pub fn as_user(mut self, id: String) -> Self {
+        self.user = Some(id);
+        self
     }
 }
 
