@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 
 use super::http::Http;
-use super::{library, search};
+use super::{library, playlists, search};
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, MediaKind, MusicApi, Playlist, PlaylistDetail,
     SavedArtist, Track, UserProfile,
@@ -79,36 +79,42 @@ impl MusicApi for SoundCloudClient {
         Ok(playlists)
     }
 
-    async fn create_playlist(&self, _name: &str) -> Result<String> {
-        anyhow::bail!("not implemented yet")
+    async fn create_playlist(&self, name: &str) -> Result<String> {
+        playlists::create(&self.http, name).await
     }
 
-    async fn rename_playlist(&self, _playlist_id: &str, _name: &str) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn rename_playlist(&self, playlist_id: &str, name: &str) -> Result<()> {
+        playlists::rename(&self.http, playlist_id, name).await
     }
 
-    async fn delete_playlist(&self, _playlist_id: &str) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn delete_playlist(&self, playlist_id: &str) -> Result<()> {
+        playlists::delete(&self.http, playlist_id).await
     }
 
-    async fn remove_playlist_from_library(&self, _playlist_id: &str) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn remove_playlist_from_library(&self, playlist_id: &str) -> Result<()> {
+        library::set_saved(&self.http, playlist_id, false).await
     }
 
-    async fn add_playlist_to_library(&self, _playlist_id: &str) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn add_playlist_to_library(&self, playlist_id: &str) -> Result<()> {
+        library::set_saved(&self.http, playlist_id, true).await
     }
 
-    async fn set_playlist_public(&self, _playlist_id: &str, _public: bool) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn set_playlist_public(&self, playlist_id: &str, public: bool) -> Result<()> {
+        playlists::set_public(&self.http, playlist_id, public).await
     }
 
-    async fn add_track_to_playlist(&self, _playlist_id: &str, _track_id: &str) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn add_track_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
+        let track_id: u64 = track_id
+            .parse()
+            .context("cannot parse the soundcloud track id")?;
+        playlists::add_track(&self.http, playlist_id, track_id).await
     }
 
-    async fn remove_track_from_playlist(&self, _playlist_id: &str, _track_id: &str) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
+        let track_id: u64 = track_id
+            .parse()
+            .context("cannot parse the soundcloud track id")?;
+        playlists::remove_track(&self.http, playlist_id, track_id).await
     }
 
     async fn saved_albums(&self, limit: u32) -> Result<Vec<Album>> {
@@ -130,24 +136,24 @@ impl MusicApi for SoundCloudClient {
         library::set_followed(&self.http, artist_id, saved).await
     }
 
-    async fn album(&self, _album_id: &str) -> Result<AlbumDetail> {
-        anyhow::bail!("not implemented yet")
+    async fn album(&self, album_id: &str) -> Result<AlbumDetail> {
+        playlists::album(&self.http, album_id).await
     }
 
-    async fn album_tracks(&self, _album_id: &str) -> Result<Vec<Track>> {
-        anyhow::bail!("not implemented yet")
+    async fn album_tracks(&self, album_id: &str) -> Result<Vec<Track>> {
+        playlists::album_tracks(&self.http, album_id).await
     }
 
-    async fn playlist(&self, _playlist_id: &str) -> Result<PlaylistDetail> {
-        anyhow::bail!("not implemented yet")
+    async fn playlist(&self, playlist_id: &str) -> Result<PlaylistDetail> {
+        playlists::detail(&self.http, playlist_id).await
     }
 
-    async fn playlist_tracks(&self, _playlist_id: &str) -> Result<Vec<Track>> {
-        anyhow::bail!("not implemented yet")
+    async fn playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
+        playlists::tracks(&self.http, playlist_id).await
     }
 
-    async fn playlist_covers(&self, _playlist_id: &str, _wanted: usize) -> Result<Vec<String>> {
-        anyhow::bail!("not implemented yet")
+    async fn playlist_covers(&self, playlist_id: &str, wanted: usize) -> Result<Vec<String>> {
+        playlists::playlist_covers(&self.http, playlist_id, wanted).await
     }
 
     async fn track_radio(&self, _track_id: &str) -> Result<Vec<Track>> {

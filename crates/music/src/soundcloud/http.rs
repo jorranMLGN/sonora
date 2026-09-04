@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 const BASE: &str = "https://api-v2.soundcloud.com";
@@ -78,6 +79,60 @@ impl Http {
             return Err(anyhow::Error::new(AuthRejected)
                 .context(format!("soundcloud refused {path} with {status}")));
         }
+        if !status.is_success() {
+            anyhow::bail!("soundcloud refused {path} with {status}");
+        }
+        response
+            .json()
+            .await
+            .with_context(|| format!("cannot read the soundcloud response for {path}"))
+    }
+
+    pub async fn put_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let mut request = self
+            .agent
+            .put(format!("{BASE}{path}"))
+            .query(&[("client_id", self.client_id.as_str())])
+            .json(body);
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("OAuth {token}"));
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("soundcloud refused {path} with {status}");
+        }
+        response
+            .json()
+            .await
+            .with_context(|| format!("cannot read the soundcloud response for {path}"))
+    }
+
+    pub async fn post_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let mut request = self
+            .agent
+            .post(format!("{BASE}{path}"))
+            .query(&[("client_id", self.client_id.as_str())])
+            .json(body);
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("OAuth {token}"));
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let status = response.status();
         if !status.is_success() {
             anyhow::bail!("soundcloud refused {path} with {status}");
         }

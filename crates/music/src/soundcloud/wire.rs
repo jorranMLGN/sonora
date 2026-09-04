@@ -104,8 +104,6 @@ pub fn track(raw: Track) -> Model {
 /// id-and-policy stubs that a later task resolves in one batch request. Any
 /// entry lacking `user` falls through to `Stub` regardless of what other
 /// fields it carries, so those fields are silently discarded.
-// unused until playlist_tracks is wired
-#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Entry {
@@ -113,14 +111,12 @@ pub enum Entry {
     Stub(Stub),
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct Stub {
     pub id: u64,
 }
 
 /// The id of every entry, full or stub, in the order the playlist gives them.
-#[allow(dead_code)]
 pub fn entry_ids(entries: &[Entry]) -> Vec<u64> {
     entries
         .iter()
@@ -179,8 +175,6 @@ pub struct Playlist {
     pub permalink_url: Option<String>,
     #[serde(default)]
     pub release_date: Option<String>,
-    // unused until playlist_tracks is wired
-    #[allow(dead_code)]
     #[serde(default)]
     pub tracks: Vec<Entry>,
     pub user: User,

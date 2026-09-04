@@ -2,6 +2,7 @@ mod auth;
 mod client;
 mod http;
 mod library;
+mod playlists;
 mod search;
 mod wire;
 
