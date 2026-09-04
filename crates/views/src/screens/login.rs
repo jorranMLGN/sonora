@@ -361,6 +361,10 @@ impl Render for LoginView {
                     }))
             })
             .collect::<Vec<_>>();
+        let provider_name = providers
+            .get(self.tab)
+            .map(|info| info.name)
+            .unwrap_or_default();
         let column = providers.into_iter().nth(self.tab).map(|info| Column {
             slug: info.slug,
             name: info.name,
@@ -434,7 +438,11 @@ impl Render for LoginView {
                     ),
             )
             .when_some(failure, |this, failure| {
-                this.child(crate::shared::trouble::trouble(failure, true))
+                this.child(crate::shared::trouble::trouble(
+                    failure,
+                    provider_name,
+                    true,
+                ))
             })
             .when_some(code, |this, (code, url)| {
                 this.child(self.code_prompt(code, url, cx).into_any_element())

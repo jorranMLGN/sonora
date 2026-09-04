@@ -1461,7 +1461,7 @@ impl SettingsView {
                     ),
             )
             .when_some(error, |this, error| {
-                this.child(crate::shared::trouble::trouble(error, false))
+                this.child(crate::shared::trouble::trouble(error, name, false))
             })
             .when(!methods.is_empty(), |this| {
                 this.child(
