@@ -217,3 +217,52 @@ ep, single and compilation, which `ReleaseType` already models. Prefer `set_type
 both and is the better source for a "last modified" style timestamp, but converting its ISO
 string to the `i64` the shared model wants needs a date parser that `crates/music` does not
 currently depend on directly — left as `None` rather than adding a dependency for it.
+
+## The full library endpoint map
+
+Probed against a signed-in user's public profile, with a `client_id` and no Authorization
+header — every one of these reads works unauthenticated.
+
+| Path | Status | Holds |
+| ---- | ------ | ----- |
+| `/users/{id}/track_likes` | 200 | liked tracks |
+| `/users/{id}/playlist_likes` | 200 | liked sets, albums among them |
+| `/users/{id}/playlists` | 200 | sets the user created |
+| `/users/{id}/albums` | 200 | albums the user created |
+| `/users/{id}/followings` | 200 | users they follow |
+| `/users/{id}/followers` | 200 | users following them |
+| `/users/{id}/reposts` | 404 | — |
+
+`/users/{id}/albums` existing as its own route is worth noting: the design assumed albums
+could only be found by filtering playlists on `set_type`. For a user's *own* albums there is
+a dedicated endpoint, and it is cheaper and clearer than filtering.
+
+### Both like endpoints return wrappers
+
+`/users/{id}/track_likes` gives `{ created_at, kind, track }` and `/users/{id}/playlist_likes`
+gives `{ created_at, kind, playlist }`. The `created_at` on the wrapper is when the user liked
+it, which is what `Track.added_at` and a playlist's date-added want — not the `created_at`
+inside the track, which is when it was uploaded.
+
+The two are easy to confuse and they differ by years on old material.
+
+### What each library method maps to
+
+A user's library is their own creations plus what they have liked, so the natural mapping
+takes two requests each and splits `playlist_likes` by `is_album`:
+
+| `MusicApi` method | Requests |
+| ----------------- | -------- |
+| `saved_tracks` | `/users/{id}/track_likes`, unwrapped |
+| `playlists` | `/users/{id}/playlists`, plus the non-album half of `/users/{id}/playlist_likes` |
+| `saved_albums` | `/users/{id}/albums`, plus the album half of `/users/{id}/playlist_likes` |
+| `saved_artists` | `/users/{id}/followings` |
+
+`playlists` and `saved_albums` read the same `playlist_likes` response and split it two ways,
+exactly as `search_albums` splits a search page. Neither should fetch it twice within one
+call, though sharing it *between* the two methods is not worth a cache.
+
+The user probed against had created no sets of their own, so both `/playlists` and `/albums`
+returned an empty collection. Their shapes are therefore unverified — an implementation must
+tolerate an empty collection, and should not assume the element type without checking against
+a user who has published something.
