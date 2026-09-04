@@ -94,3 +94,74 @@ appears in any fixture or in this document.
 Not applicable to this task's probes, but noted per the global constraints doc:
 the cache directory is `dirs::cache_dir()/sonora/soundcloud`, matching the
 pattern in `crates/music/src/youtube/mod.rs`, not `config_dir()`.
+
+## A7 resolved, and a correction to the library endpoints
+
+A7 was probed with a real token supplied by the user, from a script that read it through a
+hidden prompt, never wrote it to disk, and printed only status codes and JSON field names.
+
+| Probe | Result |
+| ----- | ------ |
+| `GET /me` with `Authorization: OAuth <token>` and `client_id` | 200 |
+| `GET /me` with the header, no `client_id` | 200 |
+| `GET /me` with `client_id` only, no header | 401 |
+
+**A7 CONFIRMED.** The header authenticates on its own; `client_id` is not required
+alongside it, though sending it anyway is harmless and keeps one code path.
+
+### The `/me/...` library routes in the design do not exist
+
+| Path the design assumed | Status |
+| ----------------------- | ------ |
+| `/me/likes/tracks` | 404 |
+| `/me/followings` | 404 |
+| `/me/library/albums_and_playlists` | 404 |
+| `/me/playlists` | 404 |
+| `/me/play-history/tracks` | 200 |
+
+The working shape is `/users/{id}/...`, and those routes need no token at all:
+
+| Path | Status without any Authorization header |
+| ---- | --------------------------------------- |
+| `/users/{id}/track_likes` | 200 |
+| `/users/{id}/playlists` | 200 |
+| `/users/{id}/followings` | 200 |
+
+This matches what the web player itself does: a network capture of the signed-in likes
+page shows it calling `/users/282025950/track_likes?...&client_id=...` with no
+Authorization header.
+
+**Consequence for the design.** Authentication is needed to learn *who you are* and to
+write; it is not needed to read a library. The flow is: sign in, `GET /me` once to obtain
+`id`, then every library read goes through `/users/{id}/...`. `SoundCloudClient` must
+therefore hold the user id, not just an HTTP client. An anonymous session can still read
+any public profile's likes, sets and follows — which is more than the design assumed it
+could do.
+
+### Envelope and wrapper shapes
+
+Every listing returns `{ collection, next_href, query_urn }`. The design's `Page<T>` names
+`collection` and `next_href`; `query_urn` is extra and is dropped harmlessly.
+
+`/users/{id}/track_likes` does **not** return bare tracks. Each item is a wrapper:
+
+```
+{ "created_at": "...", "kind": "like", "track": { ...the track... } }
+```
+
+`/users/{id}/followings` returns bare user objects. `search/tracks` returns bare tracks.
+So the collection element type differs per endpoint and cannot be assumed uniform.
+
+This wrapper is useful rather than annoying: its `created_at` is what fills
+`Track.added_at`, which the design's mapping table had left as `None`.
+
+### Privacy note on `/me`
+
+The `/me` response carries substantial personal data beyond identity: `primary_email`,
+`primary_email_sha256`, `date_of_birth`, `gender`, `city`, `country_code`, `ppid`,
+`analytics_id`, `marketing_ids` and `consent_management_jwt`.
+
+The wire struct for `/me` must name only the fields the provider needs — `id`, `username`,
+`avatar_url`, `permalink_url` — so everything else is dropped at deserialisation. Never
+deserialise this response into a `serde_json::Value`, never log it whole, and never write
+it to a fixture. The fixtures in this branch contain no `/me` response for that reason.
