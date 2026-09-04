@@ -1,0 +1,61 @@
+{
+    "avatar_url": "https://i1.sndcdn.com/avatars-zwohKtkUzt7XD4Vd-xed3oA-large.jpg",
+    "city": null,
+    "comments_count": 0,
+    "country_code": null,
+    "created_at": null,
+    "creator_subscriptions": [
+        {
+            "product": {
+                "id": "free"
+            }
+        }
+    ],
+    "creator_subscription": {
+        "product": {
+            "id": "free"
+        }
+    },
+    "description": "^__^ \n.... \n\u265b\nRadio - Reppin' emerging art/artists worldwide.\nRadio fro linz\n(\uffe3^\uffe3)\u309e\nI'll continue with b2b mixes without moderation!\nlooking forward to 2021.\n\nDJ Support for.\nDJ Spooky\nKaytranada\nSteve Spacek\nOnra\nBoiler Room (Berlin)\nDBridge & Kabuki\nHudson Mohawke,\nMike SLott\nAirhead\nJames Blake\nGas Lamp Killer\nShigeto\nStwo\nJose James\nGil Scott Heron,\nSpacek\nMiguel,\nUp Hgyh \nRas G \nSweatson Klank\nKRTS\nComfort Fit\nPortformat\nJulien Dyne\n&  Many more....",
+    "followers_count": 37935,
+    "followings_count": 1996,
+    "first_name": "Jay",
+    "full_name": "Jay Scarlett",
+    "groups_count": 0,
+    "id": 293,
+    "kind": "user",
+    "last_modified": "2022-11-12T19:16:41Z",
+    "last_name": "Scarlett",
+    "likes_count": 2802,
+    "playlist_likes_count": 236,
+    "permalink": "beatdimensions",
+    "permalink_url": "https://soundcloud.com/beatdimensions",
+    "playlist_count": 13,
+    "reposts_count": null,
+    "track_count": 4,
+    "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A293",
+    "urn": "soundcloud:users:293",
+    "username": "Soundssupreme",
+    "verified": false,
+    "visuals": {
+        "urn": "soundcloud:users:293",
+        "enabled": true,
+        "visuals": [
+            {
+                "urn": "soundcloud:visuals:81295229",
+                "entry_time": 0,
+                "visual_url": "https://i1.sndcdn.com/visuals-000000000293-Xhqvpq-original.jpg"
+            }
+        ],
+        "tracking": null
+    },
+    "badges": {
+        "pro": false,
+        "creator_mid_tier": false,
+        "pro_unlimited": false,
+        "verified": false
+    },
+    "station_urn": "soundcloud:system-playlists:artist-stations:293",
+    "station_permalink": "artist-stations:293",
+    "date_of_birth": null
+}
