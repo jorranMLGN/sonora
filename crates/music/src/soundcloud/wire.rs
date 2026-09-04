@@ -43,9 +43,6 @@ pub struct Track {
     pub policy: String,
     #[serde(default)]
     pub playback_count: Option<u64>,
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub likes_count: Option<u64>,
     #[serde(default)]
     pub artwork_url: Option<String>,
     #[allow(dead_code)]
