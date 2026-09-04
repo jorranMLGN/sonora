@@ -6,19 +6,30 @@ use crate::models::{
     Album as AlbumModel, ArtistRef, Playlist as PlaylistModel, ReleaseType, Track as Model,
 };
 
-#[allow(dead_code)]
+/// The envelope every v2 listing endpoint returns.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Page<T> {
+    #[serde(default = "Vec::new")]
+    pub collection: Vec<T>,
+    // pagination not implemented yet
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub next_href: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct User {
     pub id: u64,
     #[serde(default)]
     pub username: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub avatar_url: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub permalink_url: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct Track {
     pub id: u64,
@@ -32,10 +43,12 @@ pub struct Track {
     pub policy: String,
     #[serde(default)]
     pub playback_count: Option<u64>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub likes_count: Option<u64>,
     #[serde(default)]
     pub artwork_url: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub permalink_url: Option<String>,
     #[serde(default)]
@@ -44,7 +57,6 @@ pub struct Track {
 }
 
 // filename substitution, not a request
-#[allow(dead_code)]
 pub fn artwork(url: Option<&str>, size: &str) -> Option<String> {
     let url = url?;
     Some(match url.rsplit_once("-large.") {
@@ -53,7 +65,6 @@ pub fn artwork(url: Option<&str>, size: &str) -> Option<String> {
     })
 }
 
-#[allow(dead_code)]
 pub fn track(raw: Track) -> Model {
     let artist = raw.user.username.clone();
     Model {
@@ -88,6 +99,7 @@ pub fn track(raw: Track) -> Model {
 /// id-and-policy stubs that a later task resolves in one batch request. Any
 /// entry lacking `user` falls through to `Stub` regardless of what other
 /// fields it carries, so those fields are silently discarded.
+// unused until playlist_tracks is wired
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
@@ -114,7 +126,6 @@ pub fn entry_ids(entries: &[Entry]) -> Vec<u64> {
         .collect()
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 pub struct Playlist {
     pub id: u64,
@@ -128,10 +139,13 @@ pub struct Playlist {
     pub track_count: u32,
     #[serde(default)]
     pub artwork_url: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
     pub permalink_url: Option<String>,
     #[serde(default)]
     pub release_date: Option<String>,
+    // unused until playlist_tracks is wired
+    #[allow(dead_code)]
     #[serde(default)]
     pub tracks: Vec<Entry>,
     pub user: User,
@@ -140,7 +154,6 @@ pub struct Playlist {
 /// Maps a SoundCloud `set_type` onto the shared release model.
 ///
 /// A set with no recognised type is a plain playlist, not an album.
-#[allow(dead_code)]
 pub fn release_type(set_type: &str) -> Option<ReleaseType> {
     match set_type {
         "album" => Some(ReleaseType::Album),
@@ -151,12 +164,10 @@ pub fn release_type(set_type: &str) -> Option<ReleaseType> {
     }
 }
 
-#[allow(dead_code)]
 pub fn is_album(raw: &Playlist) -> bool {
     release_type(&raw.set_type).is_some()
 }
 
-#[allow(dead_code)]
 pub fn playlist(raw: Playlist) -> PlaylistModel {
     PlaylistModel {
         id: raw.id.to_string(),
@@ -178,7 +189,6 @@ pub fn playlist(raw: Playlist) -> PlaylistModel {
 /// The caller must check `is_album(&raw)` first; a plain playlist's
 /// `set_type` does not map onto a `ReleaseType` and this treats that as a
 /// caller bug, not a value to guess at.
-#[allow(dead_code)]
 pub fn album(raw: Playlist) -> AlbumModel {
     debug_assert!(
         is_album(&raw),
@@ -374,5 +384,17 @@ mod tests {
         let ids = entry_ids(&raw.tracks);
         assert_eq!(ids.len(), raw.tracks.len());
         assert!(ids.iter().all(|id| *id > 0));
+    }
+
+    #[test]
+    fn parses_a_search_page() {
+        let page: super::Page<Raw> =
+            serde_json::from_str(include_str!("fixtures/search_tracks.json")).unwrap();
+        assert_eq!(page.collection.len(), 5);
+        assert!(page.collection.iter().all(|t| t.id > 0));
+        assert!(
+            page.next_href.is_some(),
+            "the fixture was captured with more results to come"
+        );
     }
 }

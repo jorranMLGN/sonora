@@ -1,6 +1,7 @@
 mod auth;
 mod client;
 mod http;
+mod search;
 mod wire;
 
 use std::path::PathBuf;

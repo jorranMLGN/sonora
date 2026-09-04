@@ -5,6 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use super::http::Http;
+use super::search;
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, MediaKind, MusicApi, Playlist, PlaylistDetail,
     SavedArtist, Track, UserProfile,
@@ -141,7 +142,15 @@ impl MusicApi for SoundCloudClient {
         anyhow::bail!("not implemented yet")
     }
 
-    async fn search(&self, _query: &str) -> Result<Vec<Track>> {
-        anyhow::bail!("not implemented yet")
+    async fn search(&self, query: &str) -> Result<Vec<Track>> {
+        search::tracks(&self.http, query).await
+    }
+
+    async fn search_albums(&self, query: &str) -> Result<Vec<Album>> {
+        search::albums(&self.http, query).await
+    }
+
+    async fn search_playlists(&self, query: &str) -> Result<Vec<Playlist>> {
+        search::playlists(&self.http, query).await
     }
 }
