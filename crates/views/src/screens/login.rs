@@ -106,7 +106,7 @@ impl LoginView {
             ),
             SignIn::Secret => (
                 format!("sign-in-{slug}-cookies"),
-                t!("login-connect-cookies"),
+                i18n::lookup(crate::shared::secret_label(slug), None),
             ),
             SignIn::Path(_) => (
                 format!("sign-in-{slug}-path"),

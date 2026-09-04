@@ -1539,7 +1539,7 @@ impl SettingsView {
             ),
             SignIn::Secret => (
                 format!("connect-{slug}-cookies"),
-                t!("login-connect-cookies"),
+                i18n::lookup(crate::shared::secret_label(slug), None),
             ),
             SignIn::Path(_) => (
                 format!("connect-{slug}-path"),

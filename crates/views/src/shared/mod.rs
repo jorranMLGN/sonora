@@ -60,3 +60,31 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
         _ => "icons/music.svg",
     }
 }
+
+/// Names the Fluent key for a provider's manual-paste sign-in label.
+///
+/// `SignIn::Secret` means "paste the credential yourself", but the credential
+/// differs: SoundCloud takes an OAuth token, the others take cookies.
+pub(crate) fn secret_label(slug: &str) -> &'static str {
+    match slug {
+        "soundcloud" => "login-connect-token",
+        _ => "login-connect-cookies",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::secret_label;
+
+    #[test]
+    fn soundcloud_pastes_a_token() {
+        assert_eq!(secret_label("soundcloud"), "login-connect-token");
+    }
+
+    #[test]
+    fn other_providers_paste_cookies() {
+        assert_eq!(secret_label("youtube"), "login-connect-cookies");
+        assert_eq!(secret_label("spotify"), "login-connect-cookies");
+        assert_eq!(secret_label("anything-else"), "login-connect-cookies");
+    }
+}
