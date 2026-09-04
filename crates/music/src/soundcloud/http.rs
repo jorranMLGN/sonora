@@ -14,6 +14,17 @@ impl std::fmt::Display for AuthRejected {
 
 impl std::error::Error for AuthRejected {}
 
+#[derive(Debug)]
+pub struct Unreachable;
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "soundcloud could not be reached")
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
 pub struct Http {
     agent: reqwest::Client,
     client_id: String,
@@ -54,10 +65,14 @@ impl Http {
         if let Some(token) = &self.token {
             request = request.header("Authorization", format!("OAuth {token}"));
         }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                return Err(anyhow::Error::new(error)
+                    .context(Unreachable)
+                    .context(format!("cannot reach soundcloud for {path}")));
+            }
+        };
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(anyhow::Error::new(AuthRejected)
