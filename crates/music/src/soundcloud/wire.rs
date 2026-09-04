@@ -85,7 +85,9 @@ pub fn track(raw: Track) -> Model {
 /// One entry in a playlist's embedded track list.
 ///
 /// SoundCloud inlines only the first five tracks in full; the rest arrive as
-/// id-and-policy stubs that a later task resolves in one batch request.
+/// id-and-policy stubs that a later task resolves in one batch request. Any
+/// entry lacking `user` falls through to `Stub` regardless of what other
+/// fields it carries, so those fields are silently discarded.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
@@ -171,8 +173,18 @@ pub fn playlist(raw: Playlist) -> PlaylistModel {
     }
 }
 
+/// Converts a set the caller has already confirmed is an album.
+///
+/// The caller must check `is_album(&raw)` first; a plain playlist's
+/// `set_type` does not map onto a `ReleaseType` and this treats that as a
+/// caller bug, not a value to guess at.
 #[allow(dead_code)]
 pub fn album(raw: Playlist) -> AlbumModel {
+    debug_assert!(
+        is_album(&raw),
+        "album() called on set_type {:?}, which is not an album; check is_album() first",
+        raw.set_type
+    );
     let artist = raw.user.username.clone();
     let release_type = release_type(&raw.set_type).unwrap_or(ReleaseType::Album);
     AlbumModel {
@@ -345,6 +357,14 @@ mod tests {
             .filter(|e| matches!(e, Entry::Stub(_)))
             .count();
         assert_eq!((full, stub), (5, 12), "only the first five arrive in full");
+    }
+
+    #[test]
+    #[should_panic(expected = "which is not an album")]
+    fn album_panics_on_a_plain_playlist_in_debug_builds() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_set.json")).unwrap();
+        album(raw);
     }
 
     #[test]
