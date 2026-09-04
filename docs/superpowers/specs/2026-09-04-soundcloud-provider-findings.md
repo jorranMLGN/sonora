@@ -165,3 +165,55 @@ The wire struct for `/me` must name only the fields the provider needs — `id`,
 `avatar_url`, `permalink_url` — so everything else is dropped at deserialisation. Never
 deserialise this response into a `serde_json::Value`, never log it whole, and never write
 it to a fixture. The fixtures in this branch contain no `/me` response for that reason.
+
+## Playlists return only five real tracks, and the batch endpoint reshuffles
+
+Found while preparing the playlist tasks, by reading the committed fixtures rather than
+trusting the design.
+
+`GET /playlists/{id}` embeds a `tracks[]` array, but only the **first five entries are full
+track objects**. Every entry after that is a stub carrying exactly four fields:
+
+```
+{ "id": …, "kind": "track", "monetization_model": "…", "policy": "…" }
+```
+
+Measured on the two committed fixtures: the album (17 tracks) returns 5 full and 12 stubs;
+the plain set (7 tracks) returns 5 full and 2 stubs.
+
+A `playlist_tracks` implementation that simply converts `tracks[]` would therefore return
+five real tracks followed by a tail of nameless, duration-less placeholders — and it would
+look correct on any playlist of five tracks or fewer.
+
+### Resolving the stubs
+
+`GET /tracks?ids=<comma-separated>&client_id=…` returns HTTP 200 and a **bare JSON array**
+of full track objects — not a `{ collection, next_href }` envelope like every listing
+endpoint. Verified against 11 stub ids from the album fixture: 11 ids in, 11 full tracks
+out.
+
+**It does not preserve the order of the ids you send.** Verified directly: the same set came
+back in a different sequence. The caller must re-order the response against the playlist's
+own `tracks[]` sequence, or an album plays in an arbitrary order.
+
+This is the same shape `CLAUDE.md` describes for the Spotify provider — "uris →
+`collection::metadata` → `Track`" — and the same discipline applies: resolve ids through one
+batch call and reuse it everywhere, rather than re-parsing track fields per endpoint.
+
+### Other playlist fields, measured
+
+| Field | Album fixture | Plain set fixture |
+| ----- | ------------- | ----------------- |
+| `set_type` | `"album"` | `""` |
+| `is_album` | `true` | `false` |
+| `sharing` | `"public"` | `"public"` |
+| `release_date` | `"2026-06-04T00:00:00Z"` | `null` |
+| `published_at` | present | present |
+
+`is_album` is redundant with `set_type` and less informative — `set_type` also distinguishes
+ep, single and compilation, which `ReleaseType` already models. Prefer `set_type`.
+
+`release_date` is absent on a plain set, so it must be optional. `published_at` is present on
+both and is the better source for a "last modified" style timestamp, but converting its ISO
+string to the `i64` the shared model wants needs a date parser that `crates/music` does not
+currently depend on directly — left as `None` rather than adding a dependency for it.
