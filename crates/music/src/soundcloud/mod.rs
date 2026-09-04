@@ -1,6 +1,7 @@
 mod auth;
 mod client;
 mod http;
+mod wire;
 
 use std::path::PathBuf;
 use std::sync::Arc;
