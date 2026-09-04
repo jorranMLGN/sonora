@@ -5,13 +5,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use super::http::Http;
-use super::search;
+use super::{library, search};
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, MediaKind, MusicApi, Playlist, PlaylistDetail,
     SavedArtist, Track, UserProfile,
 };
 
-#[allow(dead_code)]
 pub struct SoundCloudClient {
     http: Arc<Http>,
     user: Option<String>,
@@ -25,6 +24,13 @@ impl SoundCloudClient {
     pub fn as_user(mut self, id: String) -> Self {
         self.user = Some(id);
         self
+    }
+
+    /// The signed-in user's id, or a clear error for a guest session.
+    fn user_id(&self) -> Result<&str> {
+        self.user
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("signing in is required to read the library"))
     }
 }
 
@@ -50,12 +56,13 @@ impl MusicApi for SoundCloudClient {
         anyhow::bail!("not implemented yet")
     }
 
-    async fn saved_tracks(&self, _limit: u32) -> Result<Vec<Track>> {
-        anyhow::bail!("not implemented yet")
+    async fn saved_tracks(&self, limit: u32) -> Result<Vec<Track>> {
+        let user = self.user_id()?;
+        library::liked_tracks(&self.http, user, limit).await
     }
 
-    async fn set_track_saved(&self, _track_id: &str, _saved: bool) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()> {
+        library::set_track_liked(&self.http, track_id, saved).await
     }
 
     async fn track(&self, _track_id: &str) -> Result<Track> {
@@ -66,8 +73,10 @@ impl MusicApi for SoundCloudClient {
         anyhow::bail!("not implemented yet")
     }
 
-    async fn playlists(&self, _limit: u32) -> Result<Vec<Playlist>> {
-        anyhow::bail!("not implemented yet")
+    async fn playlists(&self, limit: u32) -> Result<Vec<Playlist>> {
+        let user = self.user_id()?;
+        let (playlists, _albums) = library::saved_sets(&self.http, user, limit).await?;
+        Ok(playlists)
     }
 
     async fn create_playlist(&self, _name: &str) -> Result<String> {
@@ -102,20 +111,23 @@ impl MusicApi for SoundCloudClient {
         anyhow::bail!("not implemented yet")
     }
 
-    async fn saved_albums(&self, _limit: u32) -> Result<Vec<Album>> {
-        anyhow::bail!("not implemented yet")
+    async fn saved_albums(&self, limit: u32) -> Result<Vec<Album>> {
+        let user = self.user_id()?;
+        let (_playlists, albums) = library::saved_sets(&self.http, user, limit).await?;
+        Ok(albums)
     }
 
-    async fn set_album_saved(&self, _album_id: &str, _saved: bool) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn set_album_saved(&self, album_id: &str, saved: bool) -> Result<()> {
+        library::set_saved(&self.http, album_id, saved).await
     }
 
-    async fn saved_artists(&self, _limit: u32) -> Result<Vec<SavedArtist>> {
-        anyhow::bail!("not implemented yet")
+    async fn saved_artists(&self, limit: u32) -> Result<Vec<SavedArtist>> {
+        let user = self.user_id()?;
+        library::followed(&self.http, user, limit).await
     }
 
-    async fn set_artist_saved(&self, _artist_id: &str, _saved: bool) -> Result<()> {
-        anyhow::bail!("not implemented yet")
+    async fn set_artist_saved(&self, artist_id: &str, saved: bool) -> Result<()> {
+        library::set_followed(&self.http, artist_id, saved).await
     }
 
     async fn album(&self, _album_id: &str) -> Result<AlbumDetail> {

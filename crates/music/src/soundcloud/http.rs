@@ -86,4 +86,42 @@ impl Http {
             .await
             .with_context(|| format!("cannot read the soundcloud response for {path}"))
     }
+
+    pub async fn put_empty(&self, path: &str) -> Result<()> {
+        let mut request = self
+            .agent
+            .put(format!("{BASE}{path}"))
+            .query(&[("client_id", self.client_id.as_str())]);
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("OAuth {token}"));
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("soundcloud refused {path} with {status}");
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, path: &str) -> Result<()> {
+        let mut request = self
+            .agent
+            .delete(format!("{BASE}{path}"))
+            .query(&[("client_id", self.client_id.as_str())]);
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("OAuth {token}"));
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("soundcloud refused {path} with {status}");
+        }
+        Ok(())
+    }
 }

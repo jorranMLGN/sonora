@@ -1,6 +1,7 @@
 mod auth;
 mod client;
 mod http;
+mod library;
 mod search;
 mod wire;
 

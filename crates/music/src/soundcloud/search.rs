@@ -30,7 +30,9 @@ async fn raw_playlists(http: &Http, query: &str) -> Result<Page<wire::Playlist>>
 }
 
 /// Splits a fetched page of sets into the playlists and the albums it holds.
-fn split_playlists(page: Page<wire::Playlist>) -> (Vec<crate::Playlist>, Vec<crate::Album>) {
+pub(crate) fn split_playlists(
+    page: Page<wire::Playlist>,
+) -> (Vec<crate::Playlist>, Vec<crate::Album>) {
     let (albums, playlists): (Vec<_>, Vec<_>) =
         page.collection.into_iter().partition(wire::is_album);
     (

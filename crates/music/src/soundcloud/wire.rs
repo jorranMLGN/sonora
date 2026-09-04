@@ -22,7 +22,6 @@ pub struct User {
     pub id: u64,
     #[serde(default)]
     pub username: String,
-    #[allow(dead_code)]
     #[serde(default)]
     pub avatar_url: Option<String>,
     #[allow(dead_code)]
@@ -51,6 +50,15 @@ pub struct Track {
     #[serde(default)]
     pub genre: Option<String>,
     pub user: User,
+}
+
+pub fn saved_artist(raw: User) -> crate::SavedArtist {
+    crate::SavedArtist {
+        id: raw.id.to_string(),
+        name: raw.username,
+        cover: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        added_at: None,
+    }
 }
 
 // filename substitution, not a request
@@ -121,6 +129,36 @@ pub fn entry_ids(entries: &[Entry]) -> Vec<u64> {
             Entry::Stub(stub) => stub.id,
         })
         .collect()
+}
+
+/// A liked track as `/users/{id}/track_likes` wraps it.
+///
+/// `created_at` here is when the user liked the track, not when it was
+/// uploaded — that second timestamp lives inside `track` and must not be
+/// confused with this one.
+#[derive(Clone, Debug, Deserialize)]
+pub struct TrackLike {
+    // When the track was liked. `Track::added_at` wants exactly this, but
+    // no date parser is reachable from this crate, so nothing converts it
+    // yet; it stays here for the test that pins down the trap.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub created_at: Option<String>,
+    pub track: Track,
+}
+
+/// A liked set as `/users/{id}/playlist_likes` wraps it.
+///
+/// Same trap as `TrackLike`: `created_at` is when the user liked the set.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PlaylistLike {
+    // Same trap as `TrackLike::created_at`: this is when the set was liked,
+    // not created. It would fill `Album::added_at`, but no date parser is
+    // reachable from this crate, so nothing consumes it yet.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub created_at: Option<String>,
+    pub playlist: Playlist,
 }
 
 #[derive(Clone, Debug, Deserialize)]
