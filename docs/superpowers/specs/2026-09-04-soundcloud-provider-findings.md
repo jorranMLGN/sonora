@@ -310,3 +310,58 @@ Settling this needs one of two things, both requiring a real account's owner to 
 Until then, every write method in the provider is built on an unverified path that current
 evidence suggests is wrong. They will fail loudly with an HTTP error rather than corrupting
 anything, but they will fail.
+
+## Playback: the transcoding chain, measured end to end
+
+Track 293 offers five transcodings:
+
+| Protocol | Preset | Quality | Legacy |
+| -------- | ------ | ------- | ------ |
+| hls | `aac_160k` | sq | no |
+| hls | `aac_96k` | lq | no |
+| hls | `abr_sq` | sq | no |
+| hls | `mp3_0_0` | sq | **yes** |
+| progressive | `mp3_0_0` | sq | **yes** |
+
+**The only progressive entry is a legacy 128 kbps MP3.** Everything better is HLS-only. This
+inverts the design's preference: it planned to prefer progressive for simplicity, which would
+have delivered exactly the quality the official API offers and that this approach was chosen
+to beat. Prefer the best HLS entry; keep progressive as the fallback.
+
+### Resolving a transcoding
+
+`GET <transcoding.url>?client_id=…` answers 200 with a single-key object, `{"url": "…"}`.
+
+- The progressive entry resolves to an `.mp3` on `cf-media.sndcdn.com`.
+- The `aac_160k` entry resolves to a `playlist.m3u8`.
+
+### The HLS playlist is fragmented MP4, not raw AAC
+
+This is the part that would have broken silently. The media playlist looks like:
+
+```
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:10
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MAP:URI="…/init.mp4?expires=…&Signature=…"
+#EXTINF:10.007800,
+…/data000.m4s?expires=…&Signature=…
+```
+
+Twenty-one media segments, all `.m4s`, preceded by an **initialisation segment named on the
+`#EXT-X-MAP` line**. That init segment carries the `moov` box; without it the concatenated
+media segments are headerless and no decoder can read them.
+
+The design's `segments()` helper filters out every line beginning with `#`. That would discard
+`#EXT-X-MAP` along with the genuine comments, and produce a buffer that decodes to nothing.
+
+The correct sequence is: fetch the URI from `#EXT-X-MAP` first, then every `.m4s` in listed
+order, and concatenate init + media. That yields a valid fragmented MP4, which `rodio` can
+already decode — `crates/music/Cargo.toml` enables `symphonia-isomp4` and `symphonia-aac`.
+
+### Segment URLs expire
+
+Every segment URL carries `expires=` and a CloudFront `Signature`. The playlist must be
+fetched fresh for each playback rather than cached across sessions, and a long pause before a
+seek may outlive the signatures.
