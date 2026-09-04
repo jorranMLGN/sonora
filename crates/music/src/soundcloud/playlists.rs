@@ -33,7 +33,7 @@ async fn fetch_raw(http: &Http, id: &str) -> Result<RawPlaylist> {
 /// `GET /tracks?ids=…` call (chunked if there are more ids than fit in one
 /// request) and then restores the set's own ordering, because the batch
 /// endpoint answers in its own order, not the order the ids were sent in.
-async fn resolve_tracks(http: &Http, raw: &RawPlaylist) -> Result<Vec<crate::Track>> {
+async fn resolve_tracks(http: &Http, id: &str, raw: &RawPlaylist) -> Result<Vec<crate::Track>> {
     let order = wire::entry_ids(&raw.tracks);
 
     let mut by_id: HashMap<u64, crate::Track> = HashMap::with_capacity(order.len());
@@ -62,7 +62,15 @@ async fn resolve_tracks(http: &Http, raw: &RawPlaylist) -> Result<Vec<crate::Tra
         }
     }
 
-    Ok(in_playlist_order(&order, by_id))
+    let resolved = in_playlist_order(&order, by_id);
+    if resolved.len() != order.len() {
+        log::warn!(
+            "soundcloud: playlist {id} dropped {} unresolved track ids of {}",
+            order.len() - resolved.len(),
+            order.len()
+        );
+    }
+    Ok(resolved)
 }
 
 /// Puts resolved tracks back into the order the playlist gave.
@@ -77,7 +85,7 @@ fn in_playlist_order(order: &[u64], mut by_id: HashMap<u64, crate::Track>) -> Ve
 
 pub async fn detail(http: &Http, id: &str) -> Result<crate::PlaylistDetail> {
     let raw = fetch_raw(http, id).await?;
-    let tracks = resolve_tracks(http, &raw).await?;
+    let tracks = resolve_tracks(http, id, &raw).await?;
     Ok(crate::PlaylistDetail {
         playlist: wire::playlist(raw),
         tracks,
@@ -86,12 +94,12 @@ pub async fn detail(http: &Http, id: &str) -> Result<crate::PlaylistDetail> {
 
 pub async fn tracks(http: &Http, id: &str) -> Result<Vec<crate::Track>> {
     let raw = fetch_raw(http, id).await?;
-    resolve_tracks(http, &raw).await
+    resolve_tracks(http, id, &raw).await
 }
 
 pub async fn album(http: &Http, id: &str) -> Result<crate::AlbumDetail> {
     let raw = fetch_raw(http, id).await?;
-    let tracks = resolve_tracks(http, &raw).await?;
+    let tracks = resolve_tracks(http, id, &raw).await?;
     Ok(crate::AlbumDetail {
         album: wire::album(raw),
         tracks,
@@ -105,7 +113,7 @@ pub async fn album(http: &Http, id: &str) -> Result<crate::AlbumDetail> {
 /// one place that has just read the set and can fill both in.
 pub async fn album_tracks(http: &Http, id: &str) -> Result<Vec<crate::Track>> {
     let raw = fetch_raw(http, id).await?;
-    let mut tracks = resolve_tracks(http, &raw).await?;
+    let mut tracks = resolve_tracks(http, id, &raw).await?;
     let album_name = raw.title.clone();
     let album_id = raw.id.to_string();
     for track in &mut tracks {
@@ -339,17 +347,19 @@ mod tests {
     }
 
     #[test]
-    fn restores_playlist_order_against_a_shuffled_batch_response() {
-        // The requested order is 10, 20, 30, 40 but the batch endpoint
-        // answers with 30, 10, 40, 20 — a deliberately shuffled sequence,
-        // not one that happens to already be sorted.
+    fn looks_up_every_id_by_order_never_by_map_iteration() {
+        // `by_id` is a HashMap, so its iteration order is arbitrary
+        // regardless of how it was populated — the batch response order
+        // cannot leak into the result even if this map happened to be
+        // built in playlist order. Only `order` can determine the output,
+        // which is what makes a wrong order unrepresentable.
         let order = vec![10_u64, 20, 30, 40];
-        let shuffled: HashMap<u64, crate::Track> = [30, 10, 40, 20]
+        let by_id: HashMap<u64, crate::Track> = [30, 10, 40, 20]
             .into_iter()
             .map(|id| (id, track_with_id(id)))
             .collect();
 
-        let result = in_playlist_order(&order, shuffled);
+        let result = in_playlist_order(&order, by_id);
 
         let ids: Vec<u64> = result
             .iter()
@@ -414,6 +424,15 @@ mod tests {
             result.len(),
             17,
             "all five full tracks and all stubs must resolve"
+        );
+        let result_ids: Vec<u64> = result
+            .iter()
+            .map(|t| t.id.as_deref().unwrap().parse().unwrap())
+            .collect();
+        assert_eq!(
+            result_ids, order,
+            "the resolved tracks must come back in the playlist's own sequence, \
+             not the order the stubs happened to be inserted into the map"
         );
     }
 }
