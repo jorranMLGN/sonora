@@ -40,11 +40,22 @@ pub struct AuthRejected;
 
 impl std::fmt::Display for AuthRejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "soundcloud rejected the client id")
+        write!(f, "soundcloud refused the request as unauthorised")
     }
 }
 
 impl std::error::Error for AuthRejected {}
+
+/// Whether a request may be sent a second time after a client-id refresh.
+///
+/// GET, PUT and DELETE are idempotent, so repeating one costs nothing. POST
+/// is not: if the first attempt reached soundcloud and the rejection came
+/// after it, a repeat creates a second resource.
+#[derive(Clone, Copy, PartialEq)]
+enum Repeat {
+    Safe,
+    Never,
+}
 
 #[derive(Debug)]
 pub struct Unreachable;
@@ -131,7 +142,7 @@ impl Http {
     }
 
     /// Sends one request built by `build`, retrying exactly once — never a
-    /// loop — if soundcloud rejects `client_id`.
+    /// loop — if soundcloud rejects `client_id` and `repeat` allows it.
     ///
     /// `build` takes the agent and the id to embed as the `client_id` query
     /// parameter, and must not add the `Authorization` header itself: this
@@ -140,17 +151,24 @@ impl Http {
     /// the id is refreshed once (`ClientId::refresh` is itself the
     /// single-flight guard for concurrent callers) and the request is
     /// rebuilt and sent again with the fresh id; the caller still inspects
-    /// the returned response's status; a repeat 401/403 there means the
-    /// token itself is bad, not the client id.
+    /// the returned response's status.
+    ///
+    /// A `Repeat::Never` request is returned as it came back instead: a
+    /// rejection is not proof the write never landed, so resending it is how
+    /// one create becomes two.
     async fn execute(
         &self,
         path: &str,
+        repeat: Repeat,
         build: impl Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response> {
         let id = self.client_id.get();
         let response = self.send_once(&build, &id, path).await?;
         let status = response.status();
         if status != reqwest::StatusCode::UNAUTHORIZED && status != reqwest::StatusCode::FORBIDDEN {
+            return Ok(response);
+        }
+        if repeat == Repeat::Never {
             return Ok(response);
         }
         log::debug!("soundcloud: client id was rejected for {path}, refreshing once");
@@ -184,7 +202,7 @@ impl Http {
         query: &[(&str, &str)],
     ) -> Result<T> {
         let response = self
-            .execute(path, |agent, id| {
+            .execute(path, Repeat::Safe, |agent, id| {
                 agent
                     .get(format!("{BASE}{path}"))
                     .query(&[("client_id", id)])
@@ -216,7 +234,9 @@ impl Http {
             url: String,
         }
         let response = self
-            .execute(url, |agent, id| agent.get(url).query(&[("client_id", id)]))
+            .execute(url, Repeat::Safe, |agent, id| {
+                agent.get(url).query(&[("client_id", id)])
+            })
             .await?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
@@ -262,7 +282,7 @@ impl Http {
         body: &B,
     ) -> Result<T> {
         let response = self
-            .execute(path, |agent, id| {
+            .execute(path, Repeat::Safe, |agent, id| {
                 agent
                     .put(format!("{BASE}{path}"))
                     .query(&[("client_id", id)])
@@ -289,7 +309,7 @@ impl Http {
         body: &B,
     ) -> Result<T> {
         let response = self
-            .execute(path, |agent, id| {
+            .execute(path, Repeat::Never, |agent, id| {
                 agent
                     .post(format!("{BASE}{path}"))
                     .query(&[("client_id", id)])
@@ -312,7 +332,7 @@ impl Http {
 
     pub async fn put_empty(&self, path: &str) -> Result<()> {
         let response = self
-            .execute(path, |agent, id| {
+            .execute(path, Repeat::Safe, |agent, id| {
                 agent
                     .put(format!("{BASE}{path}"))
                     .query(&[("client_id", id)])
@@ -331,7 +351,7 @@ impl Http {
 
     pub async fn delete(&self, path: &str) -> Result<()> {
         let response = self
-            .execute(path, |agent, id| {
+            .execute(path, Repeat::Safe, |agent, id| {
                 agent
                     .delete(format!("{BASE}{path}"))
                     .query(&[("client_id", id)])
