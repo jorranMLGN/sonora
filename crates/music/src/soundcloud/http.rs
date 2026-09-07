@@ -103,6 +103,15 @@ impl Http {
         }
     }
 
+    /// `remember_permalink` over a whole fetched page, so a listing endpoint
+    /// remembers every item it returns in one call instead of looping by
+    /// hand at each call site.
+    pub fn remember_permalinks(&self, items: impl IntoIterator<Item = (u64, Option<String>)>) {
+        for (id, url) in items {
+            self.remember_permalink(id, url);
+        }
+    }
+
     /// The permalink `share_url` answers with, if this id was ever seen.
     pub fn permalink(&self, id: &str) -> Option<String> {
         self.permalinks.lock().ok()?.by_id.get(id).cloned()

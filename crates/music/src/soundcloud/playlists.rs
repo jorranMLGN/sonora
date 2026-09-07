@@ -44,6 +44,7 @@ async fn resolve_tracks(http: &Http, id: &str, raw: &RawPlaylist) -> Result<Vec<
     for entry in &raw.tracks {
         match entry {
             Entry::Full(track) => {
+                http.remember_permalink(track.id, track.permalink_url.clone());
                 by_id.insert(track.id, wire::track((**track).clone()));
             }
             Entry::Stub(stub) => missing.push(stub.id),
@@ -60,6 +61,11 @@ async fn resolve_tracks(http: &Http, id: &str, raw: &RawPlaylist) -> Result<Vec<
             .get_json("/tracks", &[("ids", ids.as_str())])
             .await
             .context("cannot resolve the soundcloud set's remaining tracks")?;
+        http.remember_permalinks(
+            fetched
+                .iter()
+                .map(|track| (track.id, track.permalink_url.clone())),
+        );
         for raw_track in fetched {
             by_id.insert(raw_track.id, wire::track(raw_track));
         }

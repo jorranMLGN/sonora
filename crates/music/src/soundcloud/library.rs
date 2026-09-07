@@ -16,6 +16,11 @@ pub async fn liked_tracks(http: &Http, user: &str, limit: u32) -> Result<Vec<cra
         .get_json(&format!("/users/{user}/track_likes"), &[("limit", &limit)])
         .await
         .context("cannot fetch soundcloud liked tracks")?;
+    http.remember_permalinks(
+        page.collection
+            .iter()
+            .map(|like| (like.track.id, like.track.permalink_url.clone())),
+    );
     Ok(page
         .collection
         .into_iter()
@@ -54,6 +59,25 @@ pub async fn saved_sets(
         .await
         .context("cannot fetch soundcloud liked sets")?;
 
+    http.remember_permalinks(
+        own_playlists
+            .collection
+            .iter()
+            .map(|set| (set.id, set.permalink_url.clone())),
+    );
+    http.remember_permalinks(
+        own_albums
+            .collection
+            .iter()
+            .map(|set| (set.id, set.permalink_url.clone())),
+    );
+    http.remember_permalinks(
+        likes
+            .collection
+            .iter()
+            .map(|like| (like.playlist.id, like.playlist.permalink_url.clone())),
+    );
+
     let liked_page = Page {
         collection: likes
             .collection
@@ -83,6 +107,11 @@ pub async fn followed(http: &Http, user: &str, limit: u32) -> Result<Vec<crate::
         .get_json(&format!("/users/{user}/followings"), &[("limit", &limit)])
         .await
         .context("cannot fetch soundcloud followings")?;
+    http.remember_permalinks(
+        page.collection
+            .iter()
+            .map(|user| (user.id, user.permalink_url.clone())),
+    );
     Ok(page
         .collection
         .into_iter()

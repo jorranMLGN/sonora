@@ -10,6 +10,11 @@ pub async fn tracks(http: &Http, query: &str) -> Result<Vec<crate::Track>> {
         .get_json("/search/tracks", &[("q", query), ("limit", LIMIT)])
         .await
         .context("cannot search soundcloud tracks")?;
+    http.remember_permalinks(
+        page.collection
+            .iter()
+            .map(|track| (track.id, track.permalink_url.clone())),
+    );
     Ok(page.collection.into_iter().map(wire::track).collect())
 }
 
@@ -24,9 +29,16 @@ pub async fn albums(http: &Http, query: &str) -> Result<Vec<crate::Album>> {
 }
 
 async fn raw_playlists(http: &Http, query: &str) -> Result<Page<wire::Playlist>> {
-    http.get_json("/search/playlists", &[("q", query), ("limit", LIMIT)])
+    let page: Page<wire::Playlist> = http
+        .get_json("/search/playlists", &[("q", query), ("limit", LIMIT)])
         .await
-        .context("cannot search soundcloud playlists")
+        .context("cannot search soundcloud playlists")?;
+    http.remember_permalinks(
+        page.collection
+            .iter()
+            .map(|set| (set.id, set.permalink_url.clone())),
+    );
+    Ok(page)
 }
 
 /// Splits a fetched page of sets into the playlists and the albums it holds.
