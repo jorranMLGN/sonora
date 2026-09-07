@@ -85,6 +85,15 @@ pub trait MusicApi: Send + Sync {
         self.saved_tracks(limit).await
     }
 
+    /// Whether `all_tracks` answers with something other than `saved_tracks`.
+    ///
+    /// The local provider scans a folder, so it has both a Songs tab holding
+    /// everything and a separate Favorites tab. A streaming provider's Songs
+    /// tab *is* its favourites, so it shows one tab fewer.
+    fn has_all_tracks(&self) -> bool {
+        false
+    }
+
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()>;
 
     /// Reads what the file itself says, for a provider whose tracks are files.

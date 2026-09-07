@@ -183,6 +183,10 @@ impl MusicApi for LocalClient {
             .collect())
     }
 
+    fn has_all_tracks(&self) -> bool {
+        true
+    }
+
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()> {
         self.store.set_favorite(track_id, saved)
     }

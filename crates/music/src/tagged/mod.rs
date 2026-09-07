@@ -87,6 +87,10 @@ impl MusicApi for Tagged {
         Ok(values)
     }
 
+    fn has_all_tracks(&self) -> bool {
+        self.inner.has_all_tracks()
+    }
+
     async fn all_tracks(&self, limit: u32) -> Result<Vec<Track>> {
         let mut values = self.inner.all_tracks(limit).await?;
         for value in &mut values {
