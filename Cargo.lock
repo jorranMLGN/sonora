@@ -6240,6 +6240,7 @@ name = "router"
 version = "0.30.0"
 dependencies = [
  "gpui",
+ "music",
  "ui",
 ]
 
