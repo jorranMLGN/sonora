@@ -307,7 +307,7 @@ impl Playback {
             SessionEvent::SignedOut => this.teardown(cx),
             SessionEvent::LocalChanged => {
                 if this.local_engine.is_none()
-                    && let Some(playback) = session.read(cx).local_playback()
+                    && let Some(playback) = session.read(cx).playback_for_slug("local")
                 {
                     this.start_local_engine(playback, cx);
                 }
@@ -684,7 +684,7 @@ impl Playback {
     fn client_for(&self, id: &str, cx: &Context<Self>) -> Option<Arc<dyn MusicApi>> {
         let session = self.session.read(cx);
         match music::is_local_id(id) {
-            true => session.local_client(),
+            true => session.client_for_slug("local"),
             false => session.client(),
         }
     }
@@ -1341,7 +1341,7 @@ impl Playback {
         let at = self.live_position();
         let local = music::is_local_id(id);
         let playback = match local {
-            true => self.session.read(cx).local_playback(),
+            true => self.session.read(cx).playback_for_slug("local"),
             false => self.session.read(cx).playback(),
         };
         let Some(playback) = playback else {

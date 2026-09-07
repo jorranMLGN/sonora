@@ -77,10 +77,9 @@ impl Cover {
 
     fn load(&mut self, id: String, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
-        let client = match music::is_local_id(&id) {
-            true => session.local_client(),
-            false => session.client(),
-        };
+        let client = session
+            .slug_for(&id)
+            .and_then(|slug| session.client_for_slug(slug));
         let Some(client) = client else {
             return;
         };

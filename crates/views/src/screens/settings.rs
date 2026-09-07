@@ -685,7 +685,7 @@ impl SettingsView {
                     })
                     .child(match self.session.read(cx).state() {
                         SessionState::SignedIn(profile) => div()
-                            .child(profile.id.clone())
+                            .child(music::tag::untag(&profile.id).to_owned())
                             .text_color(muted)
                             .text_size(theme.text(Text::Small))
                             .into_any_element(),

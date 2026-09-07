@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +75,14 @@ pub struct ProviderInfo {
     pub error: Option<Failure>,
 }
 
+pub struct Connected {
+    pub client: Arc<dyn MusicApi>,
+    pub(crate) catalog: Arc<CatalogSource>,
+    pub playback: Arc<dyn PlaybackFactory>,
+    pub profile: UserProfile,
+    pub authenticated: bool,
+}
+
 pub struct Session {
     state: SessionState,
     providers: Vec<Arc<dyn MusicProvider>>,
@@ -82,20 +91,13 @@ pub struct Session {
     resume: Option<(usize, UserProfile)>,
     error: Option<(usize, Failure)>,
     settings: Entity<AppSettings>,
-    client: Option<Arc<dyn MusicApi>>,
-    catalog: Option<Arc<CatalogSource>>,
-    playback: Option<Arc<dyn PlaybackFactory>>,
-    authenticated: bool,
+    connected: HashMap<&'static str, Connected>,
     playcounts: bool,
     io: Io,
-    task: Option<Task<()>>,
+    tasks: HashMap<&'static str, Task<()>>,
     prompt_task: Option<Task<()>>,
     input: Option<UnboundedSender<String>>,
     local_provider: Arc<dyn MusicProvider>,
-    local_client: Option<Arc<dyn MusicApi>>,
-    local_catalog: Option<Arc<CatalogSource>>,
-    local_playback: Option<Arc<dyn PlaybackFactory>>,
-    local_task: Option<Task<()>>,
     watch: Option<Task<()>>,
     reconnect: Option<Task<()>>,
     reconnecting: bool,
@@ -124,20 +126,13 @@ impl Session {
             resume: None,
             error: None,
             settings,
-            client: None,
-            catalog: None,
-            playback: None,
-            authenticated: false,
+            connected: HashMap::new(),
             playcounts: false,
             io,
-            task: None,
+            tasks: HashMap::new(),
             prompt_task: None,
             input: None,
             local_provider,
-            local_client: None,
-            local_catalog: None,
-            local_playback: None,
-            local_task: None,
             watch: None,
             reconnect: None,
             reconnecting: false,
@@ -151,27 +146,29 @@ impl Session {
         &self.state
     }
 
+    pub fn connected(&self, slug: &str) -> Option<&Connected> {
+        self.connected.get(slug)
+    }
+
+    pub fn client_for_slug(&self, slug: &str) -> Option<Arc<dyn MusicApi>> {
+        self.connected.get(slug).map(|entry| entry.client.clone())
+    }
+
     pub fn client(&self) -> Option<Arc<dyn MusicApi>> {
-        self.client.clone()
+        self.client_for_slug(self.provider_slug()?)
     }
 
     pub fn playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
-        self.playback.clone()
+        self.playback_for_slug(self.provider_slug()?)
     }
 
-    pub fn local_client(&self) -> Option<Arc<dyn MusicApi>> {
-        self.local_client.clone()
+    pub fn playback_for_slug(&self, slug: &str) -> Option<Arc<dyn PlaybackFactory>> {
+        self.connected.get(slug).map(|entry| entry.playback.clone())
     }
 
     pub(crate) fn catalog(&self, id: &str) -> Option<Arc<CatalogSource>> {
-        match music::is_local_id(id) {
-            true => self.local_catalog.clone(),
-            false => self.catalog.clone(),
-        }
-    }
-
-    pub fn local_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
-        self.local_playback.clone()
+        let slug = self.slug_for(id)?;
+        self.connected.get(slug).map(|entry| entry.catalog.clone())
     }
 
     pub fn local_path(&self) -> Option<String> {
@@ -194,10 +191,6 @@ impl Session {
                     _ => None,
                 },
             })
-    }
-
-    pub fn connected(&self) -> impl Iterator<Item = ProviderInfo> + '_ {
-        self.providers().filter(|info| info.stored)
     }
 
     pub fn forget(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -244,30 +237,28 @@ impl Session {
         Some(provider.slug())
     }
 
-    pub fn local_slug(&self) -> &'static str {
-        self.local_provider.slug()
-    }
-
     pub fn active_slugs(&self) -> Vec<&'static str> {
-        let mut slugs = Vec::new();
-        if self.client.is_some() {
-            slugs.extend(self.provider_slug());
-        }
-        if self.local_client.is_some() {
-            slugs.push(self.local_slug());
-        }
+        let mut slugs: Vec<&'static str> = self.connected.keys().copied().collect();
+        slugs.sort_unstable_by_key(|slug| self.order_of(slug));
         slugs
     }
 
     pub fn slug_for(&self, id: &str) -> Option<&'static str> {
-        match music::is_local_id(id) {
-            true => Some(self.local_slug()),
-            false => self.provider_slug(),
-        }
+        let slug = music::tag::slug_of(id)?;
+        self.connected.keys().copied().find(|known| *known == slug)
+    }
+
+    fn order_of(&self, slug: &str) -> usize {
+        self.providers
+            .iter()
+            .position(|provider| provider.slug() == slug)
+            .unwrap_or(usize::MAX)
     }
 
     pub fn authenticated(&self) -> bool {
-        self.authenticated
+        self.provider_slug()
+            .and_then(|slug| self.connected.get(slug))
+            .is_some_and(|entry| entry.authenticated)
     }
 
     pub fn playcounts(&self) -> bool {
@@ -294,9 +285,10 @@ impl Session {
         self.state = SessionState::Restoring;
         cx.notify();
 
+        let slug = self.providers[active].slug();
         let provider = self.providers[active].clone();
         let io = self.io.clone();
-        self.task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let restored = join(io.spawn(async move { provider.restore().await })).await;
 
             this.update(cx, |this, cx| match restored {
@@ -309,7 +301,8 @@ impl Session {
                 Err(error) => this.failed(&error, cx),
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(slug, task);
     }
 
     pub fn sign_in(&mut self, slug: &str, method: SignIn, cx: &mut Context<Self>) {
@@ -350,9 +343,10 @@ impl Session {
             prompt_tx.send(prompt).ok();
         });
 
+        let awaited = self.providers[index].slug();
         let provider = self.providers[index].clone();
         let io = self.io.clone();
-        self.task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let authorized =
                 join(io.spawn(async move { provider.sign_in(method, prompt, input_rx).await }))
                     .await;
@@ -366,7 +360,8 @@ impl Session {
                 }
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(awaited, task);
     }
 
     pub fn cancel_sign_in(&mut self, cx: &mut Context<Self>) {
@@ -374,10 +369,10 @@ impl Session {
             return;
         }
         if let Some(index) = self.awaiting {
+            self.tasks.remove(self.providers[index].slug());
             let provider = self.providers[index].clone();
             self.io.spawn(async move { provider.abandon() });
         }
-        self.task = None;
         self.prompt_task = None;
         self.input = None;
         self.awaiting = None;
@@ -424,57 +419,69 @@ impl Session {
     }
 
     fn release(&mut self, cx: &mut Context<Self>) {
-        self.task = None;
         self.watch = None;
         self.reconnect = None;
         self.reconnecting = false;
         self.attempt = 0;
         self.prompt_task = None;
         self.input = None;
-        self.awaiting = None;
+        if let Some(index) = self.awaiting.take() {
+            self.tasks.remove(self.providers[index].slug());
+        }
         self.resume = None;
-        self.client = None;
-        self.catalog = None;
-        self.playback = None;
-        self.authenticated = false;
+        if let Some(slug) = self.provider_slug() {
+            self.tasks.remove(slug);
+            self.connected.remove(slug);
+        }
         self.playcounts = false;
         self.state = SessionState::SignedOut;
         cx.notify();
         cx.emit(SessionEvent::SignedOut);
     }
 
-    fn signed_in(&mut self, session: ProviderSession, index: usize, cx: &mut Context<Self>) {
+    fn connect(&mut self, slug: &'static str, mut session: ProviderSession) {
+        session.profile.id = music::tag::tag(slug, &session.profile.id);
+        let client = music::tagged::new(slug, session.api);
+        self.connected.insert(
+            slug,
+            Connected {
+                catalog: Arc::new(CatalogSource::new(client.clone())),
+                client,
+                playback: session.playback,
+                profile: session.profile,
+                authenticated: session.authenticated,
+            },
+        );
+    }
+
+    fn signed_in(&mut self, mut session: ProviderSession, index: usize, cx: &mut Context<Self>) {
+        let slug = self.providers[index].slug();
+        session.profile.id = music::tag::tag(slug, &session.profile.id);
         let replaced = self
             .resume
             .take()
-            .is_some_and(|(held, profile)| held != index || profile.id != session.profile.id);
-        if replaced {
-            self.drop_previous_session(cx);
+            .filter(|(held, profile)| *held != index || profile.id != session.profile.id);
+        if let Some((held, _)) = replaced {
+            self.drop_previous_session(held, cx);
         }
         self.active = Some(index);
         self.awaiting = None;
         self.error = None;
-        let slug = self.providers[index].slug();
         self.settings.update(cx, |settings, cx| {
             settings.set_provider(slug, cx);
         });
-        self.catalog = Some(Arc::new(CatalogSource::new(session.api.clone())));
-        self.client = Some(session.api);
-        self.playback = Some(session.playback);
-        self.authenticated = session.authenticated;
+        let profile = session.profile.clone();
         self.playcounts = session.playcounts;
-        self.state = SessionState::SignedIn(session.profile);
+        self.connect(slug, session);
+        self.state = SessionState::SignedIn(profile);
         self.attempt = 0;
         self.start_heartbeat(cx);
         cx.notify();
         cx.emit(SessionEvent::SignedIn);
     }
 
-    fn drop_previous_session(&mut self, cx: &mut Context<Self>) {
-        self.client = None;
-        self.catalog = None;
-        self.playback = None;
-        self.authenticated = false;
+    fn drop_previous_session(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.connected.remove(self.providers[index].slug());
         self.playcounts = false;
         self.watch = None;
         self.reconnect = None;
@@ -504,16 +511,17 @@ impl Session {
         if !matches!(self.state, SessionState::SignedIn(_)) {
             return false;
         }
-        let Some(client) = &self.client else {
-            return false;
-        };
-        if client.alive() {
-            self.attempt = 0;
-            return false;
-        }
         let Some(active) = self.active else {
             return false;
         };
+        let slug = self.providers[active].slug();
+        let Some(entry) = self.connected.get(slug) else {
+            return false;
+        };
+        if entry.client.alive() {
+            self.attempt = 0;
+            return false;
+        }
         let wait = BACKOFF[self.attempt.min(BACKOFF.len() - 1)];
         self.attempt += 1;
         self.reconnecting = true;
@@ -530,7 +538,7 @@ impl Session {
             this.update(cx, |this, cx| {
                 this.reconnecting = false;
                 match restored {
-                    Ok(Some(session)) => this.reconnected(session, cx),
+                    Ok(Some(session)) => this.reconnected(slug, session, cx),
                     Ok(None) => log::warn!("session: nothing stored to reconnect with"),
                     Err(error) => log::warn!("session: cannot reconnect: {error:#}"),
                 }
@@ -540,13 +548,15 @@ impl Session {
         true
     }
 
-    fn reconnected(&mut self, session: ProviderSession, cx: &mut Context<Self>) {
+    fn reconnected(
+        &mut self,
+        slug: &'static str,
+        session: ProviderSession,
+        cx: &mut Context<Self>,
+    ) {
         self.attempt = 0;
-        self.catalog = Some(Arc::new(CatalogSource::new(session.api.clone())));
-        self.client = Some(session.api);
-        self.playback = Some(session.playback);
-        self.authenticated = session.authenticated;
         self.playcounts = session.playcounts;
+        self.connect(slug, session);
         log::debug!("session: reconnected");
         cx.notify();
         cx.emit(SessionEvent::Reconnected);
@@ -564,18 +574,19 @@ impl Session {
             cx.notify();
             return;
         }
-        self.client = None;
-        self.catalog = None;
-        self.playback = None;
+        if let Some(slug) = self.provider_slug() {
+            self.connected.remove(slug);
+        }
         self.state = SessionState::Failed(failure);
         cx.notify();
         cx.emit(SessionEvent::SignedOut);
     }
 
     fn restore_local(&mut self, cx: &mut Context<Self>) {
+        let slug = self.local_provider.slug();
         let provider = self.local_provider.clone();
         let io = self.io.clone();
-        self.local_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let restored = join(io.spawn(async move { provider.restore().await })).await;
             this.update(cx, |this, cx| {
                 if let Ok(Some(session)) = restored {
@@ -583,13 +594,15 @@ impl Session {
                 }
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(slug, task);
     }
 
     pub fn choose_local_folder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let slug = self.local_provider.slug();
         let provider = self.local_provider.clone();
         let io = self.io.clone();
-        self.local_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let prompt: PromptSink = Arc::new(|_| {});
             let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let signed_in = join(
@@ -604,23 +617,21 @@ impl Session {
                 }
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(slug, task);
     }
 
     pub fn clear_local_folder(&mut self, cx: &mut Context<Self>) {
+        let slug = self.local_provider.slug();
         self.local_provider.sign_out();
-        self.local_client = None;
-        self.local_catalog = None;
-        self.local_playback = None;
-        self.local_task = None;
+        self.connected.remove(slug);
+        self.tasks.remove(slug);
         cx.notify();
         cx.emit(SessionEvent::LocalChanged);
     }
 
     fn local_signed_in(&mut self, session: ProviderSession, cx: &mut Context<Self>) {
-        self.local_catalog = Some(Arc::new(CatalogSource::new(session.api.clone())));
-        self.local_client = Some(session.api);
-        self.local_playback = Some(session.playback);
+        self.connect(self.local_provider.slug(), session);
         cx.notify();
         cx.emit(SessionEvent::LocalChanged);
     }

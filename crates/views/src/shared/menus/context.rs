@@ -982,10 +982,9 @@ fn saved_track(id: &str, cx: &App) -> Option<Track> {
 
 fn copy_link(kind: MediaKind, id: &str, cx: &mut App) {
     let session = Sonora::global(cx).session.read(cx);
-    let client = match music::is_local_id(id) {
-        true => session.local_client(),
-        false => session.client(),
-    };
+    let client = session
+        .slug_for(id)
+        .and_then(|slug| session.client_for_slug(slug));
     let Some(client) = client else {
         return;
     };

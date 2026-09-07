@@ -363,8 +363,7 @@ impl History {
         let SessionState::SignedIn(profile) = session.state() else {
             return None;
         };
-        let provider = session.provider_slug()?;
-        Some(format!("{provider}:{}", profile.id))
+        Some(profile.id.clone())
     }
 
     fn reset(&mut self, cx: &mut Context<Self>) {

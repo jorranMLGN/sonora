@@ -126,7 +126,7 @@ impl Library {
         }
         let session = self.session.read(cx);
         let picked = match music::is_local_id(&id) {
-            true => session.local_client(),
+            true => session.client_for_slug("local"),
             false => session.client(),
         };
         let Some(client) = picked else {
@@ -400,7 +400,7 @@ impl Library {
                 }
             }
             SessionEvent::LocalChanged => {
-                let client = session.read(cx).local_client();
+                let client = session.read(cx).client_for_slug("local");
                 match client {
                     Some(client) => this.load_local(client, cx),
                     None => {
@@ -416,7 +416,7 @@ impl Library {
         })
         .detach();
 
-        let local_client = session.read(cx).local_client();
+        let local_client = session.read(cx).client_for_slug("local");
 
         let mut library = Self {
             state: LibraryState::Loading,
@@ -980,7 +980,7 @@ impl Library {
             .map(|playlist| playlist.id.clone())
             .filter(|id| !self.reading.contains_key(id))
             .collect();
-        let Some(client) = self.session.read(cx).local_client() else {
+        let Some(client) = self.session.read(cx).client_for_slug("local") else {
             return;
         };
         self.read_contents(wanted, client, cx);
@@ -1093,7 +1093,7 @@ impl Library {
         }
         let session = self.session.read(cx);
         let picked = match local {
-            true => session.local_client(),
+            true => session.client_for_slug("local"),
             false => session.client(),
         };
         let Some(client) = picked else {
