@@ -329,14 +329,13 @@ impl Render for LoginView {
         let pending = self.session.read(cx).is_pending();
         let providers: Vec<state::ProviderInfo> = self.session.read(cx).providers().collect();
         let guest = providers
-            .iter()
+            .get(self.tab)
             .filter(|info| {
                 info.options
                     .iter()
                     .any(|option| matches!(option, SignIn::Anonymous))
             })
-            .map(|info| info.slug)
-            .next();
+            .map(|info| info.slug);
         let waiting = match &state {
             SessionState::Authorizing(prompt) => !matches!(
                 prompt,
