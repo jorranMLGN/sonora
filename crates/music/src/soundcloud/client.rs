@@ -5,10 +5,10 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 
 use super::http::Http;
-use super::{library, playlists, search};
+use super::{GUEST_ID, fetch_profile, library, playlists, search, users};
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, MediaKind, MusicApi, Playlist, PlaylistDetail,
-    SavedArtist, Track, UserProfile,
+    SavedArtist, Track, UserDetail, UserProfile,
 };
 
 pub struct SoundCloudClient {
@@ -36,24 +36,35 @@ impl SoundCloudClient {
 
 #[async_trait]
 impl MusicApi for SoundCloudClient {
-    fn share_url(&self, _kind: MediaKind, _id: &str) -> Option<String> {
-        None
+    fn share_url(&self, _kind: MediaKind, id: &str) -> Option<String> {
+        self.http.permalink(id)
     }
 
     async fn profile(&self) -> Result<UserProfile> {
-        anyhow::bail!("not implemented yet")
+        if self.http.authenticated() {
+            fetch_profile(&self.http).await
+        } else {
+            Ok(UserProfile {
+                id: GUEST_ID.to_string(),
+                display_name: "SoundCloud".to_string(),
+            })
+        }
     }
 
-    async fn artist(&self, _artist_id: &str) -> Result<Artist> {
-        anyhow::bail!("not implemented yet")
+    async fn user(&self, user_id: &str) -> Result<UserDetail> {
+        users::detail(&self.http, user_id).await
     }
 
-    async fn artist_profile(&self, _artist_id: &str) -> Result<ArtistProfile> {
-        anyhow::bail!("not implemented yet")
+    async fn artist(&self, artist_id: &str) -> Result<Artist> {
+        users::artist(&self.http, artist_id).await
     }
 
-    async fn artist_images(&self, _ids: Vec<String>) -> Result<HashMap<String, String>> {
-        anyhow::bail!("not implemented yet")
+    async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfile> {
+        users::profile(&self.http, artist_id).await
+    }
+
+    async fn artist_images(&self, ids: Vec<String>) -> Result<HashMap<String, String>> {
+        users::images(&self.http, ids).await
     }
 
     async fn saved_tracks(&self, limit: u32) -> Result<Vec<Track>> {
@@ -65,12 +76,12 @@ impl MusicApi for SoundCloudClient {
         library::set_track_liked(&self.http, track_id, saved).await
     }
 
-    async fn track(&self, _track_id: &str) -> Result<Track> {
-        anyhow::bail!("not implemented yet")
+    async fn track(&self, track_id: &str) -> Result<Track> {
+        users::track(&self.http, track_id).await
     }
 
-    async fn track_playcount(&self, _track_id: &str) -> Result<Option<u64>> {
-        anyhow::bail!("not implemented yet")
+    async fn track_playcount(&self, track_id: &str) -> Result<Option<u64>> {
+        users::track_playcount(&self.http, track_id).await
     }
 
     async fn playlists(&self, limit: u32) -> Result<Vec<Playlist>> {
@@ -156,8 +167,8 @@ impl MusicApi for SoundCloudClient {
         playlists::playlist_covers(&self.http, playlist_id, wanted).await
     }
 
-    async fn track_radio(&self, _track_id: &str) -> Result<Vec<Track>> {
-        anyhow::bail!("not implemented yet")
+    async fn track_radio(&self, track_id: &str) -> Result<Vec<Track>> {
+        users::related(&self.http, track_id).await
     }
 
     async fn search(&self, query: &str) -> Result<Vec<Track>> {

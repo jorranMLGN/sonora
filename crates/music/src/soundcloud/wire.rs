@@ -24,9 +24,14 @@ pub struct User {
     pub username: String,
     #[serde(default)]
     pub avatar_url: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     pub permalink_url: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub followers_count: Option<u64>,
+    #[serde(default)]
+    pub followings_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -44,7 +49,6 @@ pub struct Track {
     pub playback_count: Option<u64>,
     #[serde(default)]
     pub artwork_url: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     pub permalink_url: Option<String>,
     #[serde(default)]
@@ -58,6 +62,44 @@ pub fn saved_artist(raw: User) -> crate::SavedArtist {
         name: raw.username,
         cover: artwork(raw.avatar_url.as_deref(), "t500x500"),
         added_at: None,
+    }
+}
+
+/// Converts a fetched user into an artist page. SoundCloud has no artist
+/// discography endpoint reachable from a user id, so `albums` stays empty;
+/// `top_tracks` is supplied by the caller, which is the one that knows
+/// whether `/toptracks` or its fallback answered.
+pub fn artist(raw: User, top_tracks: Vec<Model>) -> crate::Artist {
+    crate::Artist {
+        name: raw.username,
+        cover_large: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        biography: raw.description.filter(|bio| !bio.is_empty()),
+        monthly_listeners: None,
+        top_tracks,
+        albums: Vec::new(),
+    }
+}
+
+/// Converts a fetched user into the lighter artist-profile view.
+///
+/// `/users/{id}/related_artists` returns 404 on this API, so unlike
+/// `spotify::artists::profile` this carries no related-artist list.
+pub fn artist_profile(raw: User) -> crate::ArtistProfile {
+    crate::ArtistProfile {
+        name: raw.username,
+        cover_large: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        biography: raw.description.filter(|bio| !bio.is_empty()),
+    }
+}
+
+pub fn user_detail(raw: User) -> crate::UserDetail {
+    crate::UserDetail {
+        id: raw.id.to_string(),
+        name: raw.username,
+        avatar: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        followers: raw.followers_count,
+        following: raw.followings_count,
+        playlists: Vec::new(),
     }
 }
 
@@ -249,8 +291,8 @@ pub fn album(raw: Playlist) -> AlbumModel {
 #[cfg(test)]
 mod tests {
     use super::{
-        Entry, Playlist, Track as Raw, album, artwork, entry_ids, is_album, playlist, release_type,
-        track,
+        Entry, Playlist, Track as Raw, User, album, artist, artist_profile, artwork, entry_ids,
+        is_album, playlist, release_type, track, user_detail,
     };
 
     fn fixture() -> Raw {
@@ -425,5 +467,54 @@ mod tests {
             page.next_href.is_some(),
             "the fixture was captured with more results to come"
         );
+    }
+
+    fn user_fixture() -> User {
+        serde_json::from_str(include_str!("fixtures/user.json"))
+            .expect("the captured user fixture must parse")
+    }
+
+    #[test]
+    fn parses_the_captured_user() {
+        let raw = user_fixture();
+        assert!(raw.id > 0);
+        assert!(!raw.username.is_empty());
+        assert!(raw.permalink_url.is_some());
+        assert!(raw.description.is_some());
+        assert!(raw.followers_count.is_some());
+        assert!(raw.followings_count.is_some());
+    }
+
+    #[test]
+    fn converts_a_user_into_an_artist() {
+        let top_tracks = vec![track(fixture())];
+        let converted = artist(user_fixture(), top_tracks.clone());
+        assert_eq!(converted.name, user_fixture().username);
+        assert!(converted.cover_large.is_some());
+        assert!(converted.biography.is_some());
+        assert_eq!(converted.top_tracks.len(), top_tracks.len());
+        assert!(
+            converted.albums.is_empty(),
+            "soundcloud has no discography endpoint reachable from a user id"
+        );
+    }
+
+    #[test]
+    fn converts_a_user_into_an_artist_profile_with_no_related_artists() {
+        let converted = artist_profile(user_fixture());
+        assert_eq!(converted.name, user_fixture().username);
+        assert!(converted.cover_large.is_some());
+        assert!(converted.biography.is_some());
+    }
+
+    #[test]
+    fn converts_a_user_into_a_user_detail() {
+        let converted = user_detail(user_fixture());
+        assert_eq!(converted.id, user_fixture().id.to_string());
+        assert_eq!(converted.name, user_fixture().username);
+        assert!(converted.avatar.is_some());
+        assert!(converted.followers.is_some());
+        assert!(converted.following.is_some());
+        assert!(converted.playlists.is_empty());
     }
 }

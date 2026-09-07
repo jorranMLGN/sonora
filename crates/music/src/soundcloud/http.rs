@@ -1,8 +1,37 @@
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Context as _, Result};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 const BASE: &str = "https://api-v2.soundcloud.com";
+
+/// How many share permalinks `Http` keeps before evicting the oldest one.
+///
+/// `share_url` is synchronous and cannot fetch, so a permalink can only be
+/// answered if it was seen already; this caps that memory so a long-running
+/// session scrolling a large library does not grow it forever.
+const PERMALINK_CAPACITY: usize = 500;
+
+#[derive(Default)]
+struct Permalinks {
+    order: VecDeque<String>,
+    by_id: HashMap<String, String>,
+}
+
+impl Permalinks {
+    fn remember(&mut self, id: String, url: String) {
+        if self.by_id.insert(id.clone(), url).is_none() {
+            self.order.push_back(id);
+            if self.order.len() > PERMALINK_CAPACITY
+                && let Some(oldest) = self.order.pop_front()
+            {
+                self.by_id.remove(&oldest);
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct AuthRejected;
@@ -26,10 +55,12 @@ impl std::fmt::Display for Unreachable {
 
 impl std::error::Error for Unreachable {}
 
+#[derive(Clone)]
 pub struct Http {
     agent: reqwest::Client,
     client_id: String,
     token: Option<String>,
+    permalinks: Arc<Mutex<Permalinks>>,
 }
 
 impl Http {
@@ -38,6 +69,7 @@ impl Http {
             agent: reqwest::Client::new(),
             client_id,
             token: None,
+            permalinks: Arc::new(Mutex::new(Permalinks::default())),
         }
     }
 
@@ -46,11 +78,26 @@ impl Http {
             agent: reqwest::Client::new(),
             client_id,
             token: Some(token),
+            permalinks: Arc::new(Mutex::new(Permalinks::default())),
         }
     }
 
     pub fn authenticated(&self) -> bool {
         self.token.is_some()
+    }
+
+    /// Records a permalink `share_url` can later answer with, evicting the
+    /// oldest entry once the cache is full. A missing `url` is a no-op.
+    pub fn remember_permalink(&self, id: u64, url: Option<String>) {
+        let Some(url) = url else { return };
+        if let Ok(mut cache) = self.permalinks.lock() {
+            cache.remember(id.to_string(), url);
+        }
+    }
+
+    /// The permalink `share_url` answers with, if this id was ever seen.
+    pub fn permalink(&self, id: &str) -> Option<String> {
+        self.permalinks.lock().ok()?.by_id.get(id).cloned()
     }
 
     pub async fn get_json<T: DeserializeOwned>(

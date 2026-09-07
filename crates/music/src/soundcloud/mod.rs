@@ -4,6 +4,7 @@ mod http;
 mod library;
 mod playlists;
 mod search;
+mod users;
 mod wire;
 
 use std::path::PathBuf;
@@ -22,7 +23,7 @@ use crate::{
 pub use client::SoundCloudClient;
 use http::Http;
 
-const GUEST_ID: &str = "soundcloud-guest";
+pub(crate) const GUEST_ID: &str = "soundcloud-guest";
 
 #[derive(Deserialize)]
 struct Me {
@@ -137,7 +138,7 @@ fn classify(error: anyhow::Error, rejected_is_credentials: bool) -> anyhow::Erro
     error
 }
 
-async fn fetch_profile(http: &Http) -> Result<UserProfile> {
+pub(crate) async fn fetch_profile(http: &Http) -> Result<UserProfile> {
     let me: Me = http.get_json("/me", &[]).await?;
     Ok(UserProfile {
         id: me.id.to_string(),
