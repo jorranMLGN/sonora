@@ -13,6 +13,7 @@ pub mod soundcloud;
 mod spectrum;
 pub mod spotify;
 pub mod tag;
+pub mod tagged;
 pub mod youtube;
 
 use std::collections::HashMap;
