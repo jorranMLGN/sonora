@@ -55,6 +55,14 @@ impl std::fmt::Display for Unreachable {
 
 impl std::error::Error for Unreachable {}
 
+/// Cloning `Http` shares state, it does not reset it: the clone reuses the
+/// same underlying `reqwest::Client` (already internally reference-counted,
+/// so this is cheap) and the same permalink cache, deliberately — spawned
+/// tasks (`users::images`'s `JoinSet`) need their own owned handle to make
+/// requests concurrently, and they must see permalinks the original `Http`
+/// already remembered rather than starting a cache of their own. A field
+/// added here that should NOT be shared across clones needs its own answer,
+/// not a silent `derive(Clone)`.
 #[derive(Clone)]
 pub struct Http {
     agent: reqwest::Client,
@@ -225,5 +233,59 @@ impl Http {
             anyhow::bail!("soundcloud refused {path} with {status}");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Http, PERMALINK_CAPACITY, Permalinks};
+
+    #[test]
+    fn evicts_the_oldest_id_once_the_cap_is_exceeded() {
+        let mut cache = Permalinks::default();
+        for n in 0..=PERMALINK_CAPACITY {
+            cache.remember(n.to_string(), format!("url-{n}"));
+        }
+
+        assert_eq!(cache.by_id.len(), PERMALINK_CAPACITY);
+        assert!(
+            !cache.by_id.contains_key("0"),
+            "the first id inserted must be evicted once the cache is full"
+        );
+        assert!(
+            cache.by_id.contains_key(&PERMALINK_CAPACITY.to_string()),
+            "the most recently inserted id must still be present"
+        );
+    }
+
+    #[test]
+    fn remembering_a_known_id_again_does_not_grow_the_queue() {
+        let mut cache = Permalinks::default();
+        cache.remember("1".to_string(), "url-1".to_string());
+        cache.remember("1".to_string(), "url-1-again".to_string());
+
+        assert_eq!(
+            cache.order.len(),
+            1,
+            "re-seeing an id already cached must not push a second entry, \
+             or a hot id would silently evict unrelated ones"
+        );
+        assert_eq!(
+            cache.by_id.get("1").map(String::as_str),
+            Some("url-1-again")
+        );
+    }
+
+    #[test]
+    fn an_id_never_inserted_is_not_found() {
+        let cache = Permalinks::default();
+        assert_eq!(cache.by_id.get("missing"), None);
+    }
+
+    #[test]
+    fn remembering_a_missing_url_is_a_no_op() {
+        let http = Http::anonymous("client".to_string());
+        http.remember_permalink(1, None);
+        assert_eq!(http.permalink("1"), None);
     }
 }
