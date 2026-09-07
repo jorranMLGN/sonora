@@ -8,7 +8,7 @@ use music::{ArtistRef, Track};
 use rusqlite::{Connection, params};
 
 use crate::playback::PlaybackEvent;
-use crate::{Io, Playback, Session, SessionEvent, SessionState, join};
+use crate::{Io, Playback, Session, SessionEvent, join};
 
 const LOCAL_LIMIT: usize = 500;
 
@@ -195,10 +195,17 @@ impl History {
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn | SessionEvent::Reconnected => this.refresh(cx),
-            SessionEvent::SignedOut => this.reset(cx),
-            SessionEvent::LocalChanged => {}
+        cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::SignedIn(slug) | SessionEvent::Reconnected(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.refresh(cx);
+                }
+            }
+            SessionEvent::SignedOut(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.reset(cx);
+                }
+            }
         })
         .detach();
         cx.subscribe(&playback, |this, _, event, cx| match event {
@@ -359,10 +366,7 @@ impl History {
     }
 
     fn scope(&self, cx: &Context<Self>) -> Option<String> {
-        let session = self.session.read(cx);
-        let SessionState::SignedIn(profile) = session.state() else {
-            return None;
-        };
+        let profile = self.session.read(cx).profile()?;
         Some(profile.id.clone())
     }
 

@@ -664,32 +664,32 @@ impl SettingsView {
             .flex()
             .items_center()
             .gap_4()
-            .child(match self.session.read(cx).state() {
-                SessionState::SignedIn(profile) => {
+            .child(match self.session.read(cx).profile() {
+                Some(profile) => {
                     Initials::new(profile.display_name.clone(), px(64.)).into_any_element()
                 }
-                _ => Skeleton::new().size(px(64.)).circle().into_any_element(),
+                None => Skeleton::new().size(px(64.)).circle().into_any_element(),
             })
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(match self.session.read(cx).state() {
-                        SessionState::SignedIn(profile) => div()
+                    .child(match self.session.read(cx).profile() {
+                        Some(profile) => div()
                             .child(profile.display_name.clone())
                             .text_size(theme.text(Text::Large))
                             .font_weight(FontWeight::SEMIBOLD)
                             .into_any_element(),
-                        _ => Skeleton::new().w(px(140.)).h(px(14.)).into_any_element(),
+                        None => Skeleton::new().w(px(140.)).h(px(14.)).into_any_element(),
                     })
-                    .child(match self.session.read(cx).state() {
-                        SessionState::SignedIn(profile) => div()
+                    .child(match self.session.read(cx).profile() {
+                        Some(profile) => div()
                             .child(music::tag::untag(&profile.id).to_owned())
                             .text_color(muted)
                             .text_size(theme.text(Text::Small))
                             .into_any_element(),
-                        _ => Skeleton::new().w(px(90.)).h(px(10.)).into_any_element(),
+                        None => Skeleton::new().w(px(90.)).h(px(10.)).into_any_element(),
                     }),
             )
     }

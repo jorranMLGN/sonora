@@ -24,8 +24,8 @@ impl Cover {
         cx.observe(&playback, |this, _, cx| this.follow(cx))
             .detach();
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedOut => this.forget(cx),
-            SessionEvent::SignedIn | SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::SignedOut(slug) => this.forget(slug, cx),
+            SessionEvent::SignedIn(_) | SessionEvent::Reconnected(_) => {}
         })
         .detach();
 
@@ -44,11 +44,15 @@ impl Cover {
         self.large.as_deref()
     }
 
-    fn forget(&mut self, cx: &mut Context<Self>) {
+    fn forget(&mut self, slug: &str, cx: &mut Context<Self>) {
+        self.cache
+            .retain(|id, _| music::tag::slug_of(id) != Some(slug));
+        if self.album.as_deref().and_then(music::tag::slug_of) != Some(slug) {
+            return;
+        }
         self.task = None;
         self.album = None;
         self.large = None;
-        self.cache.clear();
         cx.notify();
     }
 

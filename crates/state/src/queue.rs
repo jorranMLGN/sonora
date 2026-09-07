@@ -259,8 +259,11 @@ impl Queue {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedOut => this.purge(cx),
-            SessionEvent::SignedIn | SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::SignedOut(slug) => match *slug == "local" {
+                true => {}
+                false => this.purge(cx),
+            },
+            SessionEvent::SignedIn(_) | SessionEvent::Reconnected(_) => {}
         })
         .detach();
 

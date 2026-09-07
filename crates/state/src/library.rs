@@ -368,49 +368,60 @@ pub struct Library {
 impl Library {
     pub fn new(session: Entity<Session>, io: Io, cx: &mut Context<Self>) -> Self {
         cx.subscribe(&session, |this, session, event, cx| match event {
-            SessionEvent::SignedIn => {
-                if !session.read(cx).authenticated() {
+            SessionEvent::SignedIn(slug) => match *slug == "local" {
+                true => {
+                    let client = session.read(cx).client_for_slug("local");
+                    if let Some(client) = client {
+                        this.load_local(client, cx);
+                    }
+                }
+                false => {
+                    if session.read(cx).provider_slug() != Some(*slug) {
+                        return;
+                    }
+                    if !session.read(cx).authenticated() {
+                        this.state = LibraryState::Empty;
+                        cx.notify();
+                        return;
+                    }
+                    let client = session.read(cx).client();
+                    if let Some(client) = client {
+                        this.load(client, cx);
+                    }
+                }
+            },
+            SessionEvent::SignedOut(slug) => match *slug == "local" {
+                true => {
+                    this.local_tasks.clear();
+                    this.local_awaited.clear();
+                    this.local = LibraryState::Empty;
+                    this.local_favorites.clear();
+                    this.local_favorites_loading = false;
+                    cx.notify();
+                }
+                false => {
+                    if session.read(cx).provider_slug() != Some(*slug) {
+                        return;
+                    }
+                    this.contents.clear();
+                    this.reading.clear();
+                    this.mosaics.clear();
+                    this.tasks.clear();
+                    this.awaited.clear();
+                    this.playlist_task = None;
+                    this.pending.clear();
+                    this.pending_albums.clear();
+                    this.pending_artists.clear();
                     this.state = LibraryState::Empty;
                     cx.notify();
-                    return;
                 }
-                let client = session.read(cx).client();
-                if let Some(client) = client {
-                    this.load(client, cx);
-                }
-            }
-            SessionEvent::SignedOut => {
-                this.contents.clear();
-                this.reading.clear();
-                this.mosaics.clear();
-                this.tasks.clear();
-                this.awaited.clear();
-                this.playlist_task = None;
-                this.pending.clear();
-                this.pending_albums.clear();
-                this.pending_artists.clear();
-                this.state = LibraryState::Empty;
-                cx.notify();
-            }
-            SessionEvent::Reconnected => {
-                if matches!(this.state, LibraryState::Failed(_))
+            },
+            SessionEvent::Reconnected(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug)
+                    && matches!(this.state, LibraryState::Failed(_))
                     && let Some(client) = session.read(cx).client()
                 {
                     this.load(client, cx);
-                }
-            }
-            SessionEvent::LocalChanged => {
-                let client = session.read(cx).client_for_slug("local");
-                match client {
-                    Some(client) => this.load_local(client, cx),
-                    None => {
-                        this.local_tasks.clear();
-                        this.local_awaited.clear();
-                        this.local = LibraryState::Empty;
-                        this.local_favorites.clear();
-                        this.local_favorites_loading = false;
-                        cx.notify();
-                    }
                 }
             }
         })

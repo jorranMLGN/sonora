@@ -534,7 +534,7 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_sign_in = match self.session.read(cx).state() {
             SessionState::SignedOut | SessionState::Failed(_) => true,
-            SessionState::Restoring | SessionState::SignedIn(_) => false,
+            SessionState::Restoring | SessionState::SignedIn => false,
             SessionState::Authorizing(_) => self.signing_in,
         };
         self.signing_in = show_sign_in;

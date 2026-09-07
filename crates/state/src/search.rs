@@ -137,17 +137,23 @@ impl Search {
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedOut => {
+        cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::SignedOut(slug) => {
+                if session.read(cx).provider_slug() != Some(*slug) {
+                    return;
+                }
                 this.forget_results();
                 cx.notify();
             }
-            SessionEvent::SignedIn => {
+            SessionEvent::SignedIn(slug) => {
+                if session.read(cx).provider_slug() != Some(*slug) {
+                    return;
+                }
                 let pending = this.query.clone();
                 this.query.clear();
                 this.ask(&pending, cx);
             }
-            SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
 

@@ -54,15 +54,14 @@ pub enum SessionState {
     SignedOut,
     Restoring,
     Authorizing(Option<SignInPrompt>),
-    SignedIn(UserProfile),
+    SignedIn,
     Failed(Failure),
 }
 
 pub enum SessionEvent {
-    SignedIn,
-    SignedOut,
-    Reconnected,
-    LocalChanged,
+    SignedIn(&'static str),
+    SignedOut(&'static str),
+    Reconnected(&'static str),
 }
 
 pub struct ProviderInfo {
@@ -204,8 +203,14 @@ impl Session {
         if self.active == Some(index) {
             return self.sign_out(cx);
         }
+        let slug = self.providers[index].slug();
         self.providers[index].sign_out();
+        self.tasks.remove(slug);
+        let dropped = self.connected.remove(slug).is_some();
         cx.notify();
+        if dropped {
+            cx.emit(SessionEvent::SignedOut(slug));
+        }
     }
 
     pub fn switch(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -219,7 +224,7 @@ impl Session {
         else {
             return;
         };
-        if self.active == Some(index) && matches!(self.state, SessionState::SignedIn(_)) {
+        if self.active == Some(index) && matches!(self.state, SessionState::SignedIn) {
             return;
         }
         self.release(cx);
@@ -230,6 +235,21 @@ impl Session {
     pub fn provider_name(&self) -> Option<&'static str> {
         let provider = &self.providers[self.active?];
         Some(provider.name())
+    }
+
+    pub fn provider_name_for(&self, slug: &str) -> Option<&'static str> {
+        self.providers
+            .iter()
+            .find(|provider| provider.slug() == slug)
+            .map(|provider| provider.name())
+    }
+
+    pub fn profile(&self) -> Option<&UserProfile> {
+        self.profile_for(self.provider_slug()?)
+    }
+
+    pub fn profile_for(&self, slug: &str) -> Option<&UserProfile> {
+        self.connected.get(slug).map(|entry| &entry.profile)
     }
 
     pub fn provider_slug(&self) -> Option<&'static str> {
@@ -276,12 +296,22 @@ impl Session {
         if self.is_pending() {
             return;
         }
+        if self.active.is_none() {
+            self.active = self
+                .remaining()
+                .or((!self.providers.is_empty()).then_some(0));
+        }
         let Some(active) = self.active else {
             self.state = SessionState::SignedOut;
             cx.notify();
-            cx.emit(SessionEvent::SignedOut);
             return;
         };
+        let others: Vec<usize> = (0..self.providers.len())
+            .filter(|index| *index != active && self.providers[*index].stored())
+            .collect();
+        for index in others {
+            self.rejoin(index, cx);
+        }
         self.state = SessionState::Restoring;
         cx.notify();
 
@@ -296,13 +326,39 @@ impl Session {
                 Ok(None) => {
                     this.state = SessionState::SignedOut;
                     cx.notify();
-                    cx.emit(SessionEvent::SignedOut);
+                    cx.emit(SessionEvent::SignedOut(slug));
                 }
                 Err(error) => this.failed(&error, cx),
             })
             .ok();
         });
         self.tasks.insert(slug, task);
+    }
+
+    fn rejoin(&mut self, index: usize, cx: &mut Context<Self>) {
+        let slug = self.providers[index].slug();
+        if self.connected.contains_key(slug) {
+            return;
+        }
+        let provider = self.providers[index].clone();
+        let io = self.io.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let restored = join(io.spawn(async move { provider.restore().await })).await;
+
+            this.update(cx, |this, cx| match restored {
+                Ok(Some(session)) => this.joined(slug, session, cx),
+                Ok(None) => log::warn!("session: nothing stored for {slug}"),
+                Err(error) => log::warn!("session: cannot restore {slug}: {error:#}"),
+            })
+            .ok();
+        });
+        self.tasks.insert(slug, task);
+    }
+
+    fn joined(&mut self, slug: &'static str, session: ProviderSession, cx: &mut Context<Self>) {
+        self.connect(slug, session);
+        cx.notify();
+        cx.emit(SessionEvent::SignedIn(slug));
     }
 
     pub fn sign_in(&mut self, slug: &str, method: SignIn, cx: &mut Context<Self>) {
@@ -316,8 +372,12 @@ impl Session {
         else {
             return;
         };
-        self.resume = match &self.state {
-            SessionState::SignedIn(profile) => self.active.map(|active| (active, profile.clone())),
+        self.resume = match self.state {
+            SessionState::SignedIn => self.active.and_then(|active| {
+                let held = self.providers[active].slug();
+                let profile = self.connected.get(held)?.profile.clone();
+                Some((active, profile))
+            }),
             _ => None,
         };
         self.error = None;
@@ -368,24 +428,26 @@ impl Session {
         if !matches!(self.state, SessionState::Authorizing(_)) {
             return;
         }
-        if let Some(index) = self.awaiting {
+        let abandoned = self.awaiting.take();
+        if let Some(index) = abandoned {
             self.tasks.remove(self.providers[index].slug());
             let provider = self.providers[index].clone();
             self.io.spawn(async move { provider.abandon() });
         }
         self.prompt_task = None;
         self.input = None;
-        self.awaiting = None;
         self.error = None;
-        if let Some((index, profile)) = self.resume.take() {
+        if let Some((index, _)) = self.resume.take() {
             self.active = Some(index);
-            self.state = SessionState::SignedIn(profile);
+            self.state = SessionState::SignedIn;
             cx.notify();
             return;
         }
         self.state = SessionState::SignedOut;
         cx.notify();
-        cx.emit(SessionEvent::SignedOut);
+        if let Some(index) = abandoned.or(self.active) {
+            cx.emit(SessionEvent::SignedOut(self.providers[index].slug()));
+        }
     }
 
     pub fn submit_input(&mut self, text: String, cx: &mut Context<Self>) {
@@ -429,14 +491,17 @@ impl Session {
             self.tasks.remove(self.providers[index].slug());
         }
         self.resume = None;
-        if let Some(slug) = self.provider_slug() {
+        let released = self.provider_slug();
+        if let Some(slug) = released {
             self.tasks.remove(slug);
             self.connected.remove(slug);
         }
         self.playcounts = false;
         self.state = SessionState::SignedOut;
         cx.notify();
-        cx.emit(SessionEvent::SignedOut);
+        if let Some(slug) = released {
+            cx.emit(SessionEvent::SignedOut(slug));
+        }
     }
 
     fn connect(&mut self, slug: &'static str, mut session: ProviderSession) {
@@ -470,24 +535,24 @@ impl Session {
         self.settings.update(cx, |settings, cx| {
             settings.set_provider(slug, cx);
         });
-        let profile = session.profile.clone();
         self.playcounts = session.playcounts;
         self.connect(slug, session);
-        self.state = SessionState::SignedIn(profile);
+        self.state = SessionState::SignedIn;
         self.attempt = 0;
         self.start_heartbeat(cx);
         cx.notify();
-        cx.emit(SessionEvent::SignedIn);
+        cx.emit(SessionEvent::SignedIn(slug));
     }
 
     fn drop_previous_session(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.connected.remove(self.providers[index].slug());
+        let slug = self.providers[index].slug();
+        self.connected.remove(slug);
         self.playcounts = false;
         self.watch = None;
         self.reconnect = None;
         self.reconnecting = false;
         self.attempt = 0;
-        cx.emit(SessionEvent::SignedOut);
+        cx.emit(SessionEvent::SignedOut(slug));
     }
 
     fn start_heartbeat(&mut self, cx: &mut Context<Self>) {
@@ -508,7 +573,7 @@ impl Session {
         if self.reconnecting {
             return true;
         }
-        if !matches!(self.state, SessionState::SignedIn(_)) {
+        if !matches!(self.state, SessionState::SignedIn) {
             return false;
         }
         let Some(active) = self.active else {
@@ -559,18 +624,18 @@ impl Session {
         self.connect(slug, session);
         log::debug!("session: reconnected");
         cx.notify();
-        cx.emit(SessionEvent::Reconnected);
+        cx.emit(SessionEvent::Reconnected(slug));
     }
 
     fn failed(&mut self, error: &Error, cx: &mut Context<Self>) {
         let failure = Failure::new(error);
-        if let Some(failed) = self.awaiting.or(self.active) {
-            self.error = Some((failed, failure.clone()));
+        let failed = self.awaiting.take().or(self.active);
+        if let Some(index) = failed {
+            self.error = Some((index, failure.clone()));
         }
-        self.awaiting = None;
-        if let Some((index, profile)) = self.resume.take() {
+        if let Some((index, _)) = self.resume.take() {
             self.active = Some(index);
-            self.state = SessionState::SignedIn(profile);
+            self.state = SessionState::SignedIn;
             cx.notify();
             return;
         }
@@ -579,7 +644,9 @@ impl Session {
         }
         self.state = SessionState::Failed(failure);
         cx.notify();
-        cx.emit(SessionEvent::SignedOut);
+        if let Some(index) = failed {
+            cx.emit(SessionEvent::SignedOut(self.providers[index].slug()));
+        }
     }
 
     fn restore_local(&mut self, cx: &mut Context<Self>) {
@@ -627,12 +694,13 @@ impl Session {
         self.connected.remove(slug);
         self.tasks.remove(slug);
         cx.notify();
-        cx.emit(SessionEvent::LocalChanged);
+        cx.emit(SessionEvent::SignedOut(slug));
     }
 
     fn local_signed_in(&mut self, session: ProviderSession, cx: &mut Context<Self>) {
-        self.connect(self.local_provider.slug(), session);
+        let slug = self.local_provider.slug();
+        self.connect(slug, session);
         cx.notify();
-        cx.emit(SessionEvent::LocalChanged);
+        cx.emit(SessionEvent::SignedIn(slug));
     }
 }

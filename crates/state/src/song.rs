@@ -22,23 +22,19 @@ pub struct SongDetail {
 impl SongDetail {
     pub fn new(session: Entity<Session>, io: Io, cx: &mut Context<Self>) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn => {
-                if let Some(id) = this.id.clone().filter(|id| !music::is_local_id(id)) {
+            SessionEvent::SignedIn(slug) => {
+                if let Some(id) = this.shown(slug) {
                     this.clear();
                     this.open(&id, cx);
                 }
             }
-            SessionEvent::SignedOut => {
-                this.clear();
-                cx.notify();
-            }
-            SessionEvent::Reconnected => {}
-            SessionEvent::LocalChanged => {
-                if let Some(id) = this.id.clone().filter(|id| music::is_local_id(id)) {
+            SessionEvent::SignedOut(slug) => {
+                if this.shown(slug).is_some() {
                     this.clear();
-                    this.open(&id, cx);
+                    cx.notify();
                 }
             }
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
         Self {
@@ -118,6 +114,12 @@ impl SongDetail {
             })
             .ok();
         }));
+    }
+
+    fn shown(&self, slug: &str) -> Option<String> {
+        self.id
+            .clone()
+            .filter(|id| music::tag::slug_of(id) == Some(slug))
     }
 
     fn clear(&mut self) {

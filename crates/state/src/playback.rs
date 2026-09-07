@@ -291,27 +291,35 @@ impl Playback {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, session, event, cx| match event {
-            SessionEvent::SignedIn => {
-                let Some(playback) = session.read(cx).playback() else {
-                    return;
-                };
-                this.start_engine(playback, cx);
-                this.adopt(cx);
-            }
-            SessionEvent::Reconnected => {
+            SessionEvent::SignedIn(slug) => match *slug == "local" {
+                true => {
+                    if this.local_engine.is_none()
+                        && let Some(playback) = session.read(cx).playback_for_slug("local")
+                    {
+                        this.start_local_engine(playback, cx);
+                    }
+                }
+                false => {
+                    if session.read(cx).provider_slug() != Some(*slug) {
+                        return;
+                    }
+                    let Some(playback) = session.read(cx).playback() else {
+                        return;
+                    };
+                    this.start_engine(playback, cx);
+                    this.adopt(cx);
+                }
+            },
+            SessionEvent::Reconnected(_) => {
                 let Some(playback) = session.read(cx).playback() else {
                     return;
                 };
                 this.rebind(playback, cx);
             }
-            SessionEvent::SignedOut => this.teardown(cx),
-            SessionEvent::LocalChanged => {
-                if this.local_engine.is_none()
-                    && let Some(playback) = session.read(cx).playback_for_slug("local")
-                {
-                    this.start_local_engine(playback, cx);
-                }
-            }
+            SessionEvent::SignedOut(slug) => match *slug == "local" {
+                true => {}
+                false => this.teardown(cx),
+            },
         })
         .detach();
         cx.observe(&queue, |this, _, cx| this.suggest_similar(cx))

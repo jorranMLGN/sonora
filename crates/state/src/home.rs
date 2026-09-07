@@ -32,9 +32,16 @@ impl Home {
         let quick_picks_seed = fastrand::u64(..);
         let quick_picks = picks(&library, quick_picks_seed, cx);
 
-        cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn => this.feed(cx),
-            SessionEvent::SignedOut => {
+        cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::SignedIn(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.feed(cx);
+                }
+            }
+            SessionEvent::SignedOut(slug) => {
+                if session.read(cx).provider_slug() != Some(*slug) {
+                    return;
+                }
                 this.task = None;
                 this.naming = None;
                 this.listen_again = Rc::new(Vec::new());
@@ -43,7 +50,7 @@ impl Home {
                 this.feeding = false;
                 cx.notify();
             }
-            SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
 
