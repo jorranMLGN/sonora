@@ -20,6 +20,7 @@ use crate::{
     InputSource, MusicProvider, PromptSink, ProviderSession, SignIn, SignInFailure, SignInProblem,
     SignInPrompt, UserProfile,
 };
+use auth::ClientId;
 pub use client::SoundCloudClient;
 use http::Http;
 #[cfg(test)]
@@ -50,18 +51,18 @@ impl SoundCloudProvider {
         }
     }
 
-    async fn client_id(&self) -> Result<String> {
+    async fn client_id(&self) -> Result<ClientId> {
         if let Ok(cached) = std::fs::read_to_string(&self.client_id) {
             let cached = cached.trim().to_string();
             if !cached.is_empty() {
-                return Ok(cached);
+                return Ok(ClientId::new(cached, self.client_id.clone()));
             }
         }
         let harvested = auth::harvest_client_id()
             .await
             .context("cannot harvest the soundcloud client id")?;
         self.store_client_id(&harvested)?;
-        Ok(harvested)
+        Ok(ClientId::new(harvested, self.client_id.clone()))
     }
 
     fn store_client_id(&self, id: &str) -> Result<()> {
@@ -78,27 +79,23 @@ impl SoundCloudProvider {
         std::fs::write(&self.token, token).context("cannot store the soundcloud token")
     }
 
-    async fn authenticate(&self, client_id: String, token: String) -> Result<(Http, UserProfile)> {
-        let http = Http::with_token(client_id, token.clone());
-        match fetch_profile(&http).await {
-            Ok(profile) => Ok((http, profile)),
-            Err(error) if error.downcast_ref::<http::AuthRejected>().is_some() => {
-                log::debug!("soundcloud: client id was rejected, re-harvesting once");
-                let fresh = auth::harvest_client_id()
-                    .await
-                    .map_err(|_| anyhow::Error::new(SignInFailure(SignInProblem::Network)))?;
-                self.store_client_id(&fresh)?;
-                let http = Http::with_token(fresh, token);
-                fetch_profile(&http)
-                    .await
-                    .map(|profile| (http, profile))
-                    .map_err(|error| classify(error, true))
-            }
-            Err(error) => Err(classify(error, false)),
-        }
+    /// `Http` itself refreshes `client_id` once and retries once on an
+    /// `AuthRejected` (see `http::Http::execute`), so any `AuthRejected`
+    /// that reaches this point already survived that retry and can only
+    /// mean the token is bad.
+    async fn authenticate(
+        &self,
+        client_id: ClientId,
+        token: String,
+    ) -> Result<(Http, UserProfile)> {
+        let http = Http::with_token(client_id, token);
+        fetch_profile(&http)
+            .await
+            .map(|profile| (http, profile))
+            .map_err(classify)
     }
 
-    fn guest_session(&self, client_id: String) -> ProviderSession {
+    fn guest_session(&self, client_id: ClientId) -> ProviderSession {
         let http = Arc::new(Http::anonymous(client_id));
         ProviderSession {
             profile: UserProfile {
@@ -127,12 +124,11 @@ impl SoundCloudProvider {
 
 /// Maps a `/me` failure to a `SignInFailure`, or passes it through unchanged.
 ///
-/// `rejected_is_credentials` distinguishes the first attempt, where an
-/// `AuthRejected` still might just mean a stale `client_id` and triggers a
-/// retry, from the retry itself, where the client id was just re-harvested
-/// and a repeat rejection can only mean a bad token.
-fn classify(error: anyhow::Error, rejected_is_credentials: bool) -> anyhow::Error {
-    if rejected_is_credentials && error.downcast_ref::<http::AuthRejected>().is_some() {
+/// By the time an `AuthRejected` reaches here, `Http` has already refreshed
+/// the client id once and retried once, so a repeat rejection can only mean
+/// the token itself is bad.
+fn classify(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<http::AuthRejected>().is_some() {
         return anyhow::Error::new(SignInFailure(SignInProblem::Credentials));
     }
     if error.downcast_ref::<http::Unreachable>().is_some() {
@@ -181,6 +177,7 @@ impl MusicProvider for SoundCloudProvider {
         if client_id.is_empty() {
             return Ok(None);
         }
+        let client_id = ClientId::new(client_id, self.client_id.clone());
         if let Ok(token) = std::fs::read_to_string(&self.token) {
             let token = token.trim().to_string();
             if !token.is_empty() {
@@ -271,15 +268,11 @@ mod tests {
     }
 
     #[test]
-    fn a_first_rejection_is_not_yet_a_credentials_problem() {
-        let error = classify(anyhow::Error::new(http::AuthRejected), false);
-        assert!(error.downcast_ref::<SignInFailure>().is_none());
-        assert!(error.downcast_ref::<http::AuthRejected>().is_some());
-    }
-
-    #[test]
-    fn a_rejection_after_the_retry_is_a_credentials_problem() {
-        let error = classify(anyhow::Error::new(http::AuthRejected), true);
+    fn a_rejection_is_a_credentials_problem() {
+        // `Http` already refreshed the client id and retried once before an
+        // `AuthRejected` ever reaches `classify`, so it can only mean the
+        // token itself is bad.
+        let error = classify(anyhow::Error::new(http::AuthRejected));
         assert_eq!(
             error.downcast_ref::<SignInFailure>(),
             Some(&SignInFailure(SignInProblem::Credentials))
@@ -287,22 +280,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unreachable_service_is_always_a_network_problem() {
-        for rejected_is_credentials in [false, true] {
-            let error = classify(
-                anyhow::Error::new(http::Unreachable),
-                rejected_is_credentials,
-            );
-            assert_eq!(
-                error.downcast_ref::<SignInFailure>(),
-                Some(&SignInFailure(SignInProblem::Network))
-            );
-        }
+    fn an_unreachable_service_is_a_network_problem() {
+        let error = classify(anyhow::Error::new(http::Unreachable));
+        assert_eq!(
+            error.downcast_ref::<SignInFailure>(),
+            Some(&SignInFailure(SignInProblem::Network))
+        );
     }
 
     #[test]
     fn any_other_error_passes_through_unchanged() {
-        let error = classify(anyhow::anyhow!("cannot read the soundcloud response"), true);
+        let error = classify(anyhow::anyhow!("cannot read the soundcloud response"));
         assert!(error.downcast_ref::<SignInFailure>().is_none());
         assert_eq!(error.to_string(), "cannot read the soundcloud response");
     }

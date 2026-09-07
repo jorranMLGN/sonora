@@ -6,6 +6,8 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+#[cfg(test)]
+use super::auth::ClientId;
 use super::http::Http;
 use super::stream;
 use super::wire::{self, Transcoding};
@@ -600,6 +602,10 @@ pub(crate) async fn resolve_playable_url(
     token: Option<String>,
     track_id: &str,
 ) -> Result<String> {
+    let client_id = ClientId::new(
+        client_id,
+        std::env::temp_dir().join("sonora-test-client-id"),
+    );
     let http = match token {
         Some(token) => Http::with_token(client_id, token),
         None => Http::anonymous(client_id),

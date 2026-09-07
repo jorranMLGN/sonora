@@ -131,7 +131,10 @@ mod tests {
 
     #[test]
     fn top_tracks_and_related_remember_every_track_permalink() {
-        let http = Http::anonymous("client".to_string());
+        let http = Http::anonymous(crate::soundcloud::auth::ClientId::new(
+            "client".to_string(),
+            std::env::temp_dir().join("sonora-test-client-id"),
+        ));
         let raw: wire::Track = serde_json::from_str(include_str!("fixtures/track.json")).unwrap();
         let id = raw.id.to_string();
         let permalink = raw.permalink_url.clone().unwrap();

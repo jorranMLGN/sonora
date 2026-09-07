@@ -6,9 +6,9 @@
 //! account — verifying one modifies that account, which nobody had
 //! authorised until now.
 //!
-//! A GET probe (see `task-14-brief.md`) found all three write paths this
-//! branch currently calls answering 404, where a route that merely needs
-//! authentication answers 401:
+//! A GET probe found all three write paths this branch currently calls
+//! answering 404, where a route that merely needs authentication answers
+//! 401:
 //!
 //! | path                                      | GET status |
 //! | ------------------------------------------ | ---------- |
@@ -31,8 +31,8 @@
 //! without a token) has no public accessor for "somebody else's session with
 //! no token", so that one test reads the `client_id`/token cache files
 //! `SoundCloudProvider` itself writes to `dirs::cache_dir()/sonora/soundcloud`
-//! (documented in `global-constraints.md`) and issues the comparison request
-//! directly. Nothing here reads a browser profile, cookie store or keychain,
+//! and issues the comparison request directly. Nothing here reads a browser
+//! profile, cookie store or keychain,
 //! and no credential is ever written to a file, a fixture or a report.
 
 use std::sync::Arc;
@@ -51,9 +51,9 @@ use crate::{InputSource, MusicApi, MusicProvider, PromptSink, ProviderSession, S
 const BASE: &str = "https://api-v2.soundcloud.com";
 
 /// Track 293, "Flickermood" by forss — the fixture track this whole branch
-/// was built and measured against (`crates/music/src/soundcloud/fixtures/track.json`,
-/// `task-10-brief.md`'s measured transcoding table). Public, long-lived, and
-/// already the anchor id used throughout this provider's planning docs.
+/// was built and measured against (`crates/music/src/soundcloud/fixtures/track.json`
+/// and its measured transcoding table). Public, long-lived, and already the
+/// anchor id used throughout this provider's development.
 const TRACK_ID: &str = "293";
 const SEARCH_QUERY: &str = "forss flickermood";
 

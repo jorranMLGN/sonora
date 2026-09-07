@@ -5,6 +5,8 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use super::auth::ClientId;
+
 const BASE: &str = "https://api-v2.soundcloud.com";
 
 /// How many share permalinks `Http` keeps before evicting the oldest one.
@@ -57,22 +59,25 @@ impl std::error::Error for Unreachable {}
 
 /// Cloning `Http` shares state, it does not reset it: the clone reuses the
 /// same underlying `reqwest::Client` (already internally reference-counted,
-/// so this is cheap) and the same permalink cache, deliberately — spawned
-/// tasks (`users::images`'s `JoinSet`) need their own owned handle to make
-/// requests concurrently, and they must see permalinks the original `Http`
-/// already remembered rather than starting a cache of their own. A field
-/// added here that should NOT be shared across clones needs its own answer,
-/// not a silent `derive(Clone)`.
+/// so this is cheap), the same permalink cache, and the same `client_id`,
+/// deliberately — spawned tasks (`users::images`'s `JoinSet`) need their own
+/// owned handle to make requests concurrently, and they must see permalinks
+/// the original `Http` already remembered rather than starting a cache of
+/// their own, and must see a `client_id` refresh triggered by any one of
+/// them rather than eight independently-stale ids. `ClientId` is itself
+/// `Arc`-backed for exactly this reason. A field added here that should NOT
+/// be shared across clones needs its own answer, not a silent
+/// `derive(Clone)`.
 #[derive(Clone)]
 pub struct Http {
     agent: reqwest::Client,
-    client_id: String,
+    client_id: ClientId,
     token: Option<String>,
     permalinks: Arc<Mutex<Permalinks>>,
 }
 
 impl Http {
-    pub fn anonymous(client_id: String) -> Self {
+    pub fn anonymous(client_id: ClientId) -> Self {
         Self {
             agent: reqwest::Client::new(),
             client_id,
@@ -81,7 +86,7 @@ impl Http {
         }
     }
 
-    pub fn with_token(client_id: String, token: String) -> Self {
+    pub fn with_token(client_id: ClientId, token: String) -> Self {
         Self {
             agent: reqwest::Client::new(),
             client_id,
@@ -125,27 +130,67 @@ impl Http {
         &self.agent
     }
 
+    /// Sends one request built by `build`, retrying exactly once — never a
+    /// loop — if soundcloud rejects `client_id`.
+    ///
+    /// `build` takes the agent and the id to embed as the `client_id` query
+    /// parameter, and must not add the `Authorization` header itself: this
+    /// adds it from `self.token` after `build` runs, the same order the
+    /// individual methods used before this was factored out. On a 401/403
+    /// the id is refreshed once (`ClientId::refresh` is itself the
+    /// single-flight guard for concurrent callers) and the request is
+    /// rebuilt and sent again with the fresh id; the caller still inspects
+    /// the returned response's status; a repeat 401/403 there means the
+    /// token itself is bad, not the client id.
+    async fn execute(
+        &self,
+        path: &str,
+        build: impl Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let id = self.client_id.get();
+        let response = self.send_once(&build, &id, path).await?;
+        let status = response.status();
+        if status != reqwest::StatusCode::UNAUTHORIZED && status != reqwest::StatusCode::FORBIDDEN {
+            return Ok(response);
+        }
+        log::debug!("soundcloud: client id was rejected for {path}, refreshing once");
+        let Ok(fresh) = self.client_id.refresh(&id).await else {
+            return Err(anyhow::Error::new(AuthRejected)
+                .context(format!("soundcloud refused {path} with {status}")));
+        };
+        self.send_once(&build, &fresh, path).await
+    }
+
+    async fn send_once(
+        &self,
+        build: &impl Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+        id: &str,
+        path: &str,
+    ) -> Result<reqwest::Response> {
+        let mut request = build(&self.agent, id);
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("OAuth {token}"));
+        }
+        request.send().await.map_err(|error| {
+            anyhow::Error::new(error)
+                .context(Unreachable)
+                .context(format!("cannot reach soundcloud for {path}"))
+        })
+    }
+
     pub async fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<T> {
-        let mut request = self
-            .agent
-            .get(format!("{BASE}{path}"))
-            .query(&[("client_id", self.client_id.as_str())])
-            .query(query);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("OAuth {token}"));
-        }
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(Unreachable)
-                    .context(format!("cannot reach soundcloud for {path}")));
-            }
-        };
+        let response = self
+            .execute(path, |agent, id| {
+                agent
+                    .get(format!("{BASE}{path}"))
+                    .query(&[("client_id", id)])
+                    .query(query)
+            })
+            .await?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(anyhow::Error::new(AuthRejected)
@@ -170,18 +215,15 @@ impl Http {
         struct Resolved {
             url: String,
         }
-        let mut request = self
-            .agent
-            .get(url)
-            .query(&[("client_id", self.client_id.as_str())]);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("OAuth {token}"));
-        }
-        let response = request
-            .send()
-            .await
-            .context("cannot reach soundcloud to resolve the stream")?;
+        let response = self
+            .execute(url, |agent, id| agent.get(url).query(&[("client_id", id)]))
+            .await?;
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow::Error::new(AuthRejected).context(format!(
+                "soundcloud refused to resolve the stream with {status}"
+            )));
+        }
         if !status.is_success() {
             anyhow::bail!("soundcloud refused to resolve the stream with {status}");
         }
@@ -219,19 +261,19 @@ impl Http {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let mut request = self
-            .agent
-            .put(format!("{BASE}{path}"))
-            .query(&[("client_id", self.client_id.as_str())])
-            .json(body);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("OAuth {token}"));
-        }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let response = self
+            .execute(path, |agent, id| {
+                agent
+                    .put(format!("{BASE}{path}"))
+                    .query(&[("client_id", id)])
+                    .json(body)
+            })
+            .await?;
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow::Error::new(AuthRejected)
+                .context(format!("soundcloud refused {path} with {status}")));
+        }
         if !status.is_success() {
             anyhow::bail!("soundcloud refused {path} with {status}");
         }
@@ -246,19 +288,19 @@ impl Http {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let mut request = self
-            .agent
-            .post(format!("{BASE}{path}"))
-            .query(&[("client_id", self.client_id.as_str())])
-            .json(body);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("OAuth {token}"));
-        }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let response = self
+            .execute(path, |agent, id| {
+                agent
+                    .post(format!("{BASE}{path}"))
+                    .query(&[("client_id", id)])
+                    .json(body)
+            })
+            .await?;
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow::Error::new(AuthRejected)
+                .context(format!("soundcloud refused {path} with {status}")));
+        }
         if !status.is_success() {
             anyhow::bail!("soundcloud refused {path} with {status}");
         }
@@ -269,18 +311,18 @@ impl Http {
     }
 
     pub async fn put_empty(&self, path: &str) -> Result<()> {
-        let mut request = self
-            .agent
-            .put(format!("{BASE}{path}"))
-            .query(&[("client_id", self.client_id.as_str())]);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("OAuth {token}"));
-        }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let response = self
+            .execute(path, |agent, id| {
+                agent
+                    .put(format!("{BASE}{path}"))
+                    .query(&[("client_id", id)])
+            })
+            .await?;
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow::Error::new(AuthRejected)
+                .context(format!("soundcloud refused {path} with {status}")));
+        }
         if !status.is_success() {
             anyhow::bail!("soundcloud refused {path} with {status}");
         }
@@ -288,18 +330,18 @@ impl Http {
     }
 
     pub async fn delete(&self, path: &str) -> Result<()> {
-        let mut request = self
-            .agent
-            .delete(format!("{BASE}{path}"))
-            .query(&[("client_id", self.client_id.as_str())]);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("OAuth {token}"));
-        }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("cannot reach soundcloud for {path}"))?;
+        let response = self
+            .execute(path, |agent, id| {
+                agent
+                    .delete(format!("{BASE}{path}"))
+                    .query(&[("client_id", id)])
+            })
+            .await?;
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow::Error::new(AuthRejected)
+                .context(format!("soundcloud refused {path} with {status}")));
+        }
         if !status.is_success() {
             anyhow::bail!("soundcloud refused {path} with {status}");
         }
@@ -309,7 +351,7 @@ impl Http {
 
 #[cfg(test)]
 mod tests {
-    use super::{Http, PERMALINK_CAPACITY, Permalinks};
+    use super::{ClientId, Http, PERMALINK_CAPACITY, Permalinks};
 
     #[test]
     fn evicts_the_oldest_id_once_the_cap_is_exceeded() {
@@ -355,7 +397,10 @@ mod tests {
 
     #[test]
     fn remembering_a_missing_url_is_a_no_op() {
-        let http = Http::anonymous("client".to_string());
+        let http = Http::anonymous(ClientId::new(
+            "client".to_string(),
+            std::env::temp_dir().join("sonora-test-client-id"),
+        ));
         http.remember_permalink(1, None);
         assert_eq!(http.permalink("1"), None);
     }

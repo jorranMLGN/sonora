@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Context as _, Result};
 
 const MIN_ID: usize = 20;
@@ -66,6 +69,69 @@ pub async fn harvest_client_id() -> Result<String> {
         }
     }
     anyhow::bail!("the soundcloud player carries no usable client id")
+}
+
+/// The soundcloud web player's `client_id`, shared across every `Http`
+/// cloned from the same `SoundCloudProvider`.
+///
+/// SoundCloud rotates this id from under a running session, so any request
+/// can come back with `http::AuthRejected`. When that happens the caller
+/// asks this type to [`refresh`](Self::refresh). Refreshing writes the new
+/// id back to `cache_path` — an in-memory-only refresh would cost a fresh
+/// harvest on every app start and give the cache file no purpose — and the
+/// lock guarding the refresh doubles as a single-flight guard: if eight
+/// callers (`users::images`'s `JoinSet`, say) hit a 401 together, the first
+/// one to reach `refresh` harvests once, and the other seven find the id
+/// already moved past the stale value they saw and return that instead of
+/// harvesting a second time.
+#[derive(Clone)]
+pub struct ClientId {
+    value: Arc<Mutex<String>>,
+    cache_path: PathBuf,
+    refreshing: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl ClientId {
+    pub fn new(value: String, cache_path: PathBuf) -> Self {
+        Self {
+            value: Arc::new(Mutex::new(value)),
+            cache_path,
+            refreshing: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    /// The id as it stands right now.
+    pub fn get(&self) -> String {
+        self.value.lock().unwrap().clone()
+    }
+
+    /// Re-harvests the client id and persists it to `cache_path`.
+    ///
+    /// `stale` is the id the caller saw rejected. If another caller already
+    /// refreshed past it while this one was waiting for the lock, that
+    /// fresher id is returned directly rather than harvesting a second time.
+    pub async fn refresh(&self, stale: &str) -> Result<String> {
+        let _guard = self.refreshing.lock().await;
+        {
+            let current = self.value.lock().unwrap();
+            if current.as_str() != stale {
+                return Ok(current.clone());
+            }
+        }
+        let fresh = harvest_client_id()
+            .await
+            .context("cannot harvest the soundcloud client id")?;
+        self.store(&fresh)?;
+        *self.value.lock().unwrap() = fresh.clone();
+        Ok(fresh)
+    }
+
+    fn store(&self, id: &str) -> Result<()> {
+        if let Some(parent) = self.cache_path.parent() {
+            std::fs::create_dir_all(parent).context("cannot create soundcloud cache dir")?;
+        }
+        std::fs::write(&self.cache_path, id).context("cannot store the soundcloud client id")
+    }
 }
 
 #[cfg(test)]

@@ -293,21 +293,77 @@ mod sign_in_failure_tests {
     use super::{SignInFailure, SignInProblem};
 
     #[test]
-    fn names_no_provider() {
-        let problems = [
-            SignInProblem::Premium,
-            SignInProblem::Region,
-            SignInProblem::Credentials,
-            SignInProblem::Network,
-            SignInProblem::Cancelled,
-            SignInProblem::Refused,
+    fn each_variant_has_its_exact_message() {
+        let cases = [
+            (
+                SignInProblem::Premium,
+                "the account has no premium subscription",
+            ),
+            (
+                SignInProblem::Region,
+                "the account is out of its home region",
+            ),
+            (
+                SignInProblem::Credentials,
+                "the stored credentials are no longer valid",
+            ),
+            (SignInProblem::Network, "the service could not be reached"),
+            (
+                SignInProblem::Cancelled,
+                "authorization was cancelled in the browser",
+            ),
+            (SignInProblem::Refused, "the service refused the session"),
         ];
-        for problem in problems {
-            let message = SignInFailure(problem).to_string();
-            assert!(
-                !message.contains("Spotify"),
-                "{problem:?} still names a provider: {message}"
-            );
+        for (problem, expected) in cases {
+            assert_eq!(SignInFailure(problem).to_string(), expected);
         }
+    }
+
+    /// `login-problem-*` is where a sign-in failure actually reaches a
+    /// user, in whichever locale they run Sonora in — the Rust `Display`
+    /// above never does. A provider name spelled out literally in one of
+    /// those keys, rather than through the `{ $provider }` variable, reads
+    /// wrong for whichever provider is not the one named: this is exactly
+    /// the bug three locales shipped for `login-problem-network`, and the
+    /// old version of this test (asserting only that `Display` never says
+    /// "Spotify") could not have caught it, since the bug was never in the
+    /// Rust string.
+    #[test]
+    fn no_locale_names_a_provider_in_a_login_problem_message() {
+        let providers = ["Spotify", "YouTube", "SoundCloud"];
+        let i18n_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/i18n");
+        let mut offenders = Vec::new();
+        for locale in std::fs::read_dir(&i18n_dir).expect("cannot read assets/i18n") {
+            let locale = locale.expect("cannot read a locale entry");
+            let ftl = locale.path().join("main.ftl");
+            let Ok(contents) = std::fs::read_to_string(&ftl) else {
+                continue;
+            };
+            for line in contents.lines() {
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let key = key.trim();
+                if !key.starts_with("login-problem-") {
+                    continue;
+                }
+                // `login-problem-premium` names "Spotify Premium" on
+                // purpose — that's a product, not just the provider, and
+                // only the Spotify provider ever raises this variant.
+                if key == "login-problem-premium" {
+                    continue;
+                }
+                for provider in providers {
+                    if value.contains(provider) {
+                        offenders.push(format!("{}:{key}", ftl.display()));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these login-problem keys name a provider literally instead of \
+             using {{ $provider }}: {offenders:?}"
+        );
     }
 }
