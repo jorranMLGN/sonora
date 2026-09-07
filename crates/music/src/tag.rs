@@ -1,13 +1,17 @@
 //! The `<slug>:<id>` grammar every id in the app carries.
 //!
 //! `spotify:` is also the URI scheme sonora accepts for deep links
-//! (`router::uri`), so a head is only a tag when the tail is not itself a
-//! Spotify URI body. `URI_KINDS` is that guard.
+//! (`router::uri`), so a spotify head is only a tag when the tail is not
+//! itself a Spotify URI body. `URI_KINDS` is that guard, and it applies to
+//! spotify alone.
+//!
+//! Local ids carry their kind in the head — `local:` for a track, and one
+//! `local-<kind>:` per other model. They all belong to the same provider, so
+//! `LOCAL_HEADS` resolves every one of them to the `local` slug before the
+//! spotify guard ever runs.
 
 pub const SLUGS: [&str; 4] = ["spotify", "youtube", "soundcloud", "local"];
 
-/// Local ids carry their kind in the head — `local:` for a track, and one
-/// `local-<kind>:` per other model. They all belong to the same provider.
 const LOCAL_HEADS: [&str; 4] = ["local", "local-album", "local-artist", "local-playlist"];
 
 const URI_KINDS: [&str; 5] = ["track", "album", "playlist", "artist", "user"];
@@ -21,13 +25,15 @@ pub fn tag(slug: &str, id: &str) -> String {
 
 pub fn split(id: &str) -> Option<(&str, &str)> {
     let (head, rest) = id.split_once(':')?;
-    let slug = match LOCAL_HEADS.contains(&head) {
-        true => "local",
-        false => *SLUGS.iter().find(|known| **known == head)?,
-    };
-    let kind = rest.split_once(':').map_or(rest, |(kind, _)| kind);
-    if URI_KINDS.contains(&kind) {
-        return None;
+    if LOCAL_HEADS.contains(&head) {
+        return Some(("local", rest));
+    }
+    let slug = *SLUGS.iter().find(|known| **known == head)?;
+    if slug == "spotify" {
+        let kind = rest.split_once(':').map_or(rest, |(kind, _)| kind);
+        if URI_KINDS.contains(&kind) {
+            return None;
+        }
     }
     Some((slug, rest))
 }
@@ -95,6 +101,15 @@ mod tests {
             "local-playlist:abc",
         ] {
             assert_eq!(untag(id), id);
+        }
+    }
+
+    #[test]
+    fn a_local_name_that_looks_like_a_uri_kind_still_resolves() {
+        for name in ["track", "album", "playlist", "artist", "user"] {
+            let id = format!("local-artist:{name}");
+            assert_eq!(slug_of(&id), Some("local"), "{id}");
+            assert_eq!(untag(&id), id, "{id}");
         }
     }
 
