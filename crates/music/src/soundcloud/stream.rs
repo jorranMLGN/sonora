@@ -222,4 +222,29 @@ mod tests {
             #EXT-X-ENDLIST\n";
         assert!(needs_init_segment(playlist));
     }
+
+    // HLS introduced fragmented mp4 segments at version 6, so that is the
+    // exact boundary `needs_init_segment` switches on. These two pin it
+    // against an off-by-one (`> 6` instead of `>= 6`), which the version-7
+    // and version-3 cases above are both too far from the line to catch.
+
+    #[test]
+    fn version_6_is_the_first_version_that_needs_an_init_segment() {
+        let playlist = "#EXTM3U\n\
+            #EXT-X-VERSION:6\n\
+            #EXTINF:10.0,\n\
+            https://cf-hls.sndcdn.com/a/0.aac\n\
+            #EXT-X-ENDLIST\n";
+        assert!(needs_init_segment(playlist));
+    }
+
+    #[test]
+    fn version_5_is_the_last_version_that_needs_no_init_segment() {
+        let playlist = "#EXTM3U\n\
+            #EXT-X-VERSION:5\n\
+            #EXTINF:10.0,\n\
+            https://cf-hls.sndcdn.com/a/0.aac\n\
+            #EXT-X-ENDLIST\n";
+        assert!(!needs_init_segment(playlist));
+    }
 }
