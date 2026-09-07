@@ -12,6 +12,7 @@ pub mod netease;
 pub mod soundcloud;
 mod spectrum;
 pub mod spotify;
+pub mod tag;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -36,10 +37,7 @@ pub const LOCAL_ARTIST_PREFIX: &str = "local-artist:";
 pub const LOCAL_PLAYLIST_PREFIX: &str = "local-playlist:";
 
 pub fn is_local_id(id: &str) -> bool {
-    id.starts_with(LOCAL_TRACK_PREFIX)
-        || id.starts_with(LOCAL_ALBUM_PREFIX)
-        || id.starts_with(LOCAL_ARTIST_PREFIX)
-        || id.starts_with(LOCAL_PLAYLIST_PREFIX)
+    tag::slug_of(id) == Some("local")
 }
 
 pub fn distinct_covers(tracks: &[Track], wanted: usize) -> Vec<String> {
