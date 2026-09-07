@@ -1,5 +1,15 @@
+use std::sync::Arc;
+
 use anyhow::{Context as _, Result};
 use reqwest::{Client, StatusCode};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
+
+/// How many segment requests `assemble` keeps in flight at once.
+///
+/// The same bound `users::images` uses: enough to hide per-request latency,
+/// few enough not to look like a flood to one host.
+const SEGMENT_CONCURRENCY: usize = 8;
 
 /// The initialisation segment URI, from the `#EXT-X-MAP` line.
 ///
@@ -57,10 +67,17 @@ fn needs_init_segment(playlist: &str) -> bool {
 /// Fetches a media playlist and assembles it into one buffer: the init
 /// segment first (if any), then every media segment in listed order.
 ///
-/// Sequential, not parallel — the segments must land in order and a track is
-/// only a couple of dozen of them. The playlist is fetched fresh on every
-/// call rather than cached: every segment URL carries `expires=` and a
-/// CloudFront `Signature`, and a long pause before a seek can outlive them.
+/// The segments have to be *concatenated* in order, not *fetched* in order,
+/// so they are fetched `SEGMENT_CONCURRENCY` at a time and placed by index.
+/// Nothing plays until the whole buffer is here — the same shape
+/// `youtube::playback` has — but that provider gets its track in one
+/// response, where an hls track is a few hundred, and paying each round trip
+/// end to end made the wait grow with the track's length: measured at 1.2s
+/// for a 3½-minute track and 8.7s for a 26-minute one.
+///
+/// The playlist is fetched fresh on every call rather than cached: every
+/// segment URL carries `expires=` and a CloudFront `Signature`, and a long
+/// pause before a seek can outlive them.
 pub async fn assemble(http: &Client, url: &str) -> Result<Vec<u8>> {
     let playlist = fetch_text(http, url)
         .await
@@ -74,18 +91,30 @@ pub async fn assemble(http: &Client, url: &str) -> Result<Vec<u8>> {
         );
     }
 
-    let mut buffer = Vec::new();
-    if let Some(init) = init {
-        let bytes = fetch_segment(http, &init)
-            .await
-            .context("cannot fetch the hls init segment")?;
-        buffer.extend_from_slice(&bytes);
+    let mut urls = Vec::new();
+    urls.extend(init);
+    urls.extend(segments(&playlist));
+
+    let limit = Arc::new(Semaphore::new(SEGMENT_CONCURRENCY));
+    let mut pending = JoinSet::new();
+    for (place, url) in urls.iter().cloned().enumerate() {
+        let http = http.clone();
+        let limit = limit.clone();
+        pending.spawn(async move {
+            let _permit = limit.acquire_owned().await;
+            (place, fetch_segment(&http, &url).await)
+        });
     }
-    for segment in segments(&playlist) {
-        let bytes = fetch_segment(http, &segment)
-            .await
-            .context("cannot fetch an hls media segment")?;
-        buffer.extend_from_slice(&bytes);
+
+    let mut parts: Vec<Option<Vec<u8>>> = vec![None; urls.len()];
+    while let Some(joined) = pending.join_next().await {
+        let (place, fetched) = joined.context("an hls segment fetch did not finish")?;
+        parts[place] = Some(fetched.context("cannot fetch an hls segment")?);
+    }
+
+    let mut buffer = Vec::with_capacity(parts.iter().flatten().map(Vec::len).sum());
+    for part in parts.into_iter().flatten() {
+        buffer.extend_from_slice(&part);
     }
     Ok(buffer)
 }
