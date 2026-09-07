@@ -36,6 +36,24 @@ pub fn segments(playlist: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether this playlist's segments need an initialisation segment to decode.
+///
+/// HLS gained fragmented-MP4 segments at version 6. Below that, segments carry
+/// their own headers and an absent `#EXT-X-MAP` is normal; at or above it, an
+/// absent one means the media segments have no moov box and decode to silence.
+/// A playlist with no `#EXT-X-VERSION` line at all defaults to `true`: the
+/// only playlists this provider has actually seen (soundcloud's) declare
+/// version 7, so treating an unversioned one as fragmented is the safer
+/// default — a false negative here is silent, a false positive just refuses
+/// loudly instead of playing something that happened to be raw audio.
+fn needs_init_segment(playlist: &str) -> bool {
+    playlist
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("#EXT-X-VERSION:"))
+        .and_then(|version| version.trim().parse::<u32>().ok())
+        .is_none_or(|version| version >= 6)
+}
+
 /// Fetches a media playlist and assembles it into one buffer: the init
 /// segment first (if any), then every media segment in listed order.
 ///
@@ -48,8 +66,16 @@ pub async fn assemble(http: &Client, url: &str) -> Result<Vec<u8>> {
         .await
         .context("cannot fetch the hls media playlist")?;
 
+    let init = init_segment(&playlist);
+    if init.is_none() && needs_init_segment(&playlist) {
+        anyhow::bail!(
+            "this hls playlist declares fragmented mp4 segments but names no \
+             init segment, so the audio would decode to silence"
+        );
+    }
+
     let mut buffer = Vec::new();
-    if let Some(init) = init_segment(&playlist) {
+    if let Some(init) = init {
         let bytes = fetch_segment(http, &init)
             .await
             .context("cannot fetch the hls init segment")?;
@@ -105,7 +131,7 @@ async fn fetch_segment(http: &Client, url: &str) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{init_segment, segments};
+    use super::{init_segment, needs_init_segment, segments};
 
     const PLAYLIST: &str = "#EXTM3U\n\
         #EXT-X-VERSION:7\n\
@@ -171,5 +197,29 @@ mod tests {
     #[test]
     fn ignores_comments_and_blank_lines() {
         assert!(segments("#EXTM3U\n\n#EXT-X-ENDLIST\n").is_empty());
+    }
+
+    #[test]
+    fn a_version_7_playlist_needs_an_init_segment() {
+        assert!(needs_init_segment(PLAYLIST));
+    }
+
+    #[test]
+    fn a_version_3_playlist_needs_no_init_segment() {
+        let playlist = "#EXTM3U\n\
+            #EXT-X-VERSION:3\n\
+            #EXTINF:10.0,\n\
+            https://cf-hls.sndcdn.com/a/0.aac\n\
+            #EXT-X-ENDLIST\n";
+        assert!(!needs_init_segment(playlist));
+    }
+
+    #[test]
+    fn a_playlist_with_no_version_line_defaults_to_needing_one() {
+        let playlist = "#EXTM3U\n\
+            #EXTINF:10.0,\n\
+            https://cf-hls.sndcdn.com/a/0.aac\n\
+            #EXT-X-ENDLIST\n";
+        assert!(needs_init_segment(playlist));
     }
 }
