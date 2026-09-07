@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::http::Http;
+use super::stream;
 use super::wire::{self, Transcoding};
 use crate::audio::trim;
 use crate::audio::{Output, RAMP, SmoothGain, Trimmed, Volume};
@@ -551,10 +552,10 @@ fn announce(
 /// `pick` the best one, resolve that transcoding's own url to the cdn url,
 /// then download it.
 ///
-/// Only the `progressive` byte path is implemented. `hls` assembly (segment
-/// playlist + concatenation) is a following task; until it lands, a track
-/// whose best transcoding is `hls` fails loudly here rather than silently
-/// falling back to a worse stream.
+/// `progressive` is a single GET. `hls` resolves to a media playlist url
+/// instead of a direct one, so it goes through `stream::assemble`, which
+/// fetches that playlist fresh, then the init segment and every media
+/// segment in order, concatenating them into one fragmented mp4 buffer.
 async fn fetch(http: &Http, id: &str) -> Result<Loaded> {
     let track: wire::Track = http
         .get_json(&format!("/tracks/{id}"), &[])
@@ -574,7 +575,15 @@ async fn fetch(http: &Http, id: &str) -> Result<Loaded> {
                 .await
                 .context("cannot download the soundcloud stream")?
         }
-        "hls" => anyhow::bail!("hls playback is not implemented yet"),
+        "hls" => {
+            let playlist_url = http
+                .resolve_stream(&chosen.url)
+                .await
+                .context("cannot resolve the soundcloud stream")?;
+            stream::assemble(http.agent(), &playlist_url)
+                .await
+                .context("cannot assemble the soundcloud hls stream")?
+        }
         other => anyhow::bail!("soundcloud offered an unrecognised stream protocol {other}"),
     };
     Ok(Loaded {

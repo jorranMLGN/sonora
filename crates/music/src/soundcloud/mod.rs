@@ -5,6 +5,7 @@ mod library;
 mod playback;
 mod playlists;
 mod search;
+mod stream;
 mod users;
 mod wire;
 

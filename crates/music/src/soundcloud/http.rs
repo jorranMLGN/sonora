@@ -108,6 +108,14 @@ impl Http {
         self.permalinks.lock().ok()?.by_id.get(id).cloned()
     }
 
+    /// The underlying `reqwest::Client`, for callers that need to fetch a
+    /// url soundcloud already signed and that therefore takes neither a
+    /// `client_id` nor an `Authorization` header — `stream::assemble`'s hls
+    /// segments.
+    pub fn agent(&self) -> &reqwest::Client {
+        &self.agent
+    }
+
     pub async fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
