@@ -11,16 +11,18 @@ type Submit = Rc<dyn Fn(&(), &mut Window, &mut App)>;
 type Cancel = Rc<dyn Fn(&(), &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
-pub(crate) struct CookiePrompt {
+pub(crate) struct SecretPrompt {
     secret: Entity<Input>,
+    keys: crate::shared::Secret,
     submit: Option<Submit>,
     cancel: Option<Cancel>,
 }
 
-impl CookiePrompt {
-    pub(crate) fn new(secret: Entity<Input>) -> Self {
+impl SecretPrompt {
+    pub(crate) fn new(secret: Entity<Input>, slug: &str) -> Self {
         Self {
             secret,
+            keys: crate::shared::secret(slug),
             submit: None,
             cancel: None,
         }
@@ -43,27 +45,23 @@ impl CookiePrompt {
     }
 }
 
-impl RenderOnce for CookiePrompt {
+impl RenderOnce for SecretPrompt {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self {
             secret,
+            keys,
             submit,
             cancel,
         } = self;
         let dismissed = cancel.clone();
         let theme = *cx.theme();
 
-        Modal::new("cookie-prompt", t!("login-cookie-title"))
+        Modal::new("secret-prompt", i18n::lookup(keys.title, None))
             .w(px(560.))
-            .child(steps([
-                t!("login-cookie-step-1"),
-                t!("login-cookie-step-2"),
-                t!("login-cookie-step-3"),
-                t!("login-cookie-step-4"),
-            ]))
+            .child(steps(keys.steps.map(|key| i18n::lookup(key, None))))
             .child(
                 div()
-                    .child(t!("login-cookie-step-note"))
+                    .child(i18n::lookup(keys.note, None))
                     .flex_1()
                     .min_w_0()
                     .text_size(theme.text(Text::Small))
@@ -71,7 +69,7 @@ impl RenderOnce for CookiePrompt {
             )
             .child(secret)
             .action(
-                Button::new("cancel-cookies")
+                Button::new("cancel-secret")
                     .ghost()
                     .label(t!("common-cancel"))
                     .on_click(move |_, window, cx| {
@@ -81,7 +79,7 @@ impl RenderOnce for CookiePrompt {
                     }),
             )
             .action(
-                Button::new("submit-cookies")
+                Button::new("submit-secret")
                     .label(t!("login-cookie-submit"))
                     .primary()
                     .on_click(move |_, window, cx| {

@@ -266,6 +266,13 @@ login-cookie-step-3 = Select any request named "browse" or "next".
 login-cookie-step-4 = In Headers, find Cookie under Request Headers, right-click it and copy its value.
 login-cookie-step-note = Make sure to paste the whole value, including SAPISID and __Secure-3PAPISID.
 login-cookie-title = Paste your YouTube Music cookies to finish signing in
+login-token-title = Paste your SoundCloud OAuth token to finish signing in
+login-token-step-1 = Open soundcloud.com and make sure you are signed in.
+login-token-step-2 = Press F12, open the Network tab and reload the page.
+login-token-step-3 = Select any request to api-v2.soundcloud.com.
+login-token-step-4 = In Headers, find Authorization under Request Headers and copy its value.
+login-token-step-note = Paste only the token itself, without the "OAuth " that precedes it.
+login-token-hint = Paste the OAuth token here
 login-account-title = Choose an account
 login-account-detail = This session is signed in to more than one Google account. Pick the one Sonora should use.
 

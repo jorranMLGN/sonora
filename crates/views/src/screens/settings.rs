@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::shared::local;
 use crate::shared::popups::{
-    AccountPicker, BrowserPicker, CookiePrompt, SearchPopup, matches_query,
+    AccountPicker, BrowserPicker, SearchPopup, SecretPrompt, matches_query,
 };
 use gpui::{
     AnyElement, App, Context, Entity, FontWeight, Pixels, Render, SharedString, TextRun, Window,
@@ -1501,8 +1501,8 @@ impl SettingsView {
             .update(cx, |session, cx| session.submit_input(text, cx));
     }
 
-    fn secret_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        CookiePrompt::new(self.secret.clone())
+    fn secret_prompt(&self, slug: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        SecretPrompt::new(self.secret.clone(), slug)
             .on_submit(cx.listener(|this, _, _, cx| this.submit(cx)))
             .on_cancel(cx.listener(|this, _, _, cx| this.abandon(cx)))
     }
@@ -1556,6 +1556,10 @@ impl SettingsView {
                 SignIn::Browser(_) => this.open_browsers(slug, cx),
                 method => {
                     let method = method.clone();
+                    if matches!(method, SignIn::Secret) {
+                        let hint = crate::shared::secret(slug).hint;
+                        this.secret.update(cx, |input, cx| input.set_hint(hint, cx));
+                    }
                     this.session
                         .update(cx, |session, cx| session.sign_in(slug, method, cx));
                 }
@@ -1854,6 +1858,13 @@ impl Render for SettingsView {
             self.session.read(cx).state(),
             SessionState::Authorizing(Some(SignInPrompt::Secret))
         );
+        let secret_slug = self
+            .session
+            .read(cx)
+            .providers()
+            .find(|info| info.pending)
+            .map(|info| info.slug)
+            .unwrap_or_default();
 
         div()
             .relative()
@@ -1888,7 +1899,7 @@ impl Render for SettingsView {
                 this.child(self.account_modal(accounts, cx).into_any_element())
             })
             .when(secret, |this| {
-                this.child(self.secret_prompt(cx).into_any_element())
+                this.child(self.secret_prompt(secret_slug, cx).into_any_element())
             })
     }
 }

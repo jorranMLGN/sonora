@@ -61,15 +61,55 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
     }
 }
 
-/// Names the Fluent key for a provider's manual-paste sign-in label.
+/// The Fluent keys for a provider's manual-paste sign-in flow.
 ///
 /// `SignIn::Secret` means "paste the credential yourself", but the credential
-/// differs: SoundCloud takes an OAuth token, the others take cookies.
-pub(crate) fn secret_label(slug: &str) -> &'static str {
+/// differs: SoundCloud takes an OAuth token, the others take cookies. So does
+/// every string that walks the user through finding it.
+#[derive(Clone, Copy)]
+pub(crate) struct Secret {
+    pub label: &'static str,
+    pub title: &'static str,
+    pub steps: [&'static str; 4],
+    pub note: &'static str,
+    pub hint: &'static str,
+}
+
+const COOKIES: Secret = Secret {
+    label: "login-connect-cookies",
+    title: "login-cookie-title",
+    steps: [
+        "login-cookie-step-1",
+        "login-cookie-step-2",
+        "login-cookie-step-3",
+        "login-cookie-step-4",
+    ],
+    note: "login-cookie-step-note",
+    hint: "login-cookie-hint",
+};
+
+const TOKEN: Secret = Secret {
+    label: "login-connect-token",
+    title: "login-token-title",
+    steps: [
+        "login-token-step-1",
+        "login-token-step-2",
+        "login-token-step-3",
+        "login-token-step-4",
+    ],
+    note: "login-token-step-note",
+    hint: "login-token-hint",
+};
+
+pub(crate) fn secret(slug: &str) -> Secret {
     match slug {
-        "soundcloud" => "login-connect-token",
-        _ => "login-connect-cookies",
+        "soundcloud" => TOKEN,
+        _ => COOKIES,
     }
+}
+
+pub(crate) fn secret_label(slug: &str) -> &'static str {
+    secret(slug).label
 }
 
 #[cfg(test)]

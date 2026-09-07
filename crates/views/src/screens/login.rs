@@ -1,4 +1,4 @@
-use crate::shared::popups::{AccountPicker, BrowserPicker, CookiePrompt};
+use crate::shared::popups::{AccountPicker, BrowserPicker, SecretPrompt};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClipboardItem, Context, Entity, FontWeight, IntoElement, Pixels, Render,
@@ -79,6 +79,10 @@ impl LoginView {
 
     fn start(&self, slug: &'static str, method: SignIn, cx: &mut Context<Self>) {
         self.acted(cx);
+        if matches!(method, SignIn::Secret) {
+            let hint = crate::shared::secret(slug).hint;
+            self.secret.update(cx, |input, cx| input.set_hint(hint, cx));
+        }
         self.session
             .update(cx, |session, cx| session.sign_in(slug, method, cx));
     }
@@ -284,8 +288,8 @@ impl LoginView {
             )
     }
 
-    fn secret_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        CookiePrompt::new(self.secret.clone())
+    fn secret_prompt(&self, slug: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        SecretPrompt::new(self.secret.clone(), slug)
             .on_submit(cx.listener(|this, _, _, cx| this.submit(cx)))
             .on_cancel(cx.listener(|this, _, _, cx| this.abandon(cx)))
     }
@@ -365,6 +369,12 @@ impl Render for LoginView {
         let provider_name = providers
             .get(self.tab)
             .map(|info| info.name)
+            .unwrap_or_default();
+        let secret_slug = providers
+            .iter()
+            .find(|info| info.pending)
+            .or_else(|| providers.get(self.tab))
+            .map(|info| info.slug)
             .unwrap_or_default();
         let column = providers.into_iter().nth(self.tab).map(|info| Column {
             slug: info.slug,
@@ -471,7 +481,7 @@ impl Render for LoginView {
             })
             .when(orphan, |this| this.child(self.consent(cx)))
             .when(secret, |this| {
-                this.child(self.secret_prompt(cx).into_any_element())
+                this.child(self.secret_prompt(secret_slug, cx).into_any_element())
             })
             .when_some(browsers, |this, (slug, names)| {
                 this.child(self.browser_modal(slug, names, cx).into_any_element())
