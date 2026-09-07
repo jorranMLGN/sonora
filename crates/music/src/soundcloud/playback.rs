@@ -8,9 +8,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::http::Http;
 use super::wire::{self, Transcoding};
+use crate::audio::trim;
 use crate::audio::{Output, RAMP, SmoothGain, Trimmed, Volume};
 use crate::spectrum::Spectrum;
-use crate::youtube::trim;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
 
 const POLL: Duration = Duration::from_millis(20);

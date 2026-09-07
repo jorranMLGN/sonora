@@ -4,7 +4,6 @@ mod client;
 mod genres;
 mod playback;
 mod subscriptions;
-pub(crate) mod trim;
 mod wire;
 
 use std::path::PathBuf;
