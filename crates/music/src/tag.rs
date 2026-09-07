@@ -1,9 +1,13 @@
 //! The `<slug>:<id>` grammar every id in the app carries.
 //!
 //! `spotify:` is also the URI scheme sonora accepts for deep links
-//! (`router::uri`), so a spotify head is only a tag when the tail is not
-//! itself a Spotify URI body. `URI_KINDS` is that guard, and it applies to
-//! spotify alone.
+//! (`router::uri`), so the head alone cannot tell a tag from a link — the
+//! colon count can. `spotify:track:abc` splits again; `spotify:abc` does not,
+//! and no bare id ever contains a colon. `URI_KINDS` therefore rejects a tail
+//! only when it splits and its first segment is a kind. Keying on the head
+//! instead would strand every Spotify username spelled like one, and
+//! `Playlist::owner_id` and `Contributor::id` are usernames. The guard applies
+//! to spotify alone.
 //!
 //! Local ids carry their kind in the head — `local:` for a track, and one
 //! `local-<kind>:` per other model. They all belong to the same provider, so
@@ -29,11 +33,11 @@ pub fn split(id: &str) -> Option<(&str, &str)> {
         return Some(("local", rest));
     }
     let slug = *SLUGS.iter().find(|known| **known == head)?;
-    if slug == "spotify" {
-        let kind = rest.split_once(':').map_or(rest, |(kind, _)| kind);
-        if URI_KINDS.contains(&kind) {
-            return None;
-        }
+    if slug == "spotify"
+        && let Some((kind, _)) = rest.split_once(':')
+        && URI_KINDS.contains(&kind)
+    {
+        return None;
     }
     Some((slug, rest))
 }
@@ -127,6 +131,16 @@ mod tests {
             split("spotify:7etD5lFGaYcsKmFTmutVYO"),
             Some(("spotify", "7etD5lFGaYcsKmFTmutVYO"))
         );
+    }
+
+    #[test]
+    fn a_user_named_like_a_uri_kind_still_tags() {
+        for name in ["track", "album", "playlist", "artist", "user"] {
+            let id = tag("spotify", name);
+            assert_eq!(id, format!("spotify:{name}"));
+            assert_eq!(slug_of(&id), Some("spotify"), "{id}");
+            assert_eq!(untag(&id), name, "{id}");
+        }
     }
 
     #[test]
