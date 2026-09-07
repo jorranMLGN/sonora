@@ -122,8 +122,8 @@ fn record<'a>(
     }
 }
 
-fn local(track: &Track) -> bool {
-    track.id.as_deref().is_some_and(music::is_local_id)
+fn survives(track: &Track, slug: &str) -> bool {
+    track.id.as_deref().and_then(music::tag::slug_of) != Some(slug)
 }
 
 fn sift<T>(
@@ -259,10 +259,7 @@ impl Queue {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedOut(slug) => match *slug == "local" {
-                true => {}
-                false => this.purge(cx),
-            },
+            SessionEvent::SignedOut(slug) => this.purge(slug, cx),
             SessionEvent::SignedIn(_) | SessionEvent::Reconnected(_) => {}
         })
         .detach();
@@ -351,7 +348,7 @@ impl Queue {
         self.current.clone()
     }
 
-    fn purge(&mut self, cx: &mut Context<Self>) {
+    fn purge(&mut self, slug: &str, cx: &mut Context<Self>) {
         let suggested = self.similar > 0;
         self.upcoming.truncate(self.queued());
         self.similar = 0;
@@ -360,7 +357,7 @@ impl Queue {
             &mut self.current,
             &mut self.upcoming,
             &mut self.source,
-            local,
+            |track| survives(track, slug),
         );
         if suggested || sifted {
             self.changed(cx);
@@ -637,9 +634,13 @@ mod tests {
     use music::{ArtistRef, Track};
 
     use super::{
-        gap_target, hydrate, in_order, local, move_item, record, restore, scramble, select_past,
-        select_upcoming, sift, stub, trim,
+        gap_target, hydrate, in_order, move_item, record, restore, scramble, select_past,
+        select_upcoming, sift, stub, survives, trim,
     };
+
+    fn local(track: &Track) -> bool {
+        track.id.as_deref().is_some_and(music::is_local_id)
+    }
 
     fn track(id: &str) -> Track {
         Track {
@@ -954,6 +955,27 @@ mod tests {
         assert_eq!(upcoming.len(), 1);
         assert_eq!(source.len(), 1);
         assert!(past.iter().chain(&source).all(local));
+    }
+
+    #[test]
+    fn signing_out_of_one_provider_leaves_the_others() {
+        let mut past = vec![track("spotify:a"), track("soundcloud:b")];
+        let mut current = Some(track("spotify:c"));
+        let mut upcoming = VecDeque::from([track("soundcloud:d")]);
+        let mut source = vec![track("spotify:a"), track("soundcloud:b")];
+
+        assert!(sift(
+            &mut past,
+            &mut current,
+            &mut upcoming,
+            &mut source,
+            |t| survives(t, "spotify")
+        ));
+
+        assert_eq!(past.len(), 1);
+        assert!(current.is_none());
+        assert_eq!(upcoming.len(), 1);
+        assert_eq!(source.len(), 1);
     }
 
     #[test]
