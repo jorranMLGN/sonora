@@ -22,6 +22,8 @@ use crate::{
 };
 pub use client::SoundCloudClient;
 use http::Http;
+#[cfg(test)]
+pub(crate) use playback::resolve_playable_url;
 
 pub(crate) const GUEST_ID: &str = "soundcloud-guest";
 

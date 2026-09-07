@@ -556,7 +556,18 @@ fn announce(
 /// instead of a direct one, so it goes through `stream::assemble`, which
 /// fetches that playlist fresh, then the init segment and every media
 /// segment in order, concatenating them into one fragmented mp4 buffer.
-async fn fetch(http: &Http, id: &str) -> Result<Loaded> {
+/// Fetches a track's transcodings, `pick`s the best one, and resolves that
+/// transcoding's own url to the short-lived cdn (or, for hls, media
+/// playlist) url named in `media.transcodings[].url`.
+///
+/// This is the whole selection step `fetch` needs before it downloads
+/// anything, split out so `soundcloud::resolve_playable_url` — the entry
+/// point `live_tests::soundcloud` calls to exercise this same path live —
+/// can share it instead of reimplementing it.
+async fn resolve_transcoding(
+    http: &Http,
+    id: &str,
+) -> Result<(Transcoding, String, Option<Duration>)> {
     let track: wire::Track = http
         .get_json(&format!("/tracks/{id}"), &[])
         .await
@@ -565,25 +576,48 @@ async fn fetch(http: &Http, id: &str) -> Result<Loaded> {
     let chosen = pick(&track.media.transcodings)
         .context("soundcloud offers no playable transcoding for this track")?
         .clone();
+    let resolved = http
+        .resolve_stream(&chosen.url)
+        .await
+        .context("cannot resolve the soundcloud stream")?;
+    Ok((chosen, resolved, duration))
+}
+
+/// Resolves a track id to the playable url `load` would stream from, without
+/// downloading it — anonymous when `token` is `None`.
+///
+/// Exposed to the crate for `live_tests::soundcloud`, which needs this exact
+/// selection-and-resolve path exercised against the live api rather than
+/// reimplemented by hand, but cannot see `Http` or `Transcoding`: both stay
+/// private to `soundcloud`, so this takes and returns plain strings.
+///
+/// `cfg(test)`: its only caller is a `#[tokio::test]`, which the compiler
+/// already strips outside test builds, so this would otherwise warn as dead
+/// code in a plain `cargo build`/`clippy`.
+#[cfg(test)]
+pub(crate) async fn resolve_playable_url(
+    client_id: String,
+    token: Option<String>,
+    track_id: &str,
+) -> Result<String> {
+    let http = match token {
+        Some(token) => Http::with_token(client_id, token),
+        None => Http::anonymous(client_id),
+    };
+    let (_chosen, url, _duration) = resolve_transcoding(&http, track_id).await?;
+    Ok(url)
+}
+
+async fn fetch(http: &Http, id: &str) -> Result<Loaded> {
+    let (chosen, resolved, duration) = resolve_transcoding(http, id).await?;
     let data = match chosen.format.protocol.as_str() {
-        "progressive" => {
-            let cdn = http
-                .resolve_stream(&chosen.url)
-                .await
-                .context("cannot resolve the soundcloud stream")?;
-            http.fetch_bytes(&cdn)
-                .await
-                .context("cannot download the soundcloud stream")?
-        }
-        "hls" => {
-            let playlist_url = http
-                .resolve_stream(&chosen.url)
-                .await
-                .context("cannot resolve the soundcloud stream")?;
-            stream::assemble(http.agent(), &playlist_url)
-                .await
-                .context("cannot assemble the soundcloud hls stream")?
-        }
+        "progressive" => http
+            .fetch_bytes(&resolved)
+            .await
+            .context("cannot download the soundcloud stream")?,
+        "hls" => stream::assemble(http.agent(), &resolved)
+            .await
+            .context("cannot assemble the soundcloud hls stream")?,
         other => anyhow::bail!("soundcloud offered an unrecognised stream protocol {other}"),
     };
     Ok(Loaded {

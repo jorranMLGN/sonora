@@ -134,84 +134,21 @@ async fn a_track_resolves_to_a_playable_transcoding_url() -> Result<()> {
         .context("anonymous sign-in failed while harvesting a client_id")?;
     let client_id = read_cache("client_id.txt")?;
 
+    // The same selection-and-resolve step `soundcloud::playback::fetch` uses
+    // to load a track, not a reimplementation of it — see
+    // `soundcloud::resolve_playable_url`'s doc comment.
+    let url = crate::soundcloud::resolve_playable_url(client_id, None, TRACK_ID)
+        .await
+        .with_context(|| format!("resolving track {TRACK_ID} to a playable url"))?;
+
     let agent = reqwest::Client::new();
-
-    #[derive(serde::Deserialize)]
-    struct Track {
-        media: Media,
-    }
-    #[derive(serde::Deserialize)]
-    struct Media {
-        transcodings: Vec<Transcoding>,
-    }
-    #[derive(serde::Deserialize, Clone)]
-    struct Transcoding {
-        url: String,
-        format: Format,
-    }
-    #[derive(serde::Deserialize, Clone)]
-    struct Format {
-        protocol: String,
-    }
-    #[derive(serde::Deserialize)]
-    struct Resolved {
-        url: String,
-    }
-
-    let track_path = format!("/tracks/{TRACK_ID}");
-    let response = agent
-        .get(format!("{BASE}{track_path}"))
-        .query(&[("client_id", client_id.as_str())])
-        .send()
-        .await
-        .with_context(|| format!("GET {track_path} could not reach soundcloud"))?;
-    let status = response.status();
-    if !status.is_success() {
-        bail!("GET {track_path} -> {status}");
-    }
-    let track: Track = response
-        .json()
-        .await
-        .with_context(|| format!("GET {track_path} -> {status}, but the body did not parse"))?;
-
-    // Prefer hls, the way `soundcloud::playback::pick` does: it is the only
-    // protocol behind the better-quality presets.
-    let chosen = track
-        .media
-        .transcodings
-        .iter()
-        .find(|t| t.format.protocol == "hls")
-        .or_else(|| track.media.transcodings.first())
-        .with_context(|| format!("GET {track_path} -> {status}, but it offers no transcodings"))?
-        .clone();
-
-    let response = agent
-        .get(&chosen.url)
-        .query(&[("client_id", client_id.as_str())])
-        .send()
-        .await
-        .with_context(|| format!("GET {} could not reach soundcloud", chosen.url))?;
-    let status = response.status();
-    if !status.is_success() {
-        bail!("GET {} -> {status}", chosen.url);
-    }
-    let resolved: Resolved = response.json().await.with_context(|| {
-        format!(
-            "GET {} -> {status}, but the body was not {{\"url\": …}}",
-            chosen.url
-        )
+    let response = agent.get(&url).send().await.with_context(|| {
+        format!("GET {url} (the resolved transcoding url) could not reach soundcloud")
     })?;
-
-    let response = agent
-        .get(&resolved.url)
-        .send()
-        .await
-        .context("could not reach the resolved cdn url")?;
     let status = response.status();
     assert!(
         status.is_success(),
-        "GET {} (the resolved transcoding url) -> {status}",
-        resolved.url
+        "GET {url} (the resolved transcoding url) -> {status}"
     );
     Ok(())
 }
