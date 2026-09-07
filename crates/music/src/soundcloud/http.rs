@@ -143,6 +143,60 @@ impl Http {
             .with_context(|| format!("cannot read the soundcloud response for {path}"))
     }
 
+    /// Resolves a transcoding's own URL to the short-lived CDN URL it names.
+    ///
+    /// `url` is already the full address SoundCloud handed back in
+    /// `media.transcodings[].url`, so unlike `get_json` this must not
+    /// prefix it with `BASE` a second time.
+    pub async fn resolve_stream(&self, url: &str) -> Result<String> {
+        #[derive(serde::Deserialize)]
+        struct Resolved {
+            url: String,
+        }
+        let mut request = self
+            .agent
+            .get(url)
+            .query(&[("client_id", self.client_id.as_str())]);
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("OAuth {token}"));
+        }
+        let response = request
+            .send()
+            .await
+            .context("cannot reach soundcloud to resolve the stream")?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("soundcloud refused to resolve the stream with {status}");
+        }
+        response
+            .json::<Resolved>()
+            .await
+            .map(|resolved| resolved.url)
+            .context("cannot read the soundcloud stream resolution")
+    }
+
+    /// Downloads the audio bytes at a resolved CDN URL.
+    ///
+    /// No `client_id` and no `Authorization` header: soundcloud's CDN URLs
+    /// are already signed and short-lived.
+    pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let response = self
+            .agent
+            .get(url)
+            .send()
+            .await
+            .context("cannot reach soundcloud's cdn")?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("soundcloud's cdn refused the download with {status}");
+        }
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .context("cannot read the downloaded audio")
+    }
+
     pub async fn put_json<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,

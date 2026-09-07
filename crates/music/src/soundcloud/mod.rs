@@ -2,6 +2,7 @@ mod auth;
 mod client;
 mod http;
 mod library;
+mod playback;
 mod playlists;
 mod search;
 mod users;
@@ -9,16 +10,14 @@ mod wire;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::{
-    InputSource, MusicProvider, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
-    Player, PromptSink, ProviderSession, SignIn, SignInFailure, SignInProblem, SignInPrompt,
-    UserProfile,
+    InputSource, MusicProvider, PromptSink, ProviderSession, SignIn, SignInFailure, SignInProblem,
+    SignInPrompt, UserProfile,
 };
 pub use client::SoundCloudClient;
 use http::Http;
@@ -103,19 +102,20 @@ impl SoundCloudProvider {
                 id: GUEST_ID.to_string(),
                 display_name: "SoundCloud".to_string(),
             },
+            playback: Arc::new(playback::Factory::new(http.clone())),
             api: Arc::new(SoundCloudClient::new(http)),
-            playback: Arc::new(Factory),
             authenticated: false,
             playcounts: false,
         }
     }
 
     fn authenticated_session(&self, http: Http, profile: UserProfile) -> ProviderSession {
-        let client = SoundCloudClient::new(Arc::new(http)).as_user(profile.id.clone());
+        let http = Arc::new(http);
+        let client = SoundCloudClient::new(http.clone()).as_user(profile.id.clone());
         ProviderSession {
             profile,
             api: Arc::new(client),
-            playback: Arc::new(Factory),
+            playback: Arc::new(playback::Factory::new(http)),
             authenticated: true,
             playcounts: false,
         }
@@ -244,40 +244,6 @@ impl MusicProvider for SoundCloudProvider {
                 log::warn!("soundcloud: cannot remove credential cache: {error}");
             }
         }
-    }
-}
-
-struct Factory;
-
-impl PlaybackFactory for Factory {
-    fn start(&self, _config: PlaybackConfig) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
-        (Box::new(NoPlayer), Box::new(NoEvents))
-    }
-}
-
-struct NoPlayer;
-
-impl Player for NoPlayer {
-    fn load(&self, _track_id: &str, _seamless: bool) -> Result<()> {
-        anyhow::bail!("soundcloud playback is not implemented yet")
-    }
-
-    fn preload(&self, _track_id: &str) -> Result<()> {
-        anyhow::bail!("soundcloud playback is not implemented yet")
-    }
-
-    fn play(&self) {}
-    fn pause(&self) {}
-    fn seek(&self, _position: Duration) {}
-    fn set_gain(&self, _gain: f32) {}
-}
-
-struct NoEvents;
-
-#[async_trait]
-impl PlaybackEvents for NoEvents {
-    async fn next(&mut self) -> Option<PlaybackEvent> {
-        None
     }
 }
 

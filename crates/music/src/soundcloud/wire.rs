@@ -53,7 +53,36 @@ pub struct Track {
     pub permalink_url: Option<String>,
     #[serde(default)]
     pub genre: Option<String>,
+    #[serde(default)]
+    pub media: Media,
     pub user: User,
+}
+
+/// The set of encodings a track is offered in. Only `playback::pick` reads
+/// this; every other conversion in this module ignores it.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Media {
+    #[serde(default)]
+    pub transcodings: Vec<Transcoding>,
+}
+
+/// One offered encoding of a track. `url` here is not the audio itself: it
+/// answers with `{"url": "<cdn url>"}` when fetched, and that second URL is
+/// the actual stream (or, for `hls`, an `.m3u8` playlist of segment URLs).
+#[derive(Clone, Debug, Deserialize)]
+pub struct Transcoding {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub preset: String,
+    #[serde(default)]
+    pub format: Format,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Format {
+    #[serde(default)]
+    pub protocol: String,
 }
 
 pub fn saved_artist(raw: User) -> crate::SavedArtist {
