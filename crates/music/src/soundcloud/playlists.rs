@@ -21,9 +21,12 @@ use crate::soundcloud::wire::{self, Entry, Playlist as RawPlaylist};
 const BATCH_SIZE: usize = 50;
 
 async fn fetch_raw(http: &Http, id: &str) -> Result<RawPlaylist> {
-    http.get_json(&format!("/playlists/{id}"), &[])
+    let raw: RawPlaylist = http
+        .get_json(&format!("/playlists/{id}"), &[])
         .await
-        .context("cannot fetch the soundcloud set")
+        .context("cannot fetch the soundcloud set")?;
+    http.remember_permalink(raw.id, raw.permalink_url.clone());
+    Ok(raw)
 }
 
 /// Resolves a set's full track list, in the set's own order.

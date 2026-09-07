@@ -12,10 +12,12 @@ pub(crate) fn trouble(failure: Failure, provider: &str, centered: bool) -> AnyEl
         detail,
     } = failure;
 
-    let mut args = i18n::FluentArgs::new();
-    args.set("provider", provider.to_owned());
     let message = match problem {
-        Some(problem) => i18n::lookup(reason(problem), Some(&args)),
+        Some(problem) => {
+            let mut args = i18n::FluentArgs::new();
+            args.set("provider", provider.to_owned());
+            i18n::lookup(reason(problem), Some(&args))
+        }
         None => SharedString::from(sentence(summary, detail)),
     };
 

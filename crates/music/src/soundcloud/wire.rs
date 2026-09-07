@@ -241,7 +241,6 @@ pub struct Playlist {
     pub track_count: u32,
     #[serde(default)]
     pub artwork_url: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     pub permalink_url: Option<String>,
     #[serde(default)]

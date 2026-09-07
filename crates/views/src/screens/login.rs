@@ -361,6 +361,8 @@ impl Render for LoginView {
                     }))
             })
             .collect::<Vec<_>>();
+        // self.tab always indexes providers; it is set from the same list
+        // above and clamped nowhere else, so this never falls to "".
         let provider_name = providers
             .get(self.tab)
             .map(|info| info.name)
