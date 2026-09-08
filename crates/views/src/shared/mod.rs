@@ -26,7 +26,7 @@ use gpui::prelude::*;
 use gpui::{App, Div, Pixels, SharedString, div, px, svg};
 use i18n::t;
 use router::{LOCAL, NavEntry};
-use state::Session;
+use state::{Session, Sonora};
 use ui::{ActiveTheme as _, Text};
 
 const NOTE: Pixels = px(14.);
@@ -68,7 +68,17 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
         "soundcloud" => "icons/soundcloud.svg",
         "spotify" => "icons/spotify.svg",
         "youtube" => "icons/youtubemusic.svg",
+        LOCAL => "icons/file-music.svg",
         _ => "icons/music.svg",
+    }
+}
+
+pub(crate) fn provider_mark(id: &str, cx: &App) -> Option<&'static str> {
+    let session = Sonora::global(cx).session.read(cx);
+
+    match session.active_slugs().len() < 2 {
+        true => None,
+        false => session.slug_for(id).map(provider_logo),
     }
 }
 

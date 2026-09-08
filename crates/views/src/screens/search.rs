@@ -406,6 +406,13 @@ impl SearchView {
                     .cover(track.cover.clone())
                     .tint(tint)
                     .meta(meta)
+                    .when_some(
+                        track
+                            .id
+                            .as_deref()
+                            .and_then(|id| crate::shared::provider_mark(id, cx)),
+                        Card::mark,
+                    )
                     .when(track.explicit, |card| card.explicit())
                     .trailing(
                         div()
@@ -422,7 +429,14 @@ impl SearchView {
                     .cover(artist.cover.clone())
                     .circle()
                     .underline()
-                    .meta(meta);
+                    .meta(meta)
+                    .when_some(
+                        artist
+                            .id
+                            .as_deref()
+                            .and_then(|id| crate::shared::provider_mark(id, cx)),
+                        Card::mark,
+                    );
                 match &artist.id {
                     Some(id) => card.press(pressed(Press::Artist(id.clone()), me)),
                     None => card,
@@ -432,11 +446,13 @@ impl SearchView {
                 .cover(album.cover.clone())
                 .underline()
                 .meta(meta)
+                .when_some(crate::shared::provider_mark(&album.id, cx), Card::mark)
                 .press(pressed(Press::Album(album.id.clone()), me)),
             Hit::Playlist(list) => Card::new(("playlist", place), list.name.clone())
                 .cover(list.cover.clone())
                 .underline()
                 .meta(meta)
+                .when_some(crate::shared::provider_mark(&list.id, cx), Card::mark)
                 .press(pressed(Press::Playlist(list.id.clone()), me)),
         };
 
@@ -492,30 +508,34 @@ impl SearchView {
     fn best(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let theme = *cx.theme();
         let hit = self.search.read(cx).best()?;
-        let (kind, title, artists, target) = match hit {
+        let (kind, title, artists, target, id) = match hit {
             Hit::Song(track) => (
                 Kind::Song,
                 track.name.clone(),
                 track.artist_refs.clone(),
                 Some(Press::Song(Box::new(track.clone()))),
+                track.id.clone(),
             ),
             Hit::Artist(artist) => (
                 Kind::Artist,
                 artist.name.clone(),
                 Vec::new(),
                 artist.id.clone().map(Press::Artist),
+                artist.id.clone(),
             ),
             Hit::Album(album) => (
                 Kind::Album,
                 album.name.clone(),
                 album.artist_refs.clone(),
                 Some(Press::Album(album.id.clone())),
+                Some(album.id.clone()),
             ),
             Hit::Playlist(list) => (
                 Kind::Playlist,
                 list.name.clone(),
                 Vec::new(),
                 Some(Press::Playlist(list.id.clone())),
+                Some(list.id.clone()),
             ),
         };
 
@@ -536,6 +556,11 @@ impl SearchView {
                 )
                 .text_size(theme.text(Text::Small))
                 .truncate(),
+            )
+            .when_some(
+                id.as_deref()
+                    .and_then(|id| crate::shared::provider_mark(id, cx)),
+                Card::mark,
             )
             .flat()
             .gap_4()
