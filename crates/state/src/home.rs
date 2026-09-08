@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use std::sync::Arc;
+
 use gpui::{App, Context, Entity, Task};
-use music::{GenreItem, GenreSection, Track};
+use music::{GenreItem, GenreSection, MusicApi, Track};
 
 use crate::{Io, Library, LibraryPart, LibraryState, Session, SessionEvent, join};
 
@@ -32,23 +34,15 @@ impl Home {
         let quick_picks_seed = fastrand::u64(..);
         let quick_picks = picks(&library, quick_picks_seed, cx);
 
-        cx.subscribe(&session, |this, session, event, cx| match event {
-            SessionEvent::SignedIn(slug) => {
-                if session.read(cx).provider_slug() == Some(*slug) {
-                    this.feed(cx);
-                }
-            }
-            SessionEvent::SignedOut(slug) => {
-                if session.read(cx).provider_slug() != Some(*slug) {
-                    return;
-                }
+        cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
                 this.task = None;
                 this.naming = None;
                 this.listen_again = Rc::new(Vec::new());
                 this.quick_picks = Rc::new(Vec::new());
                 this.sections = Rc::new(Vec::new());
                 this.feeding = false;
-                cx.notify();
+                this.feed(cx);
             }
             SessionEvent::Reconnected(_) => {}
         })
@@ -96,32 +90,66 @@ impl Home {
         if self.feeding || !self.sections.is_empty() {
             return;
         }
-        let Some(client) = self.session.read(cx).client() else {
+        let asking = self.providers(cx);
+        if asking.is_empty() {
             return;
-        };
+        }
 
         self.feeding = true;
         let io = self.io.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let loaded = join(io.spawn(async move { client.home().await })).await;
+            let sent: Vec<_> = asking
+                .into_iter()
+                .map(|(name, client)| (name, io.spawn(async move { client.home().await })))
+                .collect();
+
+            let mut feeds = Vec::new();
+            for (name, handle) in sent {
+                match join(handle).await {
+                    Ok(feed) => feeds.push((name, feed)),
+                    Err(error) => log::warn!("home: cannot load the {name} feed: {error:#}"),
+                }
+            }
 
             this.update(cx, |this, cx| {
                 this.feeding = false;
-                match loaded {
-                    Ok(feed) => {
-                        this.listen_again = Rc::new(feed.listen_again);
-                        if let Some(quick_picks) = feed.quick_picks {
-                            this.quick_picks = Rc::new(quick_picks);
-                        }
-                        this.sections = Rc::new(pruned(&feed.sections));
-                        this.name_playlists(feed.sections, cx);
-                    }
-                    Err(error) => log::warn!("home: cannot load the feed: {error:#}"),
+                let listen: Vec<Vec<Track>> = feeds
+                    .iter()
+                    .map(|(_, feed)| feed.listen_again.clone())
+                    .collect();
+                let picks: Vec<Vec<Track>> = feeds
+                    .iter()
+                    .filter_map(|(_, feed)| feed.quick_picks.clone())
+                    .collect();
+                let sections: Vec<Vec<GenreSection>> = feeds
+                    .iter()
+                    .map(|(name, feed)| credited(name, &feed.sections))
+                    .collect();
+
+                this.listen_again = Rc::new(woven(listen));
+                if !picks.is_empty() {
+                    this.quick_picks = Rc::new(woven(picks));
                 }
+                let sections = woven(sections);
+                this.sections = Rc::new(pruned(&sections));
+                this.name_playlists(sections, cx);
                 cx.notify();
             })
             .ok();
         }));
+    }
+
+    fn providers(&self, cx: &Context<Self>) -> Vec<(&'static str, Arc<dyn MusicApi>)> {
+        let session = self.session.read(cx);
+
+        session
+            .active_slugs()
+            .into_iter()
+            .filter_map(|slug| {
+                let client = session.client_for_slug(slug)?;
+                Some((session.provider_name_for(slug).unwrap_or(slug), client))
+            })
+            .collect()
     }
 
     fn name_playlists(&mut self, sections: Vec<GenreSection>, cx: &mut Context<Self>) {
@@ -131,21 +159,38 @@ impl Home {
         {
             return;
         }
-        let Some(client) = self.session.read(cx).client() else {
+        let asking = self.providers(cx);
+        if asking.is_empty() {
             return;
-        };
+        }
 
         let io = self.io.clone();
         self.naming = Some(cx.spawn(async move |this, cx| {
-            let named = io
-                .spawn(async move { client.name_home_playlists(sections).await })
-                .await;
-            let Ok(named) = named else {
-                return;
-            };
+            let sent: Vec<_> = asking
+                .into_iter()
+                .map(|(name, client)| {
+                    let mine: Vec<GenreSection> = sections
+                        .iter()
+                        .filter(|section| section.provider.as_deref() == Some(name))
+                        .cloned()
+                        .collect();
+                    (
+                        name,
+                        io.spawn(async move { client.name_home_playlists(mine).await }),
+                    )
+                })
+                .collect();
+
+            let mut named = Vec::new();
+            for (name, handle) in sent {
+                let Ok(part) = handle.await else {
+                    continue;
+                };
+                named.push(credited(name, &part));
+            }
 
             this.update(cx, |this, cx| {
-                this.sections = Rc::new(named);
+                this.sections = Rc::new(pruned(&woven(named)));
                 cx.notify();
             })
             .ok();
@@ -163,6 +208,30 @@ impl Home {
     pub fn is_loading(&self, cx: &App) -> bool {
         self.library.read(cx).loading(LibraryPart::Tracks, cx)
     }
+}
+
+fn woven<T>(lanes: Vec<Vec<T>>) -> Vec<T> {
+    let rounds = lanes.iter().map(Vec::len).max().unwrap_or(0);
+    let mut lanes: Vec<_> = lanes.into_iter().map(Vec::into_iter).collect();
+    let mut woven = Vec::new();
+
+    for _ in 0..rounds {
+        for lane in &mut lanes {
+            woven.extend(lane.next());
+        }
+    }
+
+    woven
+}
+
+fn credited(provider: &str, sections: &[GenreSection]) -> Vec<GenreSection> {
+    sections
+        .iter()
+        .map(|section| GenreSection {
+            provider: Some(provider.to_owned()),
+            ..section.clone()
+        })
+        .collect()
 }
 
 fn blank(item: &GenreItem) -> bool {
@@ -186,6 +255,7 @@ fn pruned(sections: &[GenreSection]) -> Vec<GenreSection> {
             (!items.is_empty()).then(|| GenreSection {
                 title: section.title.clone(),
                 items,
+                provider: section.provider.clone(),
             })
         })
         .collect()
