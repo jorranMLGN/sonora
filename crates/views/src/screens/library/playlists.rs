@@ -73,7 +73,7 @@ pub(super) const COLUMNS: &[ColumnSpec<PlaylistField>] =
 pub(super) struct PlaylistSource {
     library: Entity<Library>,
     playback: Entity<Playback>,
-    local: bool,
+    slug: &'static str,
     owned: bool,
 }
 
@@ -81,12 +81,12 @@ impl PlaylistSource {
     pub(super) fn shelved(
         library: Entity<Library>,
         playback: Entity<Playback>,
-        local: bool,
+        slug: &'static str,
     ) -> Self {
         Self {
             library,
             playback,
-            local,
+            slug,
             owned: false,
         }
     }
@@ -107,12 +107,10 @@ impl PlaylistSource {
     }
 
     fn playlists<'a>(&self, cx: &'a App) -> &'a [Playlist] {
-        let library = self.library.read(cx);
-        let state = match self.local {
-            true => library.local_state(),
-            false => library.state(cx),
+        let Some(shelf) = self.library.read(cx).shelf(self.slug) else {
+            return &[];
         };
-        match state {
+        match &shelf.state {
             LibraryState::Ready { playlists, .. } => playlists.as_slice(),
             _ => &[],
         }
@@ -171,10 +169,7 @@ impl TableSource for PlaylistSource {
     }
 
     fn is_loading(&self, cx: &App) -> bool {
-        match self.local {
-            true => self.library.read(cx).local_loading(LibraryPart::Playlists),
-            false => self.library.read(cx).loading(LibraryPart::Playlists, cx),
-        }
+        super::loading(&self.library, self.slug, LibraryPart::Playlists, cx)
     }
 
     fn pin(&self, row: usize, cx: &App) -> Option<Pin> {

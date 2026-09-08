@@ -363,11 +363,11 @@ impl Shelf {
         }
     }
 
-    fn loading(&self, part: LibraryPart) -> bool {
+    pub fn loading(&self, part: LibraryPart) -> bool {
         matches!(self.state, LibraryState::Loading) || self.awaited.contains(&part)
     }
 
-    fn failed(&self, part: LibraryPart) -> bool {
+    pub fn failed(&self, part: LibraryPart) -> bool {
         let problems = match &self.state {
             LibraryState::Ready { problems, .. } => problems.as_slice(),
             _ => &[],
@@ -646,13 +646,9 @@ impl Library {
         &mut self,
         name: String,
         tracks: Vec<String>,
-        local: bool,
+        slug: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
-        let slug = match local {
-            true => Some("local"),
-            false => self.session.read(cx).provider_slug(),
-        };
         self.mutate_playlist(
             PlaylistMutation {
                 action: "create playlist",

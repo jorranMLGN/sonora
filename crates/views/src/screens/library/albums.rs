@@ -91,7 +91,7 @@ pub(super) const COLUMNS: &[ColumnSpec<AlbumField>] = &[
 pub(super) struct AlbumSource {
     library: Entity<Library>,
     playback: Entity<Playback>,
-    local: bool,
+    slug: &'static str,
     year_span: Option<(f32, f32)>,
     spread: RefCell<Option<Spread>>,
 }
@@ -105,12 +105,12 @@ impl AlbumSource {
     pub(super) fn shelved(
         library: Entity<Library>,
         playback: Entity<Playback>,
-        local: bool,
+        slug: &'static str,
     ) -> Self {
         Self {
             library,
             playback,
-            local,
+            slug,
             year_span: None,
             spread: RefCell::new(None),
         }
@@ -156,12 +156,10 @@ impl AlbumSource {
     }
 
     fn albums<'a>(&self, cx: &'a App) -> &'a [Album] {
-        let library = self.library.read(cx);
-        let state = match self.local {
-            true => library.local_state(),
-            false => library.state(cx),
+        let Some(shelf) = self.library.read(cx).shelf(self.slug) else {
+            return &[];
         };
-        match state {
+        match &shelf.state {
             LibraryState::Ready { albums, .. } => albums.as_slice(),
             _ => &[],
         }
@@ -238,10 +236,7 @@ impl TableSource for AlbumSource {
     }
 
     fn is_loading(&self, cx: &App) -> bool {
-        match self.local {
-            true => self.library.read(cx).local_loading(LibraryPart::Albums),
-            false => self.library.read(cx).loading(LibraryPart::Albums, cx),
-        }
+        super::loading(&self.library, self.slug, LibraryPart::Albums, cx)
     }
 
     fn pin(&self, row: usize, cx: &App) -> Option<Pin> {

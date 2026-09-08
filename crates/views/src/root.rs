@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui::{AnyView, Context, Entity, MouseButton, NavigationDirection, Render, Task};
 use gpui::{App, Font, FontFallbacks, SharedString, font, prelude::*};
 use gpui::{Window, div};
@@ -8,7 +10,7 @@ use input::{
 use router::{Destination, NavigationEvent, SettingsTab, back, forward, navigate};
 use state::{
     ArtistDetail, Detail, GenreDetails, Genres, Home, Io, Library, Playback, Profile, Queue,
-    SYSTEM_FONT, Search, Session, SessionState, SideTab, SongDetail, Sonora,
+    SYSTEM_FONT, Search, Session, SessionEvent, SessionState, SideTab, SongDetail, Sonora,
 };
 use ui::{ActiveTheme as _, Dismiss, Look, Theme, ThemeKind, clear_listing};
 
@@ -19,14 +21,13 @@ use crate::shells::Shell;
 use crate::shells::workspace::Workspace;
 use crate::{
     Adaptive, ArtistView, DetailView, FullscreenView, GenreView, HistoryView, HomeView,
-    LibraryView, LoginView, SettingsView, Shelf, SongView, UserView,
+    LibraryView, LoginView, SettingsView, SongView, UserView,
 };
 
 struct Screens {
     home: Entity<HomeView>,
     history: Entity<HistoryView>,
-    library: Entity<LibraryView>,
-    local: Entity<LibraryView>,
+    libraries: HashMap<&'static str, Entity<LibraryView>>,
     artist: Option<Entity<ArtistView>>,
     artist_detail: Option<Entity<ArtistDetail>>,
     album: Option<Entity<DetailView>>,
@@ -106,18 +107,18 @@ impl Root {
 
         let navigation = router::trail(cx);
 
-        cx.subscribe(&navigation, |this, _, event, cx| {
+        cx.subscribe_in(&navigation, window, |this, _, event, window, cx| {
             let NavigationEvent::Moved(destination) = event;
-            this.transition_to(destination.clone(), cx);
+            this.transition_to(destination.clone(), window, cx);
         })
         .detach();
 
-        let library_view = cx.new(|cx| {
-            LibraryView::new(Shelf::Saved, library.clone(), playback.clone(), window, cx)
-        });
-        let local_view = cx.new(|cx| {
-            LibraryView::new(Shelf::Local, library.clone(), playback.clone(), window, cx)
-        });
+        cx.subscribe(&session, |this, _, event, _| {
+            if let SessionEvent::SignedOut(slug) = event {
+                this.screens.libraries.remove(slug);
+            }
+        })
+        .detach();
 
         let io = Io::global(cx);
         let home_state = cx.new(|cx| Home::new(library.clone(), session.clone(), io.clone(), cx));
@@ -140,14 +141,8 @@ impl Root {
         let user = cx.new(|cx| UserView::new(user_profile.clone(), playback.clone(), cx));
 
         let start = navigation.read(cx).current();
-        let workspace = cx.new(|cx| {
-            Workspace::new(
-                playback.clone(),
-                queue.clone(),
-                library_view.clone().into(),
-                cx,
-            )
-        });
+        let workspace =
+            cx.new(|cx| Workspace::new(playback.clone(), queue.clone(), home.clone().into(), cx));
         let fullscreen = cx.new(|cx| FullscreenView::new(playback.clone(), queue.clone(), cx));
 
         let title_bar = cx.new(TitleBar::new);
@@ -205,8 +200,7 @@ impl Root {
             screens: Screens {
                 home,
                 history,
-                library: library_view,
-                local: local_view,
+                libraries: HashMap::new(),
                 artist: None,
                 artist_detail: None,
                 album: None,
@@ -225,8 +219,24 @@ impl Root {
             },
             _adaptive: adaptive,
         };
-        root.show(start, cx);
+        root.show(start, window, cx);
         root
+    }
+
+    fn library(
+        &mut self,
+        slug: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<LibraryView> {
+        if let Some(view) = self.screens.libraries.get(slug) {
+            return view.clone();
+        }
+        let library = Sonora::global(cx).library.clone();
+        let playback = self.playback.clone();
+        let view = cx.new(|cx| LibraryView::new(slug, library, playback, window, cx));
+        self.screens.libraries.insert(slug, view.clone());
+        view
     }
 
     fn artist(&mut self, cx: &mut Context<Self>) -> (Entity<ArtistView>, Entity<ArtistDetail>) {
@@ -358,7 +368,12 @@ impl Root {
         cx.notify();
     }
 
-    fn transition_to(&mut self, destination: Destination, cx: &mut Context<Self>) {
+    fn transition_to(
+        &mut self,
+        destination: Destination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.navigation_transition = None;
 
         let changes_shell = matches!(destination, Destination::Fullscreen)
@@ -367,11 +382,11 @@ impl Root {
             self.shells
                 .workspace
                 .update(cx, |workspace, cx| workspace.finish_transition(cx));
-            self.show(destination, cx);
+            self.show(destination, window, cx);
             return;
         }
 
-        self.show(destination, cx);
+        self.show(destination, window, cx);
         let enter = self
             .shells
             .workspace
@@ -388,7 +403,7 @@ impl Root {
         }));
     }
 
-    fn show(&mut self, destination: Destination, cx: &mut Context<Self>) {
+    fn show(&mut self, destination: Destination, window: &mut Window, cx: &mut Context<Self>) {
         clear_listing(cx);
         if let Destination::Fullscreen = destination {
             self.view = RootView::Fullscreen;
@@ -413,17 +428,9 @@ impl Root {
                 toolbar = Some(history.read(cx).toolbar());
                 history.into()
             }
-            Destination::Library(router::LOCAL, tab) => {
-                let local = self.screens.local.clone();
-                local.update(cx, |local, cx| local.select(tab.into(), cx));
-                toolbar = Some(local.read(cx).toolbar());
-                local.into()
-            }
-            Destination::Library(_, tab) => {
-                self.screens
-                    .library
-                    .update(cx, |library, cx| library.select(tab.into(), cx));
-                let library = self.screens.library.clone();
+            Destination::Library(slug, tab) => {
+                let library = self.library(slug, window, cx);
+                library.update(cx, |library, cx| library.select(tab.into(), cx));
                 toolbar = Some(library.read(cx).toolbar());
                 library.into()
             }

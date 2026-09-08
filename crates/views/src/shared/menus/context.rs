@@ -177,13 +177,16 @@ impl ItemMenu {
             _ => Vec::new(),
         };
         let created = ids.clone();
+        let owner = ids
+            .first()
+            .and_then(|id| Sonora::global(cx).session.read(cx).slug_for(id));
         let new_playlist = MenuItem::new("new-playlist", t!("menu-new-playlist"))
             .icon("icons/plus.svg")
             .on_click(move |_, window, cx| {
                 PlaylistEditor::open(
                     Edit::Create {
                         tracks: created.clone(),
-                        local: imported,
+                        slug: owner,
                     },
                     window,
                     cx,

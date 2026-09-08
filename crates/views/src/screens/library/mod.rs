@@ -17,7 +17,7 @@ use gpui::{
 };
 use i18n::t;
 use music::Track;
-use router::{Destination, LibraryTab, navigate};
+use router::{Destination, LOCAL, LibraryTab, navigate};
 use state::{
     AppSettings, Library, LibraryPart, LibraryState, Origin, Playback, PlaybackState, Sonora,
 };
@@ -37,18 +37,6 @@ use crate::shared::{cards, cells, local, page};
 use albums::{AlbumField, AlbumSource};
 use artists::{ArtistField, ArtistSource};
 use playlists::{PlaylistField, PlaylistSource};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Shelf {
-    Saved,
-    Local,
-}
-
-impl Shelf {
-    fn local(self) -> bool {
-        self == Shelf::Local
-    }
-}
 
 impl From<LibraryTab> for Section {
     fn from(tab: LibraryTab) -> Self {
@@ -102,18 +90,18 @@ impl Section {
         Self::Artists,
     ];
 
-    fn key(self, shelf: Shelf) -> &'static str {
-        match (shelf, self) {
-            (Shelf::Saved, Section::Favorites | Section::Songs) => "songs",
-            (Shelf::Saved, Section::Albums) => "albums",
-            (Shelf::Saved, Section::Playlists) => "playlists",
-            (Shelf::Saved, Section::Artists) => "artists",
-            (Shelf::Local, Section::Favorites) => "local-favorites",
-            (Shelf::Local, Section::Songs) => "local-songs",
-            (Shelf::Local, Section::Albums) => "local-albums",
-            (Shelf::Local, Section::Playlists) => "local-playlists",
-            (Shelf::Local, Section::Artists) => "local-artists",
+    fn name(self) -> &'static str {
+        match self {
+            Section::Favorites => "favorites",
+            Section::Songs => "songs",
+            Section::Albums => "albums",
+            Section::Playlists => "playlists",
+            Section::Artists => "artists",
         }
+    }
+
+    fn key(self, slug: &str) -> String {
+        format!("{slug}-{}", self.name())
     }
 
     fn mode(self) -> Mode {
@@ -137,17 +125,17 @@ impl Section {
         matches!(self, Section::Favorites | Section::Songs)
     }
 
-    fn vacancy(self, shelf: Shelf) -> &'static str {
-        match (shelf, self) {
-            (Shelf::Saved, Section::Favorites | Section::Songs) => "library-no-songs",
-            (Shelf::Saved, Section::Albums) => "library-no-albums",
-            (Shelf::Saved, Section::Playlists) => "library-no-playlists",
-            (Shelf::Saved, Section::Artists) => "library-no-artists",
-            (Shelf::Local, Section::Favorites) => "library-no-local-favorites",
-            (Shelf::Local, Section::Songs) => "library-no-local-songs",
-            (Shelf::Local, Section::Albums) => "library-no-local-albums",
-            (Shelf::Local, Section::Playlists) => "library-no-local-playlists",
-            (Shelf::Local, Section::Artists) => "library-no-local-artists",
+    fn vacancy(self, slug: &str) -> &'static str {
+        match (slug == LOCAL, self) {
+            (false, Section::Favorites | Section::Songs) => "library-no-songs",
+            (false, Section::Albums) => "library-no-albums",
+            (false, Section::Playlists) => "library-no-playlists",
+            (false, Section::Artists) => "library-no-artists",
+            (true, Section::Favorites) => "library-no-local-favorites",
+            (true, Section::Songs) => "library-no-local-songs",
+            (true, Section::Albums) => "library-no-local-albums",
+            (true, Section::Playlists) => "library-no-local-playlists",
+            (true, Section::Artists) => "library-no-local-artists",
         }
     }
 
@@ -170,51 +158,55 @@ impl Section {
         }
     }
 
-    fn origin(self, shelf: Shelf) -> Origin {
-        match (shelf, self) {
-            (Shelf::Saved, _) => Origin::saved(),
-            (Shelf::Local, Section::Songs) => Origin::local(),
-            (Shelf::Local, _) => Origin::local_favorites(),
+    fn origin(self, slug: &str) -> Origin {
+        match (slug == LOCAL, self) {
+            (false, _) => Origin::saved(),
+            (true, Section::Songs) => Origin::local(),
+            (true, _) => Origin::local_favorites(),
         }
     }
 }
 
 struct ShelfTracks {
     library: Entity<Library>,
-    shelf: Shelf,
+    slug: &'static str,
     section: Section,
 }
 
 impl Tracks for ShelfTracks {
     fn tracks<'a>(&self, cx: &'a App) -> &'a [Track] {
-        let library = self.library.read(cx);
-        let state = match (self.shelf, self.section) {
-            (Shelf::Local, Section::Favorites) => return library.local_favorites(),
-            (Shelf::Local, _) => library.local_state(),
-            (Shelf::Saved, _) => library.state(cx),
+        let Some(shelf) = self.library.read(cx).shelf(self.slug) else {
+            return &[];
         };
-        match state {
+        let tracks = match &shelf.state {
             LibraryState::Ready { tracks, .. } => tracks.as_slice(),
             _ => &[],
+        };
+        match self.section {
+            Section::Favorites => shelf.favorites.as_deref().unwrap_or(tracks),
+            _ => tracks,
         }
     }
 
     fn is_loading(&self, cx: &App) -> bool {
-        loading(&self.library, self.shelf, self.section, cx)
+        loading(&self.library, self.slug, self.section.part(), cx)
     }
 }
 
-fn loading(library: &Entity<Library>, shelf: Shelf, section: Section, cx: &App) -> bool {
-    let library = library.read(cx);
-    match (shelf, section) {
-        (Shelf::Local, Section::Favorites) => library.local_favorites_loading(),
-        (Shelf::Local, _) => library.local_loading(section.part()),
-        (Shelf::Saved, _) => library.loading(section.part(), cx),
+fn loading(library: &Entity<Library>, slug: &str, part: LibraryPart, cx: &App) -> bool {
+    match library.read(cx).shelf(slug) {
+        Some(shelf) => shelf.loading(part),
+        None => joining(slug, cx),
     }
+}
+
+fn joining(slug: &str, cx: &App) -> bool {
+    let session = Sonora::global(cx).session.read(cx);
+    session.is_pending() && session.provider_slug().is_some_and(|active| active == slug)
 }
 
 pub struct LibraryView {
-    shelf: Shelf,
+    slug: &'static str,
     library: Entity<Library>,
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
@@ -243,7 +235,7 @@ pub struct LibraryView {
 
 impl LibraryView {
     pub fn new(
-        shelf: Shelf,
+        slug: &'static str,
         library: Entity<Library>,
         playback: Entity<Playback>,
         window: &mut Window,
@@ -252,16 +244,14 @@ impl LibraryView {
         let width = cells::content_width(window, Pixels::ZERO, cx);
         let settings = Sonora::global(cx).settings.clone();
         let stored = |section: Section, cx: &App| {
+            let key = section.key(slug);
             let settings = settings.read(cx);
-            (
-                settings.table(section.key(shelf)),
-                settings.sorting(section.key(shelf)),
-            )
+            (settings.table(&key), settings.sorting(&key))
         };
         let viewed = |section: Section, cx: &App| {
             settings
                 .read(cx)
-                .view_or(section.key(shelf), section.mode())
+                .view_or(&section.key(slug), section.mode())
         };
         let views = Section::ALL.map(|section| viewed(section, cx));
 
@@ -271,12 +261,12 @@ impl LibraryView {
 
         let listed = |section: Section, cx: &mut Context<TableState<TrackSource>>| {
             let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(id));
-            let origin = section.origin(shelf);
+            let origin = section.origin(slug);
             let source = TrackSource::new(
                 LIBRARY_COLUMNS,
                 ShelfTracks {
                     library: library.clone(),
-                    shelf,
+                    slug,
                     section,
                 },
                 playback.clone(),
@@ -309,7 +299,7 @@ impl LibraryView {
             TableState::new(delegate, cx).follow(scroll.clone())
         });
         let albums = cx.new(|cx| {
-            let source = AlbumSource::shelved(library.clone(), playback.clone(), shelf.local());
+            let source = AlbumSource::shelved(library.clone(), playback.clone(), slug);
             let mut delegate =
                 TableDelegate::new(source, width, cx).with_sort(AlbumField::AddedAt, RECENT, cx);
             let (layout, sorting) = stored(Section::Albums, cx);
@@ -320,7 +310,7 @@ impl LibraryView {
             TableState::new(delegate, cx).follow(scroll.clone())
         });
         let playlists = cx.new(|cx| {
-            let source = PlaylistSource::shelved(library.clone(), playback.clone(), shelf.local());
+            let source = PlaylistSource::shelved(library.clone(), playback.clone(), slug);
             let mut delegate = TableDelegate::new(source, width, cx).with_sort(
                 PlaylistField::Modified,
                 RECENT,
@@ -334,7 +324,7 @@ impl LibraryView {
             TableState::new(delegate, cx).follow(scroll.clone())
         });
         let artists = cx.new(|cx| {
-            let source = ArtistSource::shelved(library.clone(), playback.clone(), shelf.local());
+            let source = ArtistSource::shelved(library.clone(), playback.clone(), slug);
             let mut delegate =
                 TableDelegate::new(source, width, cx).with_sort(ArtistField::AddedAt, RECENT, cx);
             let (layout, sorting) = stored(Section::Artists, cx);
@@ -432,7 +422,7 @@ impl LibraryView {
         let card_scrollbar = cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(id));
 
         Self {
-            shelf,
+            slug,
             library,
             settings,
             playback,
@@ -465,7 +455,7 @@ impl LibraryView {
         PlaylistEditor::open(
             Edit::Create {
                 tracks: Vec::new(),
-                local: self.shelf.local(),
+                slug: Some(self.slug),
             },
             window,
             cx,
@@ -525,46 +515,40 @@ impl LibraryView {
     }
 
     fn persist(&mut self, section: Section, cx: &mut Context<Self>) {
-        let key = section.key(self.shelf);
-        page::store(&self.settings.clone(), self.table(section), key, key, cx);
+        let key = section.key(self.slug);
+        page::store(&self.settings.clone(), self.table(section), &key, &key, cx);
     }
 
     fn unconfigured(&self, cx: &App) -> bool {
-        self.shelf.local() && Sonora::global(cx).session.read(cx).local_path().is_none()
+        self.slug == LOCAL && Sonora::global(cx).session.read(cx).local_path().is_none()
     }
 
     fn note(&self, cx: &App) -> Option<Vacancy> {
-        if loading(&self.library, self.shelf, self.section, cx) {
+        let part = self.section.part();
+        if loading(&self.library, self.slug, part, cx) {
             return None;
         }
-        let library = self.library.read(cx);
         let table = self.table(self.section);
-        let state = match self.shelf {
-            Shelf::Local => library.local_state(),
-            Shelf::Saved => library.state(cx),
-        };
-        match state {
-            LibraryState::Loading => return None,
-            LibraryState::Failed(_) => return Some(Vacancy::new(t!("library-not-loaded"))),
+        let shelf = self.library.read(cx).shelf(self.slug);
+        match shelf.map(|shelf| &shelf.state) {
+            Some(LibraryState::Loading) => return None,
+            Some(LibraryState::Failed(_)) => return Some(Vacancy::new(t!("library-not-loaded"))),
             _ if table.row_count(cx) > 0 => return None,
             _ => {}
         }
 
-        let failed = match self.shelf {
-            Shelf::Local => library.local_part_failed(self.section.part()),
-            Shelf::Saved => library.part_failed(self.section.part(), cx),
-        };
+        let failed = shelf.is_some_and(|shelf| shelf.failed(part));
 
         Some(match (table.filtering(cx), failed) {
             (true, _) => Vacancy::new(t!("library-no-matches")),
             (false, true) => Vacancy::new(t!("library-part-not-loaded")),
-            (false, false) => Vacancy::new(i18n::lookup(self.section.vacancy(self.shelf), None))
+            (false, false) => Vacancy::new(i18n::lookup(self.section.vacancy(self.slug), None))
                 .icon(self.section.glyph()),
         })
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.shelf.local() {
+        if self.slug == LOCAL {
             return;
         }
         self.library.update(cx, |library, cx| library.refresh(cx));
@@ -1010,7 +994,7 @@ impl LibraryView {
     ) -> Option<AnyElement> {
         let playlist = self.playlists.read(cx).delegate().source().at(row, cx)?;
         let view = self.me.clone();
-        let build = match self.shelf.local() {
+        let build = match self.slug == LOCAL {
             true => cards::imported_playlist_card,
             false => cards::playlist_card,
         };
@@ -1191,8 +1175,8 @@ impl LibraryView {
         }
 
         let settings = self.settings.clone();
-        let key = section.key(self.shelf);
-        settings.update(cx, |settings, cx| settings.set_view(key, mode, cx));
+        let key = section.key(self.slug);
+        settings.update(cx, |settings, cx| settings.set_view(&key, mode, cx));
         cx.notify();
     }
 }
