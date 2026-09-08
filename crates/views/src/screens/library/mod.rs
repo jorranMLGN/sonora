@@ -160,7 +160,7 @@ impl Section {
 
     fn origin(self, slug: &str) -> Origin {
         match (slug == LOCAL, self) {
-            (false, _) => Origin::saved(),
+            (false, _) => Origin::saved(slug),
             (true, Section::Songs) => Origin::local(),
             (true, _) => Origin::local_favorites(),
         }

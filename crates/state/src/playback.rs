@@ -66,6 +66,7 @@ const RESTART_WINDOW: Duration = Duration::from_secs(3);
 const KEY_COOLDOWN: Duration = Duration::from_secs(6);
 const RESUME_STEP: Duration = Duration::from_secs(5);
 const TAPER_DB: f32 = 50.;
+const LOCAL: &str = "local";
 const LOCAL_FAVORITES: &str = "favorites";
 const SIMILAR_LIMIT: usize = 20;
 
@@ -165,15 +166,42 @@ pub enum Repeat {
     One,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
 pub enum Whence {
     Album,
     Playlist,
     Artist,
     Radio,
-    Saved,
-    Local,
+    Saved(String),
+}
+
+impl From<String> for Whence {
+    fn from(stored: String) -> Self {
+        match stored.split_once(':') {
+            Some(("saved", slug)) => Self::Saved(slug.to_owned()),
+            _ => match stored.as_str() {
+                "album" => Self::Album,
+                "playlist" => Self::Playlist,
+                "artist" => Self::Artist,
+                "radio" => Self::Radio,
+                LOCAL => Self::Saved(LOCAL.to_owned()),
+                _ => Self::Saved(String::new()),
+            },
+        }
+    }
+}
+
+impl From<Whence> for String {
+    fn from(whence: Whence) -> Self {
+        match whence {
+            Whence::Album => "album".to_owned(),
+            Whence::Playlist => "playlist".to_owned(),
+            Whence::Artist => "artist".to_owned(),
+            Whence::Radio => "radio".to_owned(),
+            Whence::Saved(slug) => format!("saved:{slug}"),
+        }
+    }
 }
 
 // same thing, same origin
@@ -210,16 +238,16 @@ impl Origin {
         Self::of(Whence::Radio, id)
     }
 
-    pub fn saved() -> Self {
-        Self::of(Whence::Saved, String::new())
+    pub fn saved(slug: &str) -> Self {
+        Self::of(Whence::Saved(slug.to_owned()), String::new())
     }
 
     pub fn local() -> Self {
-        Self::of(Whence::Local, String::new())
+        Self::saved(LOCAL)
     }
 
     pub fn local_favorites() -> Self {
-        Self::of(Whence::Local, LOCAL_FAVORITES)
+        Self::of(Whence::Saved(LOCAL.to_owned()), LOCAL_FAVORITES)
     }
 
     pub fn named(mut self, name: impl Into<SharedString>) -> Self {
@@ -1163,7 +1191,7 @@ impl Playback {
             Whence::Artist => self.play_artist_of(origin, cx),
             Whence::Radio => self.play_radio_of(origin, cx),
             // the table plays these
-            Whence::Saved | Whence::Local => {}
+            Whence::Saved(_) => {}
         }
     }
 
