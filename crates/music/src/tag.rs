@@ -14,6 +14,8 @@
 //! `LOCAL_HEADS` resolves every one of them to the `local` slug before the
 //! spotify guard ever runs.
 
+pub const LOCAL: &str = "local";
+
 pub const SLUGS: [&str; 4] = ["spotify", "youtube", "soundcloud", "local"];
 
 const LOCAL_HEADS: [&str; 4] = ["local", "local-album", "local-artist", "local-playlist"];
@@ -30,7 +32,7 @@ pub fn tag(slug: &str, id: &str) -> String {
 pub fn split(id: &str) -> Option<(&str, &str)> {
     let (head, rest) = id.split_once(':')?;
     if LOCAL_HEADS.contains(&head) {
-        return Some(("local", rest));
+        return Some((LOCAL, rest));
     }
     let slug = *SLUGS.iter().find(|known| **known == head)?;
     if slug == "spotify"
@@ -48,7 +50,7 @@ pub fn slug_of(id: &str) -> Option<&str> {
 
 pub fn untag(id: &str) -> &str {
     match split(id) {
-        Some(("local", _)) => id,
+        Some((LOCAL, _)) => id,
         Some((_, rest)) => rest,
         None => id,
     }

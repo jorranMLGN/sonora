@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui::{Context, Entity, Task};
+use gpui::{App, Context, Entity, Task};
 use music::{Album, ArtistRef, MusicApi, Playlist, Track};
 
 use crate::{Io, Library, LibraryState, Session, SessionEvent, join};
@@ -173,6 +173,15 @@ impl Search {
 
     pub fn query(&self) -> &str {
         &self.query
+    }
+
+    pub fn lanes(&self, cx: &App) -> Vec<&'static str> {
+        self.session
+            .read(cx)
+            .active_slugs()
+            .into_iter()
+            .filter(|slug| *slug != music::tag::LOCAL)
+            .collect()
     }
 
     pub fn hits(&self) -> &[Found] {
@@ -387,7 +396,7 @@ impl Search {
 
             let empty = Catalog::default();
             let mut all: Vec<(Scored, &'static str)> = Vec::new();
-            for slug in self.session.read(cx).active_slugs() {
+            for slug in self.lanes(cx) {
                 let catalog = self
                     .catalogs
                     .iter()

@@ -315,7 +315,7 @@ impl SearchView {
     }
 
     fn lanes(&self, cx: &App) -> Vec<&'static str> {
-        Sonora::global(cx).session.read(cx).active_slugs()
+        self.search.read(cx).lanes(cx)
     }
 
     fn stacked(&self, window: &Window, cx: &App) -> bool {
