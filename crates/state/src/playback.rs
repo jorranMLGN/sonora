@@ -390,6 +390,10 @@ impl Playback {
         self.engines.get(slug).map(Box::as_ref)
     }
 
+    fn engine_and_id<'p, 'i>(&'p self, id: &'i str) -> Option<(&'p dyn Player, &'i str)> {
+        Some((self.engine_for(id)?, music::tag::untag(id)))
+    }
+
     fn active_engine(&self) -> Option<&dyn Player> {
         let id = self.track.as_ref()?.id.as_deref()?;
         self.engine_for(id)
@@ -423,10 +427,10 @@ impl Playback {
             return;
         }
         self.preloaded = Some(id.to_owned());
-        let Some(engine) = self.engine_for(id) else {
+        let Some((engine, bare)) = self.engine_and_id(id) else {
             return;
         };
-        if let Err(error) = engine.preload(id) {
+        if let Err(error) = engine.preload(bare) {
             self.preloaded = None;
             log::warn!("playback: cannot preload {}: {error:#}", track.name);
         }
@@ -468,10 +472,10 @@ impl Playback {
         self.load = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             this.update(cx, |this, cx| {
-                let Some(engine) = this.engine_for(&id) else {
+                let Some((engine, bare)) = this.engine_and_id(&id) else {
                     return;
                 };
-                if let Err(error) = engine.load(&id, start == Start::Segue) {
+                if let Err(error) = engine.load(bare, start == Start::Segue) {
                     this.failed(format!("{error:#}"), cx);
                 }
             })
@@ -1108,10 +1112,10 @@ impl Playback {
         let Some(id) = track.id.as_deref().filter(|_| track.playable) else {
             return;
         };
-        let Some(engine) = self.engine_for(id) else {
+        let Some((engine, bare)) = self.engine_and_id(id) else {
             return;
         };
-        match engine.load_paused_at(id, at) {
+        match engine.load_paused_at(bare, at) {
             Ok(()) => {
                 self.resume_ready = true;
                 self.state = PlaybackState::Paused;
