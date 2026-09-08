@@ -34,7 +34,7 @@ pub use playback::{Origin, Playback, PlaybackState, Repeat, Whence};
 pub use profile::Profile;
 pub use queue::{Named, Queue, Resume, Stub};
 pub use remote::{Remote, attach as attach_remote};
-pub use search::{AlbumHit, ArtistHit, Hit, Kind, PlaylistHit, Search};
+pub use search::{AlbumHit, ArtistHit, Found, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, RomanizationScripts, SYSTEM_FONT, SideTab, remember_window, window_placement,

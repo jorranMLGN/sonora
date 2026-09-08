@@ -74,11 +74,17 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
 }
 
 pub(crate) fn provider_mark(id: &str, cx: &App) -> Option<&'static str> {
+    let slug = Sonora::global(cx).session.read(cx).slug_for(id)?;
+
+    provider_mark_of(slug, cx)
+}
+
+pub(crate) fn provider_mark_of(slug: &str, cx: &App) -> Option<&'static str> {
     let session = Sonora::global(cx).session.read(cx);
 
     match session.active_slugs().len() < 2 {
         true => None,
-        false => session.slug_for(id).map(provider_logo),
+        false => Some(provider_logo(slug)),
     }
 }
 
