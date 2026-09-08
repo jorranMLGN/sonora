@@ -166,7 +166,7 @@ impl ItemMenu {
         let barren = ids.is_empty();
         let shelf = match imported {
             true => library.read(cx).local_state(),
-            false => library.read(cx).state(),
+            false => library.read(cx).state(cx),
         };
         let playlists: Vec<Playlist> = match shelf {
             LibraryState::Ready { playlists, .. } => playlists
@@ -970,7 +970,7 @@ fn media_kind(kind: PinKind) -> MediaKind {
 
 fn saved_track(id: &str, cx: &App) -> Option<Track> {
     let library = Sonora::global(cx).library.read(cx);
-    let LibraryState::Ready { tracks, .. } = library.state() else {
+    let LibraryState::Ready { tracks, .. } = library.state(cx) else {
         return None;
     };
 

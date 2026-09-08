@@ -327,7 +327,7 @@ impl Search {
 
         self.hits = {
             let held = self.library.read(cx);
-            let (tracks, albums, playlists) = match held.state() {
+            let (tracks, albums, playlists) = match held.state(cx) {
                 LibraryState::Ready {
                     tracks,
                     albums,

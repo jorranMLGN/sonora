@@ -84,7 +84,7 @@ impl ArtistSource {
         let library = self.library.read(cx);
         let state = match self.local {
             true => library.local_state(),
-            false => library.state(),
+            false => library.state(cx),
         };
         match state {
             LibraryState::Ready { artists, .. } => artists.as_slice(),
@@ -119,7 +119,7 @@ impl TableSource for ArtistSource {
     fn is_loading(&self, cx: &App) -> bool {
         match self.local {
             true => self.library.read(cx).local_loading(LibraryPart::Artists),
-            false => self.library.read(cx).loading(LibraryPart::Artists),
+            false => self.library.read(cx).loading(LibraryPart::Artists, cx),
         }
     }
 

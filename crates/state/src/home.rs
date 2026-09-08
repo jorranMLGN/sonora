@@ -55,7 +55,7 @@ impl Home {
         .detach();
 
         cx.observe(&library, |this, library, cx| {
-            match library.read(cx).state() {
+            match library.read(cx).state(cx) {
                 LibraryState::Ready { .. } if this.quick_picks.is_empty() => {
                     this.quick_picks = picks(&library, this.quick_picks_seed, cx);
                 }
@@ -161,7 +161,7 @@ impl Home {
     }
 
     pub fn is_loading(&self, cx: &App) -> bool {
-        self.library.read(cx).loading(LibraryPart::Tracks)
+        self.library.read(cx).loading(LibraryPart::Tracks, cx)
     }
 }
 
@@ -192,7 +192,7 @@ fn pruned(sections: &[GenreSection]) -> Vec<GenreSection> {
 }
 
 fn picks(library: &Entity<Library>, seed: u64, cx: &App) -> Rc<Vec<Track>> {
-    let tracks = match library.read(cx).state() {
+    let tracks = match library.read(cx).state(cx) {
         LibraryState::Ready { tracks, .. } => mixed_tracks(tracks, seed),
         _ => Vec::new(),
     };

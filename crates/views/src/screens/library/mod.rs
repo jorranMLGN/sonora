@@ -202,7 +202,7 @@ impl Tracks for ShelfTracks {
         let state = match (self.shelf, self.section) {
             (Shelf::Local, Section::Favorites) => return library.local_favorites(),
             (Shelf::Local, _) => library.local_state(),
-            (Shelf::Saved, _) => library.state(),
+            (Shelf::Saved, _) => library.state(cx),
         };
         match state {
             LibraryState::Ready { tracks, .. } => tracks.as_slice(),
@@ -220,7 +220,7 @@ fn loading(library: &Entity<Library>, shelf: Shelf, section: Section, cx: &App) 
     match (shelf, section) {
         (Shelf::Local, Section::Favorites) => library.local_favorites_loading(),
         (Shelf::Local, _) => library.local_loading(section.part()),
-        (Shelf::Saved, _) => library.loading(section.part()),
+        (Shelf::Saved, _) => library.loading(section.part(), cx),
     }
 }
 
@@ -552,7 +552,7 @@ impl LibraryView {
         let table = self.table(self.section);
         let state = match self.shelf {
             Shelf::Local => library.local_state(),
-            Shelf::Saved => library.state(),
+            Shelf::Saved => library.state(cx),
         };
         match state {
             LibraryState::Loading => return None,
@@ -563,7 +563,7 @@ impl LibraryView {
 
         let failed = match self.shelf {
             Shelf::Local => library.local_part_failed(self.section.part()),
-            Shelf::Saved => library.part_failed(self.section.part()),
+            Shelf::Saved => library.part_failed(self.section.part(), cx),
         };
 
         Some(match (table.filtering(cx), failed) {

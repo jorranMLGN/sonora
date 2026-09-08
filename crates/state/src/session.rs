@@ -74,12 +74,12 @@ pub struct ProviderInfo {
     pub error: Option<Failure>,
 }
 
-pub struct Connected {
-    pub client: Arc<dyn MusicApi>,
+pub(crate) struct Connected {
+    pub(crate) client: Arc<dyn MusicApi>,
     pub(crate) catalog: Arc<CatalogSource>,
-    pub playback: Arc<dyn PlaybackFactory>,
-    pub profile: UserProfile,
-    pub authenticated: bool,
+    pub(crate) playback: Arc<dyn PlaybackFactory>,
+    pub(crate) profile: UserProfile,
+    pub(crate) authenticated: bool,
 }
 
 pub struct Session {
@@ -145,7 +145,7 @@ impl Session {
         &self.state
     }
 
-    pub fn connected(&self, slug: &str) -> Option<&Connected> {
+    pub(crate) fn connected(&self, slug: &str) -> Option<&Connected> {
         self.connected.get(slug)
     }
 

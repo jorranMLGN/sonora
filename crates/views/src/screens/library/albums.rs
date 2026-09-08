@@ -159,7 +159,7 @@ impl AlbumSource {
         let library = self.library.read(cx);
         let state = match self.local {
             true => library.local_state(),
-            false => library.state(),
+            false => library.state(cx),
         };
         match state {
             LibraryState::Ready { albums, .. } => albums.as_slice(),
@@ -240,7 +240,7 @@ impl TableSource for AlbumSource {
     fn is_loading(&self, cx: &App) -> bool {
         match self.local {
             true => self.library.read(cx).local_loading(LibraryPart::Albums),
-            false => self.library.read(cx).loading(LibraryPart::Albums),
+            false => self.library.read(cx).loading(LibraryPart::Albums, cx),
         }
     }
 
