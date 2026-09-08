@@ -413,13 +413,13 @@ impl Root {
                 toolbar = Some(history.read(cx).toolbar());
                 history.into()
             }
-            Destination::Local(tab) => {
+            Destination::Library(router::LOCAL, tab) => {
                 let local = self.screens.local.clone();
                 local.update(cx, |local, cx| local.select(tab.into(), cx));
                 toolbar = Some(local.read(cx).toolbar());
                 local.into()
             }
-            Destination::Library(tab) => {
+            Destination::Library(_, tab) => {
                 self.screens
                     .library
                     .update(cx, |library, cx| library.select(tab.into(), cx));

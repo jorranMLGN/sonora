@@ -17,7 +17,7 @@ use gpui::{
 };
 use i18n::t;
 use music::Track;
-use router::{Destination, LibraryTab, LocalTab, navigate};
+use router::{Destination, LibraryTab, navigate};
 use state::{
     AppSettings, Library, LibraryPart, LibraryState, Origin, Playback, PlaybackState, Sonora,
 };
@@ -53,22 +53,11 @@ impl Shelf {
 impl From<LibraryTab> for Section {
     fn from(tab: LibraryTab) -> Self {
         match tab {
-            LibraryTab::Songs => Section::Favorites,
+            LibraryTab::Songs => Section::Songs,
+            LibraryTab::Favorites => Section::Favorites,
             LibraryTab::Albums => Section::Albums,
             LibraryTab::Playlists => Section::Playlists,
             LibraryTab::Artists => Section::Artists,
-        }
-    }
-}
-
-impl From<LocalTab> for Section {
-    fn from(tab: LocalTab) -> Self {
-        match tab {
-            LocalTab::Songs => Section::Songs,
-            LocalTab::Favorites => Section::Favorites,
-            LocalTab::Albums => Section::Albums,
-            LocalTab::Playlists => Section::Playlists,
-            LocalTab::Artists => Section::Artists,
         }
     }
 }

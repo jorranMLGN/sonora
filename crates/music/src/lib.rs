@@ -285,6 +285,13 @@ pub trait MusicProvider: Send + Sync {
     fn location(&self) -> Option<String> {
         None
     }
+
+    /// The same fact as `MusicApi::has_all_tracks`, answerable before the
+    /// provider is connected — the tab set cannot wait for a client.
+    fn has_all_tracks(&self) -> bool {
+        false
+    }
+
     async fn restore(&self) -> Result<Option<ProviderSession>>;
     async fn sign_in(
         &self,

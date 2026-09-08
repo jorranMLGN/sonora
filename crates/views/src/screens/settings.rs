@@ -283,8 +283,9 @@ impl SettingsView {
                 MenuItem::new(screen.id(), i18n::lookup(screen.key(), None))
                     .selected(screen == chosen)
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        let stored = screen.stored(this.session.read(cx).provider_slug());
                         this.settings
-                            .update(cx, |settings, cx| settings.set_startup(screen.id(), cx));
+                            .update(cx, |settings, cx| settings.set_startup(stored, cx));
                         cx.notify();
                     }))
             }));
@@ -303,10 +304,12 @@ impl SettingsView {
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
 
+        let slugs = self.session.read(cx).registered_slugs();
+
         let picker = Picker::new(ENTRIES, &self.popovers, t!("settings-entries-pick"))
             .width(Picker::REGULAR)
             .sticky()
-            .items(NavEntry::ALL.map(|entry| {
+            .items(NavEntry::entries(&slugs).into_iter().map(|entry| {
                 let shown = self.settings.read(cx).nav_shown(entry.id());
 
                 MenuItem::new(entry.id(), i18n::lookup(entry.key(), None))

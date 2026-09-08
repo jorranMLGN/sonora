@@ -10,7 +10,7 @@ use gpui::{
 };
 use i18n::t;
 use music::{Track, Voice};
-use router::{Destination, LibraryTab, Link as _, LocalTab};
+use router::{Destination, LibraryTab, Link as _};
 use state::{
     AppSettings, Lyrics, LyricsState, Playback, PlaybackState, Queue, RomanizationScripts, SideTab,
     Sonora, Whence,
@@ -1596,10 +1596,13 @@ impl Aside {
             Whence::Playlist => Destination::Playlist(id),
             Whence::Artist => Destination::Artist(id),
             Whence::Radio => Destination::Song(id),
-            Whence::Saved => Destination::Library(LibraryTab::Songs),
+            Whence::Saved => {
+                let slug = Sonora::global(cx).session.read(cx).provider_slug()?;
+                Destination::Library(slug, LibraryTab::Favorites)
+            }
             Whence::Local => match origin.id.is_empty() {
-                true => Destination::Local(LocalTab::Songs),
-                false => Destination::Local(LocalTab::Favorites),
+                true => Destination::Library(router::LOCAL, LibraryTab::Songs),
+                false => Destination::Library(router::LOCAL, LibraryTab::Favorites),
             },
         };
         let name = match origin.whence {

@@ -237,11 +237,28 @@ impl Session {
         Some(provider.name())
     }
 
-    pub fn provider_name_for(&self, slug: &str) -> Option<&'static str> {
+    fn provider_for(&self, slug: &str) -> Option<&Arc<dyn MusicProvider>> {
         self.providers
             .iter()
             .find(|provider| provider.slug() == slug)
-            .map(|provider| provider.name())
+            .or_else(|| Some(&self.local_provider).filter(|local| local.slug() == slug))
+    }
+
+    pub fn provider_name_for(&self, slug: &str) -> Option<&'static str> {
+        self.provider_for(slug).map(|provider| provider.name())
+    }
+
+    pub fn has_all_tracks(&self, slug: &str) -> bool {
+        self.provider_for(slug)
+            .is_some_and(|provider| provider.has_all_tracks())
+    }
+
+    pub fn registered_slugs(&self) -> Vec<&'static str> {
+        self.providers
+            .iter()
+            .chain([&self.local_provider])
+            .map(|provider| provider.slug())
+            .collect()
     }
 
     pub fn profile(&self) -> Option<&UserProfile> {

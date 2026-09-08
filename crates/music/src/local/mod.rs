@@ -87,6 +87,10 @@ impl MusicProvider for LocalProvider {
         Vec::new()
     }
 
+    fn has_all_tracks(&self) -> bool {
+        true
+    }
+
     fn stored(&self) -> bool {
         self.read_stored().path.is_some()
     }
