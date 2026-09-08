@@ -87,15 +87,16 @@ impl SoundCloudProvider {
         &self,
         client_id: ClientId,
         token: String,
+        pasted: bool,
     ) -> Result<(Http, UserProfile)> {
         let http = Http::with_token(client_id, token);
         fetch_profile(&http)
             .await
             .map(|profile| (http, profile))
-            .map_err(classify)
+            .map_err(|error| classify(error, pasted))
     }
 
-    fn guest_session(&self, client_id: ClientId) -> ProviderSession {
+    fn guest_session(&self, client_id: ClientId, expired: bool) -> ProviderSession {
         let http = Arc::new(Http::anonymous(client_id));
         ProviderSession {
             profile: UserProfile {
@@ -106,6 +107,7 @@ impl SoundCloudProvider {
             api: Arc::new(SoundCloudClient::new(http)),
             authenticated: false,
             playcounts: false,
+            expired,
         }
     }
 
@@ -118,6 +120,7 @@ impl SoundCloudProvider {
             playback: Arc::new(playback::Factory::new(http)),
             authenticated: true,
             playcounts: false,
+            expired: false,
         }
     }
 }
@@ -126,10 +129,16 @@ impl SoundCloudProvider {
 ///
 /// By the time an `AuthRejected` reaches here, `Http` has already refreshed
 /// the client id once and retried once, so a repeat rejection can only mean
-/// the token itself is bad.
-fn classify(error: anyhow::Error) -> anyhow::Error {
+/// the token itself is bad. Which advice that deserves depends on where the
+/// token came from: a token the user just pasted was mistyped, while a stored
+/// one has expired.
+fn classify(error: anyhow::Error, pasted: bool) -> anyhow::Error {
     if error.downcast_ref::<http::AuthRejected>().is_some() {
-        return anyhow::Error::new(SignInFailure(SignInProblem::Credentials));
+        let problem = match pasted {
+            true => SignInProblem::Secret,
+            false => SignInProblem::Credentials,
+        };
+        return anyhow::Error::new(SignInFailure(problem));
     }
     if error.downcast_ref::<http::Unreachable>().is_some() {
         return anyhow::Error::new(SignInFailure(SignInProblem::Network));
@@ -178,10 +187,11 @@ impl MusicProvider for SoundCloudProvider {
             return Ok(None);
         }
         let client_id = ClientId::new(client_id, self.client_id.clone());
+        let mut expired = false;
         if let Ok(token) = std::fs::read_to_string(&self.token) {
             let token = token.trim().to_string();
             if !token.is_empty() {
-                match self.authenticate(client_id.clone(), token).await {
+                match self.authenticate(client_id.clone(), token, false).await {
                     Ok((http, profile)) => {
                         log::debug!("soundcloud: restored the authenticated session");
                         return Ok(Some(self.authenticated_session(http, profile)));
@@ -192,6 +202,7 @@ impl MusicProvider for SoundCloudProvider {
                         {
                             log::debug!("soundcloud: dropping the rejected token");
                             let _ = std::fs::remove_file(&self.token);
+                            expired = true;
                         }
                         log::warn!("soundcloud: cannot restore the session: {error:#}");
                     }
@@ -199,7 +210,7 @@ impl MusicProvider for SoundCloudProvider {
             }
         }
         log::debug!("soundcloud: restoring guest session");
-        Ok(Some(self.guest_session(client_id)))
+        Ok(Some(self.guest_session(client_id, expired)))
     }
 
     async fn sign_in(
@@ -215,17 +226,17 @@ impl MusicProvider for SoundCloudProvider {
                     .await
                     .map_err(|_| anyhow::Error::new(SignInFailure(SignInProblem::Network)))?;
                 log::debug!("soundcloud: guest sign-in succeeded");
-                Ok(self.guest_session(client_id))
+                Ok(self.guest_session(client_id, false))
             }
             SignIn::Secret => {
                 prompt(SignInPrompt::Secret);
-                let token = input.recv().await.context("sign-in was cancelled")?;
-                let token = token.trim().to_string();
+                let pasted = input.recv().await.context("sign-in was cancelled")?;
+                let token = auth::token(&pasted)?;
                 let client_id = self
                     .client_id()
                     .await
                     .map_err(|_| anyhow::Error::new(SignInFailure(SignInProblem::Network)))?;
-                let (http, profile) = self.authenticate(client_id, token.clone()).await?;
+                let (http, profile) = self.authenticate(client_id, token.clone(), true).await?;
                 self.store_token(&token)?;
                 log::debug!("soundcloud: token sign-in succeeded");
                 Ok(self.authenticated_session(http, profile))
@@ -268,11 +279,11 @@ mod tests {
     }
 
     #[test]
-    fn a_rejection_is_a_credentials_problem() {
+    fn a_rejected_stored_token_is_a_credentials_problem() {
         // `Http` already refreshed the client id and retried once before an
         // `AuthRejected` ever reaches `classify`, so it can only mean the
         // token itself is bad.
-        let error = classify(anyhow::Error::new(http::AuthRejected));
+        let error = classify(anyhow::Error::new(http::AuthRejected), false);
         assert_eq!(
             error.downcast_ref::<SignInFailure>(),
             Some(&SignInFailure(SignInProblem::Credentials))
@@ -280,8 +291,17 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_paste_blames_the_paste() {
+        let error = classify(anyhow::Error::new(http::AuthRejected), true);
+        assert_eq!(
+            error.downcast_ref::<SignInFailure>(),
+            Some(&SignInFailure(SignInProblem::Secret))
+        );
+    }
+
+    #[test]
     fn an_unreachable_service_is_a_network_problem() {
-        let error = classify(anyhow::Error::new(http::Unreachable));
+        let error = classify(anyhow::Error::new(http::Unreachable), false);
         assert_eq!(
             error.downcast_ref::<SignInFailure>(),
             Some(&SignInFailure(SignInProblem::Network))
@@ -290,7 +310,7 @@ mod tests {
 
     #[test]
     fn any_other_error_passes_through_unchanged() {
-        let error = classify(anyhow::anyhow!("cannot read the soundcloud response"));
+        let error = classify(anyhow::anyhow!("cannot read the soundcloud response"), true);
         assert!(error.downcast_ref::<SignInFailure>().is_none());
         assert_eq!(error.to_string(), "cannot read the soundcloud response");
     }

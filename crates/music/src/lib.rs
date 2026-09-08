@@ -219,6 +219,8 @@ pub struct ProviderSession {
     pub playback: Arc<dyn PlaybackFactory>,
     pub authenticated: bool,
     pub playcounts: bool,
+    /// A stored credential was rejected and this session fell back to guest.
+    pub expired: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,6 +237,7 @@ pub enum SignInProblem {
     Premium,
     Region,
     Credentials,
+    Secret,
     Network,
     Cancelled,
     Refused,
@@ -249,6 +252,7 @@ impl std::fmt::Display for SignInFailure {
             SignInProblem::Premium => "the account has no premium subscription",
             SignInProblem::Region => "the account is out of its home region",
             SignInProblem::Credentials => "the stored credentials are no longer valid",
+            SignInProblem::Secret => "the pasted credential was not accepted",
             SignInProblem::Network => "the service could not be reached",
             SignInProblem::Cancelled => "authorization was cancelled in the browser",
             SignInProblem::Refused => "the service refused the session",
@@ -321,6 +325,10 @@ mod sign_in_failure_tests {
             (
                 SignInProblem::Credentials,
                 "the stored credentials are no longer valid",
+            ),
+            (
+                SignInProblem::Secret,
+                "the pasted credential was not accepted",
             ),
             (SignInProblem::Network, "the service could not be reached"),
             (

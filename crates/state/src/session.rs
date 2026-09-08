@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Error;
-use gpui::{Context, Entity, EventEmitter, Task};
+use gpui::{App, Context, Entity, EventEmitter, Task};
 use music::{
     MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession, SignIn, SignInFailure,
     SignInProblem, SignInPrompt, UserProfile,
@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::catalog::CatalogSource;
 use crate::settings::AppSettings;
-use crate::{Io, join};
+use crate::{Io, Outcome, Toasts, join};
 
 const HEARTBEAT: Duration = Duration::from_secs(30);
 const BACKOFF: [Duration; 5] = [
@@ -380,9 +380,19 @@ impl Session {
     }
 
     fn joined(&mut self, slug: &'static str, session: ProviderSession, cx: &mut Context<Self>) {
+        let expired = session.expired;
         self.connect(slug, session);
+        self.warn_expired(slug, expired, cx);
         cx.notify();
         cx.emit(SessionEvent::SignedIn(slug));
+    }
+
+    fn warn_expired(&self, slug: &'static str, expired: bool, cx: &mut App) {
+        if !expired {
+            return;
+        }
+        let name = self.provider_name_for(slug).unwrap_or(slug);
+        Toasts::about(Outcome::Failed, "toast-session-expired", name, cx);
     }
 
     pub fn sign_in(&mut self, slug: &str, method: SignIn, cx: &mut Context<Self>) {
@@ -560,7 +570,9 @@ impl Session {
             settings.set_provider(slug, cx);
         });
         self.playcounts = session.playcounts;
+        let expired = session.expired;
         self.connect(slug, session);
+        self.warn_expired(slug, expired, cx);
         self.state = SessionState::SignedIn;
         self.attempt = 0;
         self.start_heartbeat(cx);

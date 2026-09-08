@@ -1,13 +1,51 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
+const SCHEMES: [&str; 2] = ["oauth ", "bearer "];
 const MIN_ID: usize = 20;
 const BUNDLE_HOST: &str = "https://a-v2.sndcdn.com/assets/";
 const DISCOVER: &str = "https://soundcloud.com/discover";
 const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
                   (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
+
+/// Normalises whatever the user pasted into a bare bearer token.
+///
+/// The dialog tells them to copy the `Authorization` value, which reads
+/// `OAuth 2-…`, so the scheme has to come off here rather than by hand. A
+/// pasted multi-line request blob is tolerated the same way
+/// `youtube::auth::header` tolerates one.
+pub fn token(input: &str) -> Result<String> {
+    let raw = input
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            line.get(..14)
+                .filter(|head| head.eq_ignore_ascii_case("authorization:"))
+                .map(|_| line[14..].trim())
+        })
+        .unwrap_or_else(|| input.trim());
+    let token = SCHEMES
+        .iter()
+        .find_map(|scheme| {
+            raw.get(..scheme.len())
+                .filter(|head| head.eq_ignore_ascii_case(scheme))
+                .map(|_| raw[scheme.len()..].trim())
+        })
+        .unwrap_or(raw);
+
+    if token.is_empty() {
+        bail!("the token is empty");
+    }
+    if token.contains(char::is_whitespace) {
+        bail!(
+            "that does not look like a token; copy the whole value of the Authorization request header on the me request, not the response or the request URL"
+        );
+    }
+
+    Ok(token.to_owned())
+}
 
 /// Pulls the player's `client_id` out of a web bundle.
 ///

@@ -100,6 +100,7 @@ pub(crate) struct Secret {
     pub steps: [&'static str; 4],
     pub note: &'static str,
     pub hint: &'static str,
+    pub site: &'static str,
 }
 
 const COOKIES: Secret = Secret {
@@ -113,6 +114,7 @@ const COOKIES: Secret = Secret {
     ],
     note: "login-cookie-step-note",
     hint: "login-cookie-hint",
+    site: "music.youtube.com",
 };
 
 const TOKEN: Secret = Secret {
@@ -126,6 +128,7 @@ const TOKEN: Secret = Secret {
     ],
     note: "login-token-step-note",
     hint: "login-token-hint",
+    site: "soundcloud.com",
 };
 
 pub(crate) fn secret(slug: &str) -> Secret {

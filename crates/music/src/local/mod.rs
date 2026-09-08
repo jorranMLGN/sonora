@@ -69,6 +69,7 @@ impl LocalProvider {
             playback,
             authenticated: false,
             playcounts: false,
+            expired: false,
         })
     }
 }
