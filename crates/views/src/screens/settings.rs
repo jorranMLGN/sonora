@@ -304,7 +304,8 @@ impl SettingsView {
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
 
-        let slugs = self.session.read(cx).registered_slugs();
+        let session = self.session.read(cx);
+        let slugs = session.registered_slugs();
 
         let picker = Picker::new(ENTRIES, &self.popovers, t!("settings-entries-pick"))
             .width(Picker::REGULAR)
@@ -312,7 +313,7 @@ impl SettingsView {
             .items(NavEntry::entries(&slugs).into_iter().map(|entry| {
                 let shown = self.settings.read(cx).nav_shown(entry.id());
 
-                MenuItem::new(entry.id(), i18n::lookup(entry.key(), None))
+                MenuItem::new(entry.id(), crate::shared::nav_label(entry, session))
                     .selected(shown)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings.update(cx, |settings, cx| {

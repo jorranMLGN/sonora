@@ -294,7 +294,12 @@ impl Session {
 
     pub fn authenticated(&self) -> bool {
         self.provider_slug()
-            .and_then(|slug| self.connected.get(slug))
+            .is_some_and(|slug| self.authenticated_for(slug))
+    }
+
+    pub fn authenticated_for(&self, slug: &str) -> bool {
+        self.connected
+            .get(slug)
             .is_some_and(|entry| entry.authenticated)
     }
 

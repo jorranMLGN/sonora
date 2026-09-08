@@ -23,8 +23,10 @@ pub(crate) mod trouble;
 pub(crate) mod visualizer;
 
 use gpui::prelude::*;
-use gpui::{App, Div, Pixels, div, px, svg};
+use gpui::{App, Div, Pixels, SharedString, div, px, svg};
 use i18n::t;
+use router::{LOCAL, NavEntry};
+use state::Session;
 use ui::{ActiveTheme as _, Text};
 
 const NOTE: Pixels = px(14.);
@@ -50,6 +52,15 @@ pub(crate) fn firefox_note(cx: &App) -> Div {
                 .text_color(theme.muted_foreground),
         )
         .child(t!("login-browser-firefox"))
+}
+
+pub(crate) fn nav_label(entry: NavEntry, session: &Session) -> SharedString {
+    match entry {
+        NavEntry::Library(slug) if slug != LOCAL => session
+            .provider_name_for(slug)
+            .map_or_else(|| i18n::lookup(entry.key(), None), SharedString::from),
+        _ => i18n::lookup(entry.key(), None),
+    }
 }
 
 pub(crate) fn provider_logo(slug: &str) -> &'static str {
