@@ -489,11 +489,15 @@ impl Library {
         }
     }
 
-    pub fn local_state(&self) -> &LibraryState {
-        match self.shelves.get("local") {
+    pub fn state_for(&self, slug: &str) -> &LibraryState {
+        match self.shelves.get(slug) {
             Some(shelf) => &shelf.state,
             None => &EMPTY,
         }
+    }
+
+    pub fn local_state(&self) -> &LibraryState {
+        self.state_for("local")
     }
 
     pub fn part_failed(&self, part: LibraryPart, cx: &App) -> bool {

@@ -227,7 +227,9 @@ impl Session {
         if self.active == Some(index) && matches!(self.state, SessionState::SignedIn) {
             return;
         }
-        self.release(cx);
+        self.reconnect = None;
+        self.reconnecting = false;
+        self.attempt = 0;
         self.active = Some(index);
         self.restore(cx);
     }

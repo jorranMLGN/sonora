@@ -16,7 +16,7 @@ type Fetch = std::pin::Pin<Box<dyn Future<Output = Result<Vec<Track>>> + Send>>;
 #[derive(Clone, Copy, PartialEq)]
 enum Refusal {
     Keys,
-    SignIn,
+    SignIn(&'static str),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -435,7 +435,7 @@ impl Playback {
     fn load_after(&mut self, track: &Track, start: Start, cx: &mut Context<Self>) {
         match self.refused {
             Some(Refusal::Keys) => return self.refuse(cx),
-            Some(Refusal::SignIn) => return self.gate(cx),
+            Some(Refusal::SignIn(slug)) => return self.gate(slug, cx),
             None => {}
         }
         let Some(id) = track.id.clone() else {
@@ -1345,20 +1345,17 @@ impl Playback {
     }
 
     fn restart_engine(&mut self, cx: &mut Context<Self>) {
-        let slug = self
-            .session
-            .read(cx)
-            .provider_slug()
-            .filter(|slug| self.engines.contains_key(*slug));
-        let playback = slug.and_then(|slug| self.session.read(cx).playback_for_slug(slug));
-        let (Some(slug), Some(playback)) = (slug, playback) else {
-            return cx.notify();
-        };
-
-        match self.playing_elsewhere(slug) {
-            true => self.start_engine(slug, playback, cx),
-            false => self.rebind(slug, playback, cx),
+        let slugs: Vec<&'static str> = self.engines.keys().copied().collect();
+        for slug in slugs {
+            let Some(playback) = self.session.read(cx).playback_for_slug(slug) else {
+                continue;
+            };
+            match self.playing_elsewhere(slug) {
+                true => self.start_engine(slug, playback, cx),
+                false => self.rebind(slug, playback, cx),
+            }
         }
+        cx.notify();
     }
 
     fn restart_output(&mut self, cx: &mut Context<Self>) {
@@ -1549,7 +1546,7 @@ impl Playback {
                 cx.emit(PlaybackEvent::EndedPlayback);
             }
             BackendEvent::Gated => {
-                self.gate(cx);
+                self.gate(slug, cx);
                 cx.emit(PlaybackEvent::EndedPlayback);
             }
         }
@@ -1591,15 +1588,15 @@ impl Playback {
         cx.notify();
     }
 
-    fn gate(&mut self, cx: &mut Context<Self>) {
+    fn gate(&mut self, slug: &'static str, cx: &mut Context<Self>) {
         let first = self.refused.is_none();
-        self.refused = Some(Refusal::SignIn);
+        self.refused = Some(Refusal::SignIn(slug));
         self.track = None;
         self.blocked_until = None;
         let provider = self
             .session
             .read(cx)
-            .provider_name()
+            .provider_name_for(slug)
             .unwrap_or("this provider");
         self.state = PlaybackState::Failed(format!(
             "{provider} only streams to a signed-in listener; nothing will play until you sign in"

@@ -283,6 +283,7 @@ impl Values {
                 pin,
             }));
         }
+        migrate_pinned(&mut self.pinned);
     }
 }
 
@@ -1024,6 +1025,12 @@ fn migrate_hidden_nav(hidden: &mut [String], slug: &str) {
     }
 }
 
+fn migrate_pinned(pinned: &mut [Held]) {
+    for held in pinned {
+        held.pin.id = music::tag::tag(&held.slug, &held.pin.id);
+    }
+}
+
 fn carry(previous: Option<&Resume>, next: &mut Resume) {
     let playing = |resume: &Resume| resume.current.as_ref().map(|stub| stub.id.clone());
     let same = previous.filter(|old| old.provider == next.provider);
@@ -1261,6 +1268,11 @@ mod tests {
         };
         migrate_resume(&mut resume);
         assert_eq!(resume.current.unwrap().id, "spotify:7etD5lFGaYcsKmFTmutVYO");
+
+        let mut pinned = vec![held("spotify", "0sNOF9WDwhWunNAHPD3Baj")];
+        migrate_pinned(&mut pinned);
+        migrate_pinned(&mut pinned);
+        assert_eq!(ids(&pinned), ["spotify:0sNOF9WDwhWunNAHPD3Baj"]);
     }
 
     #[test]
