@@ -8,7 +8,7 @@ use music::{ArtistRef, Track};
 use rusqlite::{Connection, params};
 
 use crate::playback::PlaybackEvent;
-use crate::{Io, Playback, Session, SessionEvent, SessionState, join};
+use crate::{Io, Playback, Session, SessionEvent, join};
 
 const LOCAL_LIMIT: usize = 500;
 
@@ -116,8 +116,14 @@ impl Store {
         self.open()?
             .execute(
                 "DELETE FROM plays
-                 WHERE scope = ? AND track_id = ? AND played_at >= ? AND played_at < ?",
-                params![scope, track_id, played_at, played_at + 1_000],
+                 WHERE scope = ? AND track_id IN (?, ?) AND played_at >= ? AND played_at < ?",
+                params![
+                    scope,
+                    track_id,
+                    music::tag::untag(track_id),
+                    played_at,
+                    played_at + 1_000
+                ],
             )
             .context("cannot remove a play")?;
         Ok(())
@@ -135,7 +141,7 @@ impl Store {
         let mut query = connection
             .prepare(
                 "SELECT track_id, played_at, name, playable, artists, artist_refs, album,
-                        album_id, cover, duration_ms, explicit
+                        album_id, cover, duration_ms, explicit, provider
                  FROM plays
                  WHERE scope = ?
                  ORDER BY played_at DESC
@@ -144,18 +150,27 @@ impl Store {
             .context("cannot prepare listening history read")?;
         let rows = query
             .query_map(params![scope, LOCAL_LIMIT], |row| {
+                let provider: String = row.get(11)?;
+                let tagged = |id: String| music::tag::tag(&provider, &id);
                 let refs: String = row.get(5)?;
-                let artist_refs: Vec<ArtistRef> = serde_json::from_str(&refs).unwrap_or_default();
+                let artist_refs: Vec<ArtistRef> = serde_json::from_str::<Vec<ArtistRef>>(&refs)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|artist| ArtistRef {
+                        id: artist.id.map(&tagged),
+                        ..artist
+                    })
+                    .collect();
                 let played_at: i64 = row.get(1)?;
                 let duration: i64 = row.get(9)?;
                 Ok(Track {
-                    id: Some(row.get(0)?),
+                    id: Some(tagged(row.get(0)?)),
                     name: row.get(2)?,
                     playable: row.get(3)?,
                     artists: row.get(4)?,
                     artist_refs,
                     album: row.get(6)?,
-                    album_id: row.get(7)?,
+                    album_id: row.get::<_, Option<String>>(7)?.map(&tagged),
                     cover: row.get(8)?,
                     duration: std::time::Duration::from_millis(duration.max(0) as u64),
                     added_at: Some(played_at / 1_000),
@@ -195,10 +210,17 @@ impl History {
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn | SessionEvent::Reconnected => this.refresh(cx),
-            SessionEvent::SignedOut => this.reset(cx),
-            SessionEvent::LocalChanged => {}
+        cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::SignedIn(slug) | SessionEvent::Reconnected(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.refresh(cx);
+                }
+            }
+            SessionEvent::SignedOut(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.reset(cx);
+                }
+            }
         })
         .detach();
         cx.subscribe(&playback, |this, _, event, cx| match event {
@@ -359,12 +381,8 @@ impl History {
     }
 
     fn scope(&self, cx: &Context<Self>) -> Option<String> {
-        let session = self.session.read(cx);
-        let SessionState::SignedIn(profile) = session.state() else {
-            return None;
-        };
-        let provider = session.provider_slug()?;
-        Some(format!("{provider}:{}", profile.id))
+        let profile = self.session.read(cx).profile()?;
+        Some(profile.id.clone())
     }
 
     fn reset(&mut self, cx: &mut Context<Self>) {

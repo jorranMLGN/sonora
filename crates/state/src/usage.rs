@@ -99,9 +99,13 @@ pub struct Usage {
 
 impl Usage {
     pub fn new(session: Entity<Session>, io: Io, cx: &mut Context<Self>) -> Self {
-        cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn => this.connected(cx),
-            SessionEvent::Reconnected | SessionEvent::SignedOut | SessionEvent::LocalChanged => {}
+        cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::SignedIn(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.connected(cx);
+                }
+            }
+            SessionEvent::Reconnected(_) | SessionEvent::SignedOut(_) => {}
         })
         .detach();
 

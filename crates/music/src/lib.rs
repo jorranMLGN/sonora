@@ -9,8 +9,11 @@ pub mod lyrics;
 mod models;
 pub mod musixmatch;
 pub mod netease;
+pub mod soundcloud;
 mod spectrum;
 pub mod spotify;
+pub mod tag;
+pub mod tagged;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -35,10 +38,7 @@ pub const LOCAL_ARTIST_PREFIX: &str = "local-artist:";
 pub const LOCAL_PLAYLIST_PREFIX: &str = "local-playlist:";
 
 pub fn is_local_id(id: &str) -> bool {
-    id.starts_with(LOCAL_TRACK_PREFIX)
-        || id.starts_with(LOCAL_ALBUM_PREFIX)
-        || id.starts_with(LOCAL_ARTIST_PREFIX)
-        || id.starts_with(LOCAL_PLAYLIST_PREFIX)
+    tag::slug_of(id) == Some("local")
 }
 
 pub fn distinct_covers(tracks: &[Track], wanted: usize) -> Vec<String> {
@@ -83,6 +83,15 @@ pub trait MusicApi: Send + Sync {
 
     async fn all_tracks(&self, limit: u32) -> Result<Vec<Track>> {
         self.saved_tracks(limit).await
+    }
+
+    /// Whether `all_tracks` answers with something other than `saved_tracks`.
+    ///
+    /// The local provider scans a folder, so it has both a Songs tab holding
+    /// everything and a separate Favorites tab. A streaming provider's Songs
+    /// tab *is* its favourites, so it shows one tab fewer.
+    fn has_all_tracks(&self) -> bool {
+        false
     }
 
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()>;
@@ -210,6 +219,8 @@ pub struct ProviderSession {
     pub playback: Arc<dyn PlaybackFactory>,
     pub authenticated: bool,
     pub playcounts: bool,
+    /// A stored credential was rejected and this session fell back to guest.
+    pub expired: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +237,7 @@ pub enum SignInProblem {
     Premium,
     Region,
     Credentials,
+    Secret,
     Network,
     Cancelled,
     Refused,
@@ -237,12 +249,13 @@ pub struct SignInFailure(pub SignInProblem);
 impl std::fmt::Display for SignInFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let reason = match self.0 {
-            SignInProblem::Premium => "the account has no Spotify Premium",
+            SignInProblem::Premium => "the account has no premium subscription",
             SignInProblem::Region => "the account is out of its home region",
             SignInProblem::Credentials => "the stored credentials are no longer valid",
-            SignInProblem::Network => "Spotify could not be reached",
+            SignInProblem::Secret => "the pasted credential was not accepted",
+            SignInProblem::Network => "the service could not be reached",
             SignInProblem::Cancelled => "authorization was cancelled in the browser",
-            SignInProblem::Refused => "Spotify refused the session",
+            SignInProblem::Refused => "the service refused the session",
         };
         write!(f, "{reason}")
     }
@@ -276,6 +289,13 @@ pub trait MusicProvider: Send + Sync {
     fn location(&self) -> Option<String> {
         None
     }
+
+    /// The same fact as `MusicApi::has_all_tracks`, answerable before the
+    /// provider is connected — the tab set cannot wait for a client.
+    fn has_all_tracks(&self) -> bool {
+        false
+    }
+
     async fn restore(&self) -> Result<Option<ProviderSession>>;
     async fn sign_in(
         &self,
@@ -285,4 +305,88 @@ pub trait MusicProvider: Send + Sync {
     ) -> Result<ProviderSession>;
     fn abandon(&self) {}
     fn sign_out(&self);
+}
+
+#[cfg(test)]
+mod sign_in_failure_tests {
+    use super::{SignInFailure, SignInProblem};
+
+    #[test]
+    fn each_variant_has_its_exact_message() {
+        let cases = [
+            (
+                SignInProblem::Premium,
+                "the account has no premium subscription",
+            ),
+            (
+                SignInProblem::Region,
+                "the account is out of its home region",
+            ),
+            (
+                SignInProblem::Credentials,
+                "the stored credentials are no longer valid",
+            ),
+            (
+                SignInProblem::Secret,
+                "the pasted credential was not accepted",
+            ),
+            (SignInProblem::Network, "the service could not be reached"),
+            (
+                SignInProblem::Cancelled,
+                "authorization was cancelled in the browser",
+            ),
+            (SignInProblem::Refused, "the service refused the session"),
+        ];
+        for (problem, expected) in cases {
+            assert_eq!(SignInFailure(problem).to_string(), expected);
+        }
+    }
+
+    /// `login-problem-*` is where a sign-in failure actually reaches a
+    /// user, in whichever locale they run Sonora in — the Rust `Display`
+    /// above never does. A provider name spelled out literally in one of
+    /// those keys, rather than through the `{ $provider }` variable, reads
+    /// wrong for whichever provider is not the one named: this is exactly
+    /// the bug three locales shipped for `login-problem-network`, and the
+    /// old version of this test (asserting only that `Display` never says
+    /// "Spotify") could not have caught it, since the bug was never in the
+    /// Rust string.
+    #[test]
+    fn no_locale_names_a_provider_in_a_login_problem_message() {
+        let providers = ["Spotify", "YouTube", "SoundCloud"];
+        let i18n_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/i18n");
+        let mut offenders = Vec::new();
+        for locale in std::fs::read_dir(&i18n_dir).expect("cannot read assets/i18n") {
+            let locale = locale.expect("cannot read a locale entry");
+            let ftl = locale.path().join("main.ftl");
+            let Ok(contents) = std::fs::read_to_string(&ftl) else {
+                continue;
+            };
+            for line in contents.lines() {
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let key = key.trim();
+                if !key.starts_with("login-problem-") {
+                    continue;
+                }
+                // `login-problem-premium` names "Spotify Premium" on
+                // purpose — that's a product, not just the provider, and
+                // only the Spotify provider ever raises this variant.
+                if key == "login-problem-premium" {
+                    continue;
+                }
+                for provider in providers {
+                    if value.contains(provider) {
+                        offenders.push(format!("{}:{key}", ftl.display()));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these login-problem keys name a provider literally instead of \
+             using {{ $provider }}: {offenders:?}"
+        );
+    }
 }

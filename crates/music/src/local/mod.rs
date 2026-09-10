@@ -69,6 +69,7 @@ impl LocalProvider {
             playback,
             authenticated: false,
             playcounts: false,
+            expired: false,
         })
     }
 }
@@ -85,6 +86,10 @@ impl MusicProvider for LocalProvider {
 
     fn sign_in_options(&self) -> Vec<SignIn> {
         Vec::new()
+    }
+
+    fn has_all_tracks(&self) -> bool {
+        true
     }
 
     fn stored(&self) -> bool {

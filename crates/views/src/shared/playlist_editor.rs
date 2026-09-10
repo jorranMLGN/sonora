@@ -8,10 +8,16 @@ use ui::{Dismiss, FORM_CONTEXT, Input, Submit};
 
 #[derive(Clone)]
 pub(crate) enum Edit {
-    Create { tracks: Vec<String>, local: bool },
+    Create {
+        tracks: Vec<String>,
+        slug: Option<&'static str>,
+    },
     Rename(Playlist),
     Delete(Playlist),
-    Again { playlist: Playlist, track: String },
+    Again {
+        playlist: Playlist,
+        track: String,
+    },
 }
 
 pub(crate) struct PlaylistEditor {
@@ -78,9 +84,9 @@ impl PlaylistEditor {
         let library = Sonora::global(cx).library.clone();
 
         match edit {
-            Edit::Create { tracks, local } if !name.is_empty() => {
+            Edit::Create { tracks, slug } if !name.is_empty() => {
                 library.update(cx, |library, cx| {
-                    library.create_playlist(name, tracks, local, cx);
+                    library.create_playlist(name, tracks, slug, cx);
                 })
             }
             Edit::Rename(playlist) if !name.is_empty() && name != playlist.name => {

@@ -13,7 +13,39 @@ use ui::{
 };
 
 use crate::queue::{Resume, gap_target};
-use crate::{Repeat, Sonora};
+use crate::{Repeat, Sonora, Whence};
+
+/// Which screen corner the mini player opens in.
+///
+/// Only where it opens: it can be dragged from there. gpui can size a window
+/// but not move one, so a change of corner means closing and reopening it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MiniCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+impl MiniCorner {
+    pub const ALL: [MiniCorner; 4] = [
+        MiniCorner::TopLeft,
+        MiniCorner::TopRight,
+        MiniCorner::BottomLeft,
+        MiniCorner::BottomRight,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            MiniCorner::TopLeft => "mini-corner-top-left",
+            MiniCorner::TopRight => "mini-corner-top-right",
+            MiniCorner::BottomLeft => "mini-corner-bottom-left",
+            MiniCorner::BottomRight => "mini-corner-bottom-right",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -125,6 +157,10 @@ fn system_font() -> String {
     SYSTEM_FONT.to_owned()
 }
 
+fn yes() -> bool {
+    true
+}
+
 const SAVE_DELAY: Duration = Duration::from_millis(300);
 const DEFAULT_VOLUME: f32 = 0.7;
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
@@ -165,6 +201,10 @@ struct Values {
     sidebar_right_width: f32,
     sidebar_right_open: bool,
     sidebar_right_tab: SideTab,
+    #[serde(default)]
+    mini_corner: MiniCorner,
+    #[serde(default = "yes")]
+    mini_on_top: bool,
     shuffle: bool,
     repeat: Repeat,
     radio: bool,
@@ -231,6 +271,8 @@ impl Default for Values {
             sidebar_open: true,
             sidebar_right_width: DEFAULT_SIDEBAR_RIGHT_WIDTH,
             sidebar_right_open: false,
+            mini_corner: MiniCorner::default(),
+            mini_on_top: true,
             sidebar_right_tab: SideTab::Queue,
             shuffle: false,
             repeat: Repeat::Off,
@@ -255,6 +297,16 @@ impl Default for Values {
 
 impl Values {
     fn migrate(&mut self) {
+        let slug = self.provider.clone();
+        if let Some(resume) = self.resume.as_mut() {
+            migrate_resume(resume);
+        }
+        migrate_keys(&mut self.hidden_columns, &slug);
+        migrate_keys(&mut self.tables, &slug);
+        migrate_keys(&mut self.sorting, &slug);
+        migrate_keys(&mut self.views, &slug);
+        migrate_hidden_nav(&mut self.hidden_nav, &slug);
+
         for (table, hidden) in self.hidden_columns.drain() {
             self.tables.entry(table).or_insert_with(|| Layout {
                 hidden,
@@ -273,6 +325,7 @@ impl Values {
                 pin,
             }));
         }
+        migrate_pinned(&mut self.pinned);
     }
 }
 
@@ -400,6 +453,14 @@ impl AppSettings {
 
     pub fn sidebar_right_open(&self) -> bool {
         self.values.sidebar_right_open
+    }
+
+    pub fn mini_corner(&self) -> MiniCorner {
+        self.values.mini_corner
+    }
+
+    pub fn mini_on_top(&self) -> bool {
+        self.values.mini_on_top
     }
 
     pub fn sidebar_right_tab(&self) -> SideTab {
@@ -696,6 +757,22 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
+    pub fn set_mini_on_top(&mut self, on_top: bool, cx: &mut Context<Self>) {
+        if self.values.mini_on_top == on_top {
+            return;
+        }
+        self.values.mini_on_top = on_top;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_mini_corner(&mut self, corner: MiniCorner, cx: &mut Context<Self>) {
+        if self.values.mini_corner == corner {
+            return;
+        }
+        self.values.mini_corner = corner;
+        self.schedule_save(cx);
+    }
+
     pub fn set_sidebar_right_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.values.sidebar_right_open = open;
         self.schedule_save(cx);
@@ -971,6 +1048,55 @@ fn take(pinned: &mut Vec<Held>, slug: &str, pin: &Pin) -> bool {
     true
 }
 
+fn migrate_resume(resume: &mut Resume) {
+    let slug = resume.provider.clone();
+    for stub in resume
+        .past
+        .iter_mut()
+        .chain(resume.current.iter_mut())
+        .chain(resume.upcoming.iter_mut())
+    {
+        stub.id = music::tag::tag(&slug, &stub.id);
+        stub.album_id = stub.album_id.take().map(|id| music::tag::tag(&slug, &id));
+        for named in stub.credited.iter_mut() {
+            named.id = named.id.take().map(|id| music::tag::tag(&slug, &id));
+        }
+    }
+    if let Some(Whence::Saved(shelf)) = resume.origin.as_mut().map(|origin| &mut origin.whence)
+        && shelf.is_empty()
+    {
+        *shelf = slug;
+    }
+}
+
+fn migrate_keys<T>(keys: &mut HashMap<String, T>, slug: &str) {
+    const SECTIONS: [(&str, &str); 4] = [
+        ("songs", "favorites"),
+        ("albums", "albums"),
+        ("playlists", "playlists"),
+        ("artists", "artists"),
+    ];
+    for (stored, section) in SECTIONS {
+        if let Some(value) = keys.remove(stored) {
+            keys.insert(format!("{slug}-{section}"), value);
+        }
+    }
+}
+
+fn migrate_hidden_nav(hidden: &mut [String], slug: &str) {
+    for entry in hidden {
+        if *entry == "library" {
+            *entry = slug.to_owned();
+        }
+    }
+}
+
+fn migrate_pinned(pinned: &mut [Held]) {
+    for held in pinned {
+        held.pin.id = music::tag::tag(&held.slug, &held.pin.id);
+    }
+}
+
 fn carry(previous: Option<&Resume>, next: &mut Resume) {
     let playing = |resume: &Resume| resume.current.as_ref().map(|stub| stub.id.clone());
     let same = previous.filter(|old| old.provider == next.provider);
@@ -1194,5 +1320,96 @@ mod tests {
             &SLUGS
         ));
         assert_eq!(pinned.len(), 2);
+    }
+
+    #[test]
+    fn a_saved_queue_takes_the_tag_of_the_provider_it_was_saved_under() {
+        let mut resume = Resume {
+            provider: "spotify".into(),
+            current: Some(Stub {
+                id: "7etD5lFGaYcsKmFTmutVYO".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        migrate_resume(&mut resume);
+        assert_eq!(resume.current.unwrap().id, "spotify:7etD5lFGaYcsKmFTmutVYO");
+
+        let mut pinned = vec![held("spotify", "0sNOF9WDwhWunNAHPD3Baj")];
+        migrate_pinned(&mut pinned);
+        migrate_pinned(&mut pinned);
+        assert_eq!(ids(&pinned), ["spotify:0sNOF9WDwhWunNAHPD3Baj"]);
+    }
+
+    #[test]
+    fn an_already_tagged_queue_is_left_alone() {
+        let mut resume = Resume {
+            provider: "spotify".into(),
+            current: Some(Stub {
+                id: "spotify:abc".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        migrate_resume(&mut resume);
+        assert_eq!(resume.current.unwrap().id, "spotify:abc");
+    }
+
+    #[test]
+    fn a_stored_shelf_origin_names_the_provider_it_played_from() {
+        let mut resume: Resume = serde_json::from_str(
+            r#"{"provider":"soundcloud","origin":{"whence":"saved","id":""}}"#,
+        )
+        .expect("a stored shelf origin still parses");
+        migrate_resume(&mut resume);
+        assert_eq!(
+            resume.origin.map(|origin| origin.whence),
+            Some(Whence::Saved("soundcloud".to_owned()))
+        );
+
+        let mut local: Resume = serde_json::from_str(
+            r#"{"provider":"soundcloud","origin":{"whence":"local","id":""}}"#,
+        )
+        .expect("a stored local origin still parses");
+        migrate_resume(&mut local);
+        assert_eq!(
+            local.origin.map(|origin| origin.whence),
+            Some(Whence::Saved("local".to_owned()))
+        );
+    }
+
+    #[test]
+    fn bare_layout_keys_move_to_the_last_active_provider() {
+        let mut keys: HashMap<String, Vec<String>> = HashMap::from([
+            ("albums".into(), vec!["year".into()]),
+            ("songs".into(), vec!["added-at".into()]),
+        ]);
+        migrate_keys(&mut keys, "soundcloud");
+        assert!(keys.contains_key("soundcloud-albums"));
+        assert!(!keys.contains_key("albums"));
+        // the streaming shelf stored Favorites under "songs"
+        assert_eq!(
+            keys.get("soundcloud-favorites"),
+            Some(&vec!["added-at".to_owned()])
+        );
+        assert!(!keys.contains_key("soundcloud-songs"));
+        assert!(!keys.contains_key("songs"));
+    }
+
+    #[test]
+    fn local_layout_keys_are_already_correct() {
+        let mut keys: HashMap<String, Vec<String>> =
+            HashMap::from([("local-albums".into(), vec!["year".into()])]);
+        migrate_keys(&mut keys, "soundcloud");
+        assert!(keys.contains_key("local-albums"));
+    }
+
+    #[test]
+    fn a_hidden_library_entry_moves_to_the_last_active_provider() {
+        let mut hidden = vec!["library".to_owned(), "history".to_owned()];
+        migrate_hidden_nav(&mut hidden, "soundcloud");
+        assert!(hidden.contains(&"soundcloud".to_owned()));
+        assert!(!hidden.contains(&"library".to_owned()));
+        assert!(hidden.contains(&"history".to_owned()));
     }
 }

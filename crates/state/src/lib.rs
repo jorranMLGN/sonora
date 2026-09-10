@@ -28,16 +28,17 @@ pub use detail::{Collection, Detail, Header};
 pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
-pub use library::{Library, LibraryEvent, LibraryPart, LibraryState, Problem};
+pub use library::{Library, LibraryEvent, LibraryPart, LibraryState, Problem, Shelf};
 pub use lyrics::{Lyrics, LyricsState};
 pub use playback::{Origin, Playback, PlaybackState, Repeat, Whence};
 pub use profile::Profile;
 pub use queue::{Named, Queue, Resume, Stub};
 pub use remote::{Remote, attach as attach_remote};
-pub use search::{AlbumHit, ArtistHit, Hit, Kind, PlaylistHit, Search};
+pub use search::{AlbumHit, ArtistHit, Found, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
-    AppSettings, RomanizationScripts, SYSTEM_FONT, SideTab, remember_window, window_placement,
+    AppSettings, MiniCorner, RomanizationScripts, SYSTEM_FONT, SideTab, remember_window,
+    window_placement,
 };
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};

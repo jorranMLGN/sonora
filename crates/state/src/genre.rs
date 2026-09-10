@@ -18,16 +18,23 @@ pub struct Genres {
 
 impl Genres {
     pub fn new(session: Entity<Session>, io: Io, cx: &mut Context<Self>) -> Self {
-        cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn => this.load(cx),
-            SessionEvent::SignedOut => {
+        cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::SignedIn(slug) => {
+                if session.read(cx).provider_slug() == Some(*slug) {
+                    this.load(cx);
+                }
+            }
+            SessionEvent::SignedOut(slug) => {
+                if session.read(cx).provider_slug() != Some(*slug) {
+                    return;
+                }
                 this.task = None;
                 this.genres = Rc::new(Vec::new());
                 this.loading = false;
                 this.error = None;
                 cx.notify();
             }
-            SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
 
@@ -126,17 +133,19 @@ impl GenreDetails {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn => {
-                if let Some(id) = this.id.clone() {
+            SessionEvent::SignedIn(slug) => {
+                if let Some(id) = this.shown(slug) {
                     this.clear();
                     this.open(&id, cx);
                 }
             }
-            SessionEvent::SignedOut => {
-                this.clear();
-                cx.notify();
+            SessionEvent::SignedOut(slug) => {
+                if this.shown(slug).is_some() {
+                    this.clear();
+                    cx.notify();
+                }
             }
-            SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
 
@@ -225,6 +234,12 @@ impl GenreDetails {
             });
         self.sections = Rc::new(detail.sections.clone());
         self.detail = Some(detail);
+    }
+
+    fn shown(&self, slug: &str) -> Option<String> {
+        self.id
+            .clone()
+            .filter(|id| music::tag::slug_of(id) == Some(slug))
     }
 
     fn clear(&mut self) {

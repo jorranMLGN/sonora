@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::shared::local;
 use crate::shared::popups::{
-    AccountPicker, BrowserPicker, CookiePrompt, SearchPopup, matches_query,
+    AccountPicker, BrowserPicker, SearchPopup, SecretPrompt, matches_query,
 };
 use gpui::{
     AnyElement, App, Context, Entity, FontWeight, Pixels, Render, SharedString, TextRun, Window,
@@ -15,7 +15,9 @@ use gpui::{ScrollHandle, prelude::*, svg};
 use i18n::{Language, t};
 use music::{AccountChoice, SignIn, SignInPrompt, WritingSystem};
 use router::{NavEntry, Screen, SettingsTab};
-use state::{AppSettings, Failure, Playback, SYSTEM_FONT, Session, SessionState, Sonora};
+use state::{
+    AppSettings, Failure, MiniCorner, Playback, SYSTEM_FONT, Session, SessionState, Sonora,
+};
 use ui::{ActiveTheme as _, Scrollbar, Scroller, eyebrow};
 use ui::{
     Avatar, Button, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE, MAX_TRANSPARENCY,
@@ -40,6 +42,7 @@ const TYPEFACE_GUESS: usize = 24;
 const TYPEFACE_BATCH: usize = 3;
 const STARTUP: &str = "startup";
 const ENTRIES: &str = "entries";
+const MINI_CORNER: &str = "mini-corner";
 const MOTION: &str = "motion";
 const PACE: &str = "pace";
 const SAVER: &str = "saver";
@@ -190,6 +193,8 @@ impl SettingsView {
                 Row::Item(self.language_row(cx).into_any_element()),
                 self.title("settings-group-window", cx),
                 Row::Item(self.tray_row(cx).into_any_element()),
+                Row::Item(self.mini_on_top_row(cx).into_any_element()),
+                Row::Item(self.mini_corner_row(cx).into_any_element()),
                 self.title("settings-group-accounts", cx),
                 Row::Item(self.accounts_row(cx).into_any_element()),
                 self.title("settings-group-library", cx),
@@ -283,8 +288,9 @@ impl SettingsView {
                 MenuItem::new(screen.id(), i18n::lookup(screen.key(), None))
                     .selected(screen == chosen)
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        let stored = screen.stored(this.session.read(cx).provider_slug());
                         this.settings
-                            .update(cx, |settings, cx| settings.set_startup(screen.id(), cx));
+                            .update(cx, |settings, cx| settings.set_startup(stored, cx));
                         cx.notify();
                     }))
             }));
@@ -303,13 +309,16 @@ impl SettingsView {
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
 
+        let session = self.session.read(cx);
+        let slugs = session.registered_slugs();
+
         let picker = Picker::new(ENTRIES, &self.popovers, t!("settings-entries-pick"))
             .width(Picker::REGULAR)
             .sticky()
-            .items(NavEntry::ALL.map(|entry| {
+            .items(NavEntry::entries(&slugs).into_iter().map(|entry| {
                 let shown = self.settings.read(cx).nav_shown(entry.id());
 
-                MenuItem::new(entry.id(), i18n::lookup(entry.key(), None))
+                MenuItem::new(entry.id(), crate::shared::nav_label(entry, session))
                     .selected(shown)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings.update(cx, |settings, cx| {
@@ -664,32 +673,32 @@ impl SettingsView {
             .flex()
             .items_center()
             .gap_4()
-            .child(match self.session.read(cx).state() {
-                SessionState::SignedIn(profile) => {
+            .child(match self.session.read(cx).profile() {
+                Some(profile) => {
                     Initials::new(profile.display_name.clone(), px(64.)).into_any_element()
                 }
-                _ => Skeleton::new().size(px(64.)).circle().into_any_element(),
+                None => Skeleton::new().size(px(64.)).circle().into_any_element(),
             })
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(match self.session.read(cx).state() {
-                        SessionState::SignedIn(profile) => div()
+                    .child(match self.session.read(cx).profile() {
+                        Some(profile) => div()
                             .child(profile.display_name.clone())
                             .text_size(theme.text(Text::Large))
                             .font_weight(FontWeight::SEMIBOLD)
                             .into_any_element(),
-                        _ => Skeleton::new().w(px(140.)).h(px(14.)).into_any_element(),
+                        None => Skeleton::new().w(px(140.)).h(px(14.)).into_any_element(),
                     })
-                    .child(match self.session.read(cx).state() {
-                        SessionState::SignedIn(profile) => div()
-                            .child(profile.id.clone())
+                    .child(match self.session.read(cx).profile() {
+                        Some(profile) => div()
+                            .child(music::tag::untag(&profile.id).to_owned())
                             .text_color(muted)
                             .text_size(theme.text(Text::Small))
                             .into_any_element(),
-                        _ => Skeleton::new().w(px(90.)).h(px(10.)).into_any_element(),
+                        None => Skeleton::new().w(px(90.)).h(px(10.)).into_any_element(),
                     }),
             )
     }
@@ -1019,6 +1028,54 @@ impl SettingsView {
         )
     }
 
+    fn mini_on_top_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).mini_on_top();
+
+        self.row(
+            t!("settings-mini-on-top"),
+            t!("settings-mini-on-top-detail"),
+            muted,
+            small,
+            Switch::new("mini-on-top", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_mini_on_top(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn mini_corner_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let chosen = self.settings.read(cx).mini_corner();
+        let current = i18n::lookup(chosen.key(), None);
+
+        let picker = Picker::new(MINI_CORNER, &self.popovers, current)
+            .width(Picker::NARROW)
+            .items(MiniCorner::ALL.map(|corner| {
+                MenuItem::new(corner.key(), i18n::lookup(corner.key(), None))
+                    .selected(corner == chosen)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings
+                            .update(cx, |settings, cx| settings.set_mini_corner(corner, cx));
+                        cx.notify();
+                    }))
+            }));
+
+        self.row(
+            t!("settings-mini-corner"),
+            t!("settings-mini-corner-detail"),
+            muted,
+            small,
+            picker.into_any_element(),
+        )
+    }
+
     fn tray_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -1310,7 +1367,6 @@ impl SettingsView {
         let session = self.session.read(cx);
         let pending = session.is_pending();
         let signed_out = matches!(session.state(), SessionState::SignedOut);
-        let guest = !session.authenticated();
         let waiting = match session.state() {
             SessionState::Authorizing(prompt) => !matches!(
                 prompt,
@@ -1326,7 +1382,7 @@ impl SettingsView {
                 options: info.options,
                 stored: info.stored,
                 active: info.active && !signed_out,
-                guest: info.active && !signed_out && guest,
+                guest: info.guest,
                 cancel: waiting && info.pending,
                 error: info.error,
             })
@@ -1377,8 +1433,10 @@ impl SettingsView {
         let status = match (active, guest, stored) {
             (true, true, _) => t!("settings-provider-guest"),
             (true, false, _) => t!("settings-provider-current"),
-            (false, _, true) => t!("settings-provider-connected"),
-            (false, _, false) => t!("settings-provider-none"),
+            // a guest is connected, but says "Connected" to nobody's account
+            (false, true, _) => t!("settings-provider-guest-idle"),
+            (false, false, true) => t!("settings-provider-connected"),
+            (false, false, false) => t!("settings-provider-none"),
         };
         let mut seen_browser = false;
         let methods: Vec<SignIn> = options
@@ -1461,7 +1519,7 @@ impl SettingsView {
                     ),
             )
             .when_some(error, |this, error| {
-                this.child(crate::shared::trouble::trouble(error, false))
+                this.child(crate::shared::trouble::trouble(error, name, false))
             })
             .when(!methods.is_empty(), |this| {
                 this.child(
@@ -1501,8 +1559,8 @@ impl SettingsView {
             .update(cx, |session, cx| session.submit_input(text, cx));
     }
 
-    fn secret_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        CookiePrompt::new(self.secret.clone())
+    fn secret_prompt(&self, slug: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        SecretPrompt::new(self.secret.clone(), slug)
             .on_submit(cx.listener(|this, _, _, cx| this.submit(cx)))
             .on_cancel(cx.listener(|this, _, _, cx| this.abandon(cx)))
     }
@@ -1539,7 +1597,7 @@ impl SettingsView {
             ),
             SignIn::Secret => (
                 format!("connect-{slug}-cookies"),
-                t!("login-connect-cookies"),
+                i18n::lookup(crate::shared::secret_label(slug), None),
             ),
             SignIn::Path(_) => (
                 format!("connect-{slug}-path"),
@@ -1556,6 +1614,10 @@ impl SettingsView {
                 SignIn::Browser(_) => this.open_browsers(slug, cx),
                 method => {
                     let method = method.clone();
+                    if matches!(method, SignIn::Secret) {
+                        let hint = crate::shared::secret(slug).hint;
+                        this.secret.update(cx, |input, cx| input.set_hint(hint, cx));
+                    }
                     this.session
                         .update(cx, |session, cx| session.sign_in(slug, method, cx));
                 }
@@ -1854,6 +1916,13 @@ impl Render for SettingsView {
             self.session.read(cx).state(),
             SessionState::Authorizing(Some(SignInPrompt::Secret))
         );
+        let secret_slug = self
+            .session
+            .read(cx)
+            .providers()
+            .find(|info| info.pending)
+            .map(|info| info.slug)
+            .unwrap_or_default();
 
         div()
             .relative()
@@ -1888,7 +1957,7 @@ impl Render for SettingsView {
                 this.child(self.account_modal(accounts, cx).into_any_element())
             })
             .when(secret, |this| {
-                this.child(self.secret_prompt(cx).into_any_element())
+                this.child(self.secret_prompt(secret_slug, cx).into_any_element())
             })
     }
 }

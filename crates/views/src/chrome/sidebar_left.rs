@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ui::{
     ActiveTheme as _, Button, Card, DraggedPin, Edge, Panel, Pin, Pinnable as _, Popup, SNUG,
     Scrollbar, Scroller, Shield, Side, Tabs, Text, drop_gap, drop_marker,
@@ -6,59 +8,16 @@ use ui::{
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, DragMoveEvent, ElementId, Entity, Hsla, MouseButton, MouseDownEvent,
-    Pixels, Point, Render, ScrollHandle,
+    Pixels, Point, Render, ScrollHandle, SharedString,
 };
 use gpui::{Window, div, px};
 use router::{
-    Destination, LibraryTab, LocalTab, NavEntry, Navigation, NavigationEvent, SettingsTab, navigate,
+    Destination, LOCAL, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsTab, navigate,
 };
 use state::{AppSettings, Origin, Playback, PlaybackState, Session, Sonora};
 
 use crate::shared::menus::{ItemMenu, pin_menu};
-
-const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
-    (Some(NavEntry::Home), "icons/house.svg", Destination::Home),
-    (
-        Some(NavEntry::Search),
-        "icons/search.svg",
-        Destination::Search,
-    ),
-    (
-        Some(NavEntry::Library),
-        "icons/library-big.svg",
-        Destination::Library(LibraryTab::Songs),
-    ),
-    (
-        Some(NavEntry::Local),
-        "icons/file-music.svg",
-        Destination::Local(LocalTab::Songs),
-    ),
-    (
-        Some(NavEntry::History),
-        "icons/rotate-ccw-clock.svg",
-        Destination::History,
-    ),
-    (
-        None,
-        "icons/settings.svg",
-        Destination::Settings(SettingsTab::General),
-    ),
-];
-
-const LIBRARY_TABS: [(&str, LibraryTab); 4] = [
-    ("nav-favorites", LibraryTab::Songs),
-    ("nav-albums", LibraryTab::Albums),
-    ("nav-artists", LibraryTab::Artists),
-    ("nav-playlists", LibraryTab::Playlists),
-];
-
-const LOCAL_TABS: [(&str, LocalTab); 5] = [
-    ("nav-favorites", LocalTab::Favorites),
-    ("nav-songs", LocalTab::Songs),
-    ("nav-albums", LocalTab::Albums),
-    ("nav-artists", LocalTab::Artists),
-    ("nav-playlists", LocalTab::Playlists),
-];
+use crate::shared::{nav_label, provider_logo};
 
 const SETTINGS_TABS: [(&str, SettingsTab); 5] = [
     ("settings-tab-general", SettingsTab::General),
@@ -81,8 +40,7 @@ pub(crate) struct SidebarLeft {
     open: bool,
     cramped: bool,
     forced: Option<bool>,
-    library_open: bool,
-    local_open: bool,
+    groups: HashSet<&'static str>,
     settings_open: bool,
     dropping: bool,
     drop_gap: Option<usize>,
@@ -114,9 +72,7 @@ impl SidebarLeft {
         .detach();
 
         let at = trail.read(cx).current();
-        let library_open = matches!(at, Destination::Library(_));
-        let local_open = matches!(at, Destination::Local(_));
-        let settings_open = matches!(at, Destination::Settings(_));
+        let (group, settings_open) = expanded(&at);
 
         Self {
             settings,
@@ -127,8 +83,7 @@ impl SidebarLeft {
             open,
             forced: None,
             cramped: false,
-            library_open,
-            local_open,
+            groups: group.into_iter().collect(),
             settings_open,
             dropping: false,
             drop_gap: None,
@@ -144,10 +99,20 @@ impl SidebarLeft {
             return;
         }
         self.at = current.clone();
-        let (library, local, settings) = expanded(current);
-        self.library_open |= library;
-        self.local_open |= local;
+        let (group, settings) = expanded(current);
+        self.groups.extend(group);
         self.settings_open |= settings;
+    }
+
+    fn flip(&mut self, slug: &'static str, cx: &mut Context<Self>) {
+        if !self.groups.remove(slug) {
+            self.groups.insert(slug);
+        }
+        cx.notify();
+    }
+
+    fn tabs(&self, slug: &str, cx: &App) -> Vec<LibraryTab> {
+        LibraryTab::tabs(self.session.read(cx).has_all_tracks(slug))
     }
 
     fn dismiss_menu(&mut self, cx: &mut Context<Self>) {
@@ -347,7 +312,6 @@ impl Render for SidebarLeft {
 
         let current = self.trail.read(cx).current();
         self.follow(&current);
-        let authenticated = self.session.read(cx).authenticated();
         self.adapt(window, cx);
 
         if !cx.has_active_drag() {
@@ -358,89 +322,49 @@ impl Render for SidebarLeft {
         let shown = |entry: NavEntry, cx: &App| self.settings.read(cx).nav_shown(entry.id());
 
         let mut rows: Vec<AnyElement> = Vec::new();
-        for (index, (entry, icon, destination)) in NAV.into_iter().enumerate() {
+        for (entry, icon, destination) in nav(self.session.read(cx)) {
+            let id = entry.map_or("nav-settings", NavEntry::id);
             let key = entry.map_or("nav-settings", NavEntry::key);
             if entry.is_some_and(|entry| !shown(entry, cx)) {
                 continue;
             }
+            let label = match entry {
+                Some(entry) => nav_label(entry, self.session.read(cx)),
+                None => i18n::lookup(key, None),
+            };
 
-            if matches!(destination, Destination::Library(_)) {
-                if !authenticated {
-                    continue;
-                }
-                let inside = matches!(current, Destination::Library(_));
+            if let Destination::Library(slug, _) = destination {
+                let inside = matches!(current, Destination::Library(at, _) if at == slug);
                 let text = if inside { foreground } else { muted };
+                let opened = self.groups.contains(slug);
 
                 rows.push(
-                    nav_row(index, key, text, sidebar_accent)
+                    nav_row(id, label, text, sidebar_accent)
                         .icon(icon)
-                        .trailing(chevron(self.library_open))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.library_open = !this.library_open;
-                            cx.notify();
-                        }))
+                        .trailing(chevron(opened))
+                        .on_click(cx.listener(move |this, _, _, cx| this.flip(slug, cx)))
                         .into_any_element(),
                 );
 
-                if self.library_open {
+                if opened {
                     rows.push(
                         Tabs::new()
-                            .items(LIBRARY_TABS.into_iter().map(|(name, tab)| {
-                                let chosen = current == Destination::Library(tab);
+                            .items(self.tabs(slug, cx).into_iter().map(|tab| {
+                                let chosen = current == Destination::Library(slug, tab);
                                 let tint = if chosen { foreground } else { muted };
 
-                                nav_row(name, name, tint, sidebar_accent)
-                                    .flex_1()
-                                    .when(chosen, |button| button.bg(sidebar_accent))
-                                    .on_click(move |_, _, cx| {
-                                        navigate(Destination::Library(tab), cx)
-                                    })
+                                nav_row(
+                                    (ElementId::from(slug), tab.key()),
+                                    i18n::lookup(tab.key(), None),
+                                    tint,
+                                    sidebar_accent,
+                                )
+                                .flex_1()
+                                .when(chosen, |button| button.bg(sidebar_accent))
+                                .on_click(move |_, _, cx| {
+                                    navigate(Destination::Library(slug, tab), cx)
+                                })
                             }))
-                            .into_any_element(),
-                    );
-                }
-                continue;
-            }
-
-            if matches!(destination, Destination::Local(_)) {
-                let inside = matches!(current, Destination::Local(_));
-                let text = if inside { foreground } else { muted };
-
-                rows.push(
-                    nav_row(index, key, text, sidebar_accent)
-                        .icon(icon)
-                        .trailing(chevron(self.local_open))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.local_open = !this.local_open;
-                            cx.notify();
-                        }))
-                        .into_any_element(),
-                );
-
-                if self.local_open {
-                    rows.push(
-                        Tabs::new()
-                            .items(
-                                LOCAL_TABS
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(slot, (name, tab))| {
-                                        let chosen = current == Destination::Local(tab);
-                                        let tint = if chosen { foreground } else { muted };
-
-                                        nav_row(
-                                            ("local-tab", slot as u32),
-                                            name,
-                                            tint,
-                                            sidebar_accent,
-                                        )
-                                        .flex_1()
-                                        .when(chosen, |button| button.bg(sidebar_accent))
-                                        .on_click(
-                                            move |_, _, cx| navigate(Destination::Local(tab), cx),
-                                        )
-                                    }),
-                            )
                             .into_any_element(),
                     );
                 }
@@ -452,7 +376,7 @@ impl Render for SidebarLeft {
                 let text = if inside { foreground } else { muted };
 
                 rows.push(
-                    nav_row(index, key, text, sidebar_accent)
+                    nav_row(id, label, text, sidebar_accent)
                         .icon(icon)
                         .trailing(chevron(self.settings_open))
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -469,7 +393,7 @@ impl Render for SidebarLeft {
                                 let chosen = current == Destination::Settings(tab);
                                 let tint = if chosen { foreground } else { muted };
 
-                                nav_row(name, name, tint, sidebar_accent)
+                                nav_row(name, i18n::lookup(name, None), tint, sidebar_accent)
                                     .flex_1()
                                     .when(chosen, |button| button.bg(sidebar_accent))
                                     .on_click(move |_, _, cx| {
@@ -486,7 +410,7 @@ impl Render for SidebarLeft {
             let text = if active { foreground } else { muted };
 
             rows.push(
-                nav_row(index, key, text, sidebar_accent)
+                nav_row(id, label, text, sidebar_accent)
                     .icon(icon)
                     .when(active, |button| button.bg(sidebar_accent))
                     .on_click(move |_, _, cx| navigate(destination.clone(), cx))
@@ -594,12 +518,50 @@ fn hint(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn expanded(current: &Destination) -> (bool, bool, bool) {
-    (
-        matches!(current, Destination::Library(_)),
-        matches!(current, Destination::Local(_)),
-        matches!(current, Destination::Settings(_)),
-    )
+fn nav(session: &Session) -> Vec<(Option<NavEntry>, &'static str, Destination)> {
+    let mut nav = vec![
+        (Some(NavEntry::Home), "icons/house.svg", Destination::Home),
+        (
+            Some(NavEntry::Search),
+            "icons/search.svg",
+            Destination::Search,
+        ),
+    ];
+    nav.extend(libraries(session).map(|slug| {
+        (
+            Some(NavEntry::Library(slug)),
+            provider_logo(slug),
+            Destination::Library(slug, LibraryTab::Favorites),
+        )
+    }));
+    nav.extend([
+        (
+            Some(NavEntry::History),
+            "icons/rotate-ccw-clock.svg",
+            Destination::History,
+        ),
+        (
+            None,
+            "icons/settings.svg",
+            Destination::Settings(SettingsTab::General),
+        ),
+    ]);
+    nav
+}
+
+fn libraries(session: &Session) -> impl Iterator<Item = &'static str> + '_ {
+    session
+        .registered_slugs()
+        .into_iter()
+        .filter(|slug| *slug == LOCAL || session.authenticated_for(slug))
+}
+
+fn expanded(current: &Destination) -> (Option<&'static str>, bool) {
+    match current {
+        Destination::Library(slug, _) => (Some(slug), false),
+        Destination::Settings(_) => (None, true),
+        _ => (None, false),
+    }
 }
 
 fn chevron(open: bool) -> &'static str {
@@ -609,10 +571,10 @@ fn chevron(open: bool) -> &'static str {
     }
 }
 
-fn nav_row(id: impl Into<ElementId>, key: &'static str, tint: Hsla, accent: Hsla) -> Button {
+fn nav_row(id: impl Into<ElementId>, label: SharedString, tint: Hsla, accent: Hsla) -> Button {
     Button::new(id)
         .ghost()
-        .label(i18n::lookup(key, None))
+        .label(label)
         .tint(tint)
         .gap_2p5()
         .justify_start()
@@ -622,23 +584,23 @@ fn nav_row(id: impl Into<ElementId>, key: &'static str, tint: Hsla, accent: Hsla
 
 #[cfg(test)]
 mod tests {
-    use router::{Destination, LibraryTab, LocalTab, SettingsTab};
+    use router::{Destination, LOCAL, LibraryTab, SettingsTab};
 
     use super::expanded;
 
     #[test]
     fn a_section_expands_only_where_it_leads() {
         assert_eq!(
-            expanded(&Destination::Library(LibraryTab::Albums)),
-            (true, false, false)
+            expanded(&Destination::Library("spotify", LibraryTab::Albums)),
+            (Some("spotify"), false)
         );
         assert_eq!(
-            expanded(&Destination::Local(LocalTab::Albums)),
-            (false, true, false)
+            expanded(&Destination::Library(LOCAL, LibraryTab::Albums)),
+            (Some(LOCAL), false)
         );
         assert_eq!(
             expanded(&Destination::Settings(SettingsTab::General)),
-            (false, false, true)
+            (None, true)
         );
     }
 
@@ -654,11 +616,7 @@ mod tests {
         ];
 
         for destination in away {
-            assert_eq!(
-                expanded(&destination),
-                (false, false, false),
-                "{destination:?}"
-            );
+            assert_eq!(expanded(&destination), (None, false), "{destination:?}");
         }
     }
 }

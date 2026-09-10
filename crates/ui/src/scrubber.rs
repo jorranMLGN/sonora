@@ -208,6 +208,9 @@ impl RenderOnce for Scrubber {
             let state = state.clone();
             let on_move = on_move.clone();
             move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+                // the grab belongs to the scrubber alone: a window drag region
+                // underneath must not read it as a press on the window
+                cx.stop_propagation();
                 if let Some(handler) = on_move.as_ref() {
                     handler(&at(&state, event.position), window, cx);
                 }

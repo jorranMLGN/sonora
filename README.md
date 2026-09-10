@@ -11,7 +11,7 @@
 
 ### A native music streaming client, built with Rust and GPUI
 
-Stream Spotify, YouTube Music, and local files all in one **native** app
+Stream Spotify, YouTube Music, SoundCloud, and local files all in one **native** app
 </div>
 
 <div align="center">
@@ -39,7 +39,7 @@ Stream Spotify, YouTube Music, and local files all in one **native** app
 
 ## Features
 
-- **Spotify**, **YouTube**, and local playback
+- **Spotify**, **YouTube**, **SoundCloud**, and local playback
 - Library management within supported providers
 - Gapless playback
 - Audio normalization
@@ -142,18 +142,18 @@ AI-assisted proofreading and translation of human-written text are permitted.
 
 <!-- i18n:start -->
 
-| Language                     | Translated | Coverage |
-| ---------------------------- | ---------- | -------- |
-| English (`en-US`)            | 514/514    | 100%     |
-| Deutsch (`de`)               | 485/514    | 94%      |
-| Español (`es`)               | 500/514    | 97%      |
-| Français (`fr`)              | 479/514    | 93%      |
-| Italiano (`it`)              | 479/514    | 93%      |
-| 日本語 (`ja`)                | 500/514    | 97%      |
-| Русский (`ru`)               | 486/514    | 95%      |
-| Українська (`uk`)            | 486/514    | 95%      |
-| Polski (`pl`)                | 487/514    | 95%      |
-| Português (Brasil) (`pt-BR`) | 500/514    | 97%      |
+| Language | Translated | Coverage |
+| --- | --- | --- |
+| English (`en-US`) | 518/518 | 100% |
+| Deutsch (`de`) | 485/518 | 94% |
+| Español (`es`) | 500/518 | 97% |
+| Français (`fr`) | 479/518 | 92% |
+| Italiano (`it`) | 479/518 | 92% |
+| 日本語 (`ja`) | 500/518 | 97% |
+| Русский (`ru`) | 486/518 | 94% |
+| Українська (`uk`) | 486/518 | 94% |
+| Polski (`pl`) | 490/518 | 95% |
+| Português (Brasil) (`pt-BR`) | 500/518 | 97% |
 
 <!-- i18n:end -->
 

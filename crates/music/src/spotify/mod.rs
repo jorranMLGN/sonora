@@ -59,6 +59,7 @@ impl SpotifyProvider {
             playback,
             authenticated: true,
             playcounts: true,
+            expired: false,
         })
     }
 }

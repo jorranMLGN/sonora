@@ -1,0 +1,899 @@
+{
+    "artwork_url": "https://i1.sndcdn.com/artworks-tQ4iVEnAyVlWQ8gJ-xRR7gg-large.jpg",
+    "created_at": "2026-04-11T12:46:11Z",
+    "description": "\ud835\ude42\ud835\ude5a\ud835\ude63\ud835\ude67\ud835\ude5a \ud835\ude4d\ud835\ude5a\ud835\ude5c\ud835\ude5c\ud835\ude56\ud835\ude5a\ud835\ude69\u00f3\ud835\ude63-\ud835\ude4e\ud835\ude56\ud835\ude61\ud835\ude68\ud835\ude56\ud835\ude69\ud835\ude64\ud835\ude63 \ud835\ude56\ud835\ude63\ud835\ude59 \ud835\ude47\ud835\ude56\ud835\ude69\ud835\ude5e\ud835\ude63 \ud835\ude4e\ud835\ude64\ud835\ude6a\ud835\ude61.",
+    "duration": 3465606,
+    "embeddable_by": "all",
+    "genre": "Reggaeton",
+    "id": 2220481535,
+    "kind": "playlist",
+    "label_name": "",
+    "last_modified": "2026-08-06T19:44:24Z",
+    "license": "all-rights-reserved",
+    "likes_count": 7,
+    "managed_by_feeds": false,
+    "permalink": "yo-te-canto-debut-album",
+    "permalink_url": "https://soundcloud.com/compi-flow/sets/yo-te-canto-debut-album",
+    "public": true,
+    "purchase_title": null,
+    "purchase_url": null,
+    "release_date": "2026-06-04T00:00:00Z",
+    "reposts_count": 1,
+    "secret_token": null,
+    "sharing": "public",
+    "tag_list": "latin top 100 donomar badbunny daddyyankee top100 charts billboard greatestist hits hot100 grammy latingrammy pr puetro puetrorico p.r",
+    "title": "Yo Te Canto Debut Album",
+    "uri": "https://api.soundcloud.com/playlists/soundcloud%3Aplaylists%3A2220481535",
+    "user_id": 1573125567,
+    "set_type": "album",
+    "is_album": true,
+    "published_at": "2026-04-11T12:46:11Z",
+    "display_date": "2026-04-11T12:46:11Z",
+    "user": {
+        "avatar_url": "https://i1.sndcdn.com/avatars-hulv4zB3NwHmDidC-qt5g1A-large.jpg",
+        "first_name": "",
+        "followers_count": 111,
+        "full_name": "",
+        "id": 1573125567,
+        "kind": "user",
+        "last_modified": "2026-07-05T21:33:55Z",
+        "last_name": "",
+        "permalink": "compi-flow",
+        "permalink_url": "https://soundcloud.com/compi-flow",
+        "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A1573125567",
+        "urn": "soundcloud:users:1573125567",
+        "username": "COMPI FLOW",
+        "verified": false,
+        "city": "New York",
+        "country_code": "US",
+        "badges": {
+            "pro": false,
+            "creator_mid_tier": false,
+            "pro_unlimited": true,
+            "verified": false
+        },
+        "station_urn": "soundcloud:system-playlists:artist-stations:1573125567",
+        "station_permalink": "artist-stations:1573125567"
+    },
+    "tracks": [
+        {
+            "artwork_url": "https://i1.sndcdn.com/artworks-BLAcfvnZgp5Tm43k-ooLUfQ-large.jpg",
+            "caption": null,
+            "commentable": true,
+            "comment_count": 0,
+            "created_at": "2026-04-07T18:56:22Z",
+            "description": "Link to buy Debut Album No Advertisments, Download at ko-fi Link - https://ko-fi.com/summary/1a4f8f03-03c5-41ca-84a6-910c88b37dfe?utm_source=ig&utm_medium=social&utm_content=link_in_bio&fbclid=PAb21jcASVN3BleHRuA2FlbQIxMQBzcnRjBmFwcF9pZA81NjcwNjczNDMzNTI0MjcAAacenfNvalzHFuxd_7atSWMwpEEIbBk507lpH3WGYcazs6o00Ig5h0I_YKNFcQ_aem_96-2bSkL91VyLVfFH8Ig9g\n\n\nInstagram : https://instagram.openinapp.co/COMPI-FLOW-instagram/page - opens in app\n\nYoutube:    - opens the app and the link is broken for open in app fix it later  \n\nTiktok: https://openinapp.link/z1p1d - opens in app",
+            "downloadable": false,
+            "download_count": 0,
+            "duration": 225396,
+            "full_duration": 225384,
+            "embeddable_by": "all",
+            "genre": "Latin",
+            "has_downloads_left": false,
+            "id": 2298336677,
+            "kind": "track",
+            "label_name": null,
+            "last_modified": "2026-06-09T18:33:10Z",
+            "license": "all-rights-reserved",
+            "likes_count": 5,
+            "permalink": "amor-de-mi-vida",
+            "permalink_url": "https://soundcloud.com/compi-flow/amor-de-mi-vida",
+            "playback_count": 26077,
+            "public": true,
+            "publisher_metadata": {
+                "id": 2298336677,
+                "urn": "soundcloud:tracks:2298336677",
+                "artist": "COMPI FLOW",
+                "isrc": "QT4BX2600004"
+            },
+            "purchase_title": null,
+            "purchase_url": null,
+            "release_date": null,
+            "reposts_count": 0,
+            "secret_token": null,
+            "sharing": "public",
+            "state": "finished",
+            "streamable": true,
+            "tag_list": "\"tiktok,don omar,enrigue igzesia,Daddy yankee,bad bunny,mark anothony,puerto rico,pr,p.r,l.a,la,Los Angeles,latin,boston,billboard 100,billboard,charts,top 100,hot 100,chicago,new york\"",
+            "title": "Amor De Mi Vida",
+            "uri": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2298336677",
+            "urn": "soundcloud:tracks:2298336677",
+            "user_id": 1573125567,
+            "visuals": {
+                "urn": "soundcloud:tracks:2298336677",
+                "enabled": true,
+                "visuals": [
+                    {
+                        "urn": "soundcloud:visuals:264125592",
+                        "entry_time": 0,
+                        "visual_url": "https://i1.sndcdn.com/visuals-BGKIrlwBmyriyF83-hsL15Q-original.jpg"
+                    }
+                ],
+                "tracking": null
+            },
+            "waveform_url": "https://wave.sndcdn.com/mnDEQQXRa9W6_m.json",
+            "display_date": "2026-04-11T12:40:15Z",
+            "media": {
+                "transcodings": [
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2298336677/271f4ba2-fe38-4c68-95f3-2e2efd77665a/stream/hls",
+                        "preset": "aac_160k",
+                        "duration": 225396,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2298336677/bb5729a8-1778-41b2-8579-8739e7761e8b/stream/hls",
+                        "preset": "aac_96k",
+                        "duration": 225396,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "lq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2298336677/165c2035-e1f8-4ca7-9ce1-56e7a593ce8a/stream/hls",
+                        "preset": "abr_sq",
+                        "duration": 225396,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpegurl"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2298336677/e6725022-d61b-4843-99a1-de3390ef431b/stream/hls",
+                        "preset": "mp3_1_0",
+                        "duration": 225384,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2298336677/e6725022-d61b-4843-99a1-de3390ef431b/stream/progressive",
+                        "preset": "mp3_1_0",
+                        "duration": 225384,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "progressive",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    }
+                ]
+            },
+            "station_urn": "soundcloud:system-playlists:track-stations:2298336677",
+            "station_permalink": "track-stations:2298336677",
+            "track_authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW8iOiJOTCIsInN1YiI6IiIsInJpZCI6IjM0MDVlM2MwLWFkZTAtNGY5YS05M2Q3LThjNmQ4NGVlOWEzMiIsImlhdCI6MTc4ODUyNDE4NH0.QUSuuVzTgcNeQYYaQHNA752UYmRTsVHfMwXeo0qnHqM",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE",
+            "user": {
+                "avatar_url": "https://i1.sndcdn.com/avatars-hulv4zB3NwHmDidC-qt5g1A-large.jpg",
+                "first_name": "",
+                "followers_count": 111,
+                "full_name": "",
+                "id": 1573125567,
+                "kind": "user",
+                "last_modified": "2026-07-05T21:33:55Z",
+                "last_name": "",
+                "permalink": "compi-flow",
+                "permalink_url": "https://soundcloud.com/compi-flow",
+                "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A1573125567",
+                "urn": "soundcloud:users:1573125567",
+                "username": "COMPI FLOW",
+                "verified": false,
+                "city": "New York",
+                "country_code": "US",
+                "badges": {
+                    "pro": false,
+                    "creator_mid_tier": false,
+                    "pro_unlimited": true,
+                    "verified": false
+                },
+                "station_urn": "soundcloud:system-playlists:artist-stations:1573125567",
+                "station_permalink": "artist-stations:1573125567"
+            }
+        },
+        {
+            "artwork_url": "https://i1.sndcdn.com/artworks-splAc8K1Ja95euZU-E3zDFA-large.jpg",
+            "caption": null,
+            "commentable": true,
+            "comment_count": 0,
+            "created_at": "2026-04-08T23:28:52Z",
+            "description": "Link to buy Debut Album No Advertisments, Download at ko-fi Link - https://ko-fi.com/s/0a76bbaf36\n\nFollow my socials for more -\nInstagram : https://instagram.openinapp.co/COMPI-FLOW-instagram/page - opens the app\n\nTiktok: https://openinapp.link/z1p1d - opens in app",
+            "downloadable": false,
+            "download_count": 0,
+            "duration": 168240,
+            "full_duration": 168228,
+            "embeddable_by": "all",
+            "genre": "Latin",
+            "has_downloads_left": false,
+            "id": 2299154282,
+            "kind": "track",
+            "label_name": null,
+            "last_modified": "2026-08-29T20:00:46Z",
+            "license": "all-rights-reserved",
+            "likes_count": 2,
+            "permalink": "anivelao",
+            "permalink_url": "https://soundcloud.com/compi-flow/anivelao",
+            "playback_count": 33153,
+            "public": true,
+            "publisher_metadata": {
+                "id": 2299154282,
+                "urn": "soundcloud:tracks:2299154282",
+                "artist": "COMPI FLOW",
+                "contains_music": true,
+                "isrc": "QT4BX2600005"
+            },
+            "purchase_title": null,
+            "purchase_url": null,
+            "release_date": null,
+            "reposts_count": 0,
+            "secret_token": null,
+            "sharing": "public",
+            "state": "finished",
+            "streamable": true,
+            "tag_list": "\"top 100,hot 100,billboard,charts,ny,n.y,p.r,pr,puerto rico,enrigue igzesia,daddy yankee,marc anthony,bad bunny,don omar,Los Angeles,L.A,LA,boston,latin,california,cali,new york\"",
+            "title": "Anivelao",
+            "uri": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2299154282",
+            "urn": "soundcloud:tracks:2299154282",
+            "user_id": 1573125567,
+            "visuals": {
+                "urn": "soundcloud:tracks:2299154282",
+                "enabled": true,
+                "visuals": [
+                    {
+                        "urn": "soundcloud:visuals:264125568",
+                        "entry_time": 0,
+                        "visual_url": "https://i1.sndcdn.com/visuals-QABatPWN4C3h8rBB-XyK63g-original.jpg"
+                    }
+                ],
+                "tracking": null
+            },
+            "waveform_url": "https://wave.sndcdn.com/lzm58NeAfrzH_m.json",
+            "display_date": "2026-04-11T12:40:31Z",
+            "media": {
+                "transcodings": [
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299154282/90220f15-e696-4dd5-915c-8a7169c1a00c/stream/hls",
+                        "preset": "aac_160k",
+                        "duration": 168240,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299154282/b9936e0b-01a8-4b42-8996-903fe7c7fa54/stream/hls",
+                        "preset": "aac_96k",
+                        "duration": 168240,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "lq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299154282/d5443322-1ac5-40de-bb43-f97387b41bc0/stream/hls",
+                        "preset": "abr_sq",
+                        "duration": 168240,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpegurl"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299154282/76e227c3-4914-4f84-a7e5-bdd8e1eb1a67/stream/hls",
+                        "preset": "mp3_1_0",
+                        "duration": 168228,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299154282/76e227c3-4914-4f84-a7e5-bdd8e1eb1a67/stream/progressive",
+                        "preset": "mp3_1_0",
+                        "duration": 168228,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "progressive",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    }
+                ]
+            },
+            "station_urn": "soundcloud:system-playlists:track-stations:2299154282",
+            "station_permalink": "track-stations:2299154282",
+            "track_authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW8iOiJOTCIsInN1YiI6IiIsInJpZCI6ImJjZTJkNmVkLWU3ZWMtNGNmNS04NTg4LTAxMWJkYTRiNmRjMyIsImlhdCI6MTc4ODUyNDE4NH0.1fKhyC3t4_FwboraJjh_rkbvZVqqYJurdMg_Dg1EMLU",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE",
+            "user": {
+                "avatar_url": "https://i1.sndcdn.com/avatars-hulv4zB3NwHmDidC-qt5g1A-large.jpg",
+                "first_name": "",
+                "followers_count": 111,
+                "full_name": "",
+                "id": 1573125567,
+                "kind": "user",
+                "last_modified": "2026-07-05T21:33:55Z",
+                "last_name": "",
+                "permalink": "compi-flow",
+                "permalink_url": "https://soundcloud.com/compi-flow",
+                "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A1573125567",
+                "urn": "soundcloud:users:1573125567",
+                "username": "COMPI FLOW",
+                "verified": false,
+                "city": "New York",
+                "country_code": "US",
+                "badges": {
+                    "pro": false,
+                    "creator_mid_tier": false,
+                    "pro_unlimited": true,
+                    "verified": false
+                },
+                "station_urn": "soundcloud:system-playlists:artist-stations:1573125567",
+                "station_permalink": "artist-stations:1573125567"
+            }
+        },
+        {
+            "artwork_url": "https://i1.sndcdn.com/artworks-z6kxk8gKbNIglvdW-wOIG6w-large.jpg",
+            "caption": null,
+            "commentable": true,
+            "comment_count": 0,
+            "created_at": "2026-04-08T23:38:08Z",
+            "description": "Link to buy Debut Album No Advertisments, Download at ko-fi Link - https://ko-fi.com/s/0a76bbaf36\n\nFollow my socials for more -\nInstagram : https://instagram.openinapp.co/COMPI-FLOW-instagram/page - opens the app\n\nTiktok: https://openinapp.link/z1p1d - opens in app\n\n\n\ud835\udc13\ud835\udc21\ud835\udc1a\ud835\udc27\ud835\udc24s \ud835\udc1f\ud835\udc28\ud835\udc2b \ud835\udc32\ud835\udc28\ud835\udc2e\ud835\udc2b \ud835\udc00\ud835\udc2d\ud835\udc2d\ud835\udc1e\ud835\udc27\ud835\udc2d\ud835\udc22\ud835\udc28\ud835\udc27.\ud835\udc01\ud835\udc2b\ud835\udc22\ud835\udc27\ud835\udc20\ud835\udc22\ud835\udc27' \ud835\udc0d\ud835\udc1e\ud835\udc30 \ud835\udc06\ud835\udc1e\ud835\udc27\ud835\udc2b\ud835\udc1e \ud835\udc12\ud835\udc1a\ud835\udc25\ud835\udc2c\ud835\udc1a \ud835\udc05\ud835\udc2e\ud835\udc27\ud835\udc24, \ud835\udc02\ud835\udc25\ud835\udc1a\ud835\udc2c\ud835\udc2c\ud835\udc22\ud835\udc1c \ud835\udc12\ud835\udc28\ud835\udc2e\ud835\udc27\ud835\udc1d\ud835\udc2c \ud835\udc11\ud835\udc1e\ud835\udc20\ud835\udc20\ud835\udc1a\ud835\udc1e\ud835\udc2d\u00f3\ud835\udc27, \ud835\udc0b\ud835\udc1a\ud835\udc2d\ud835\udc22\ud835\udc27 \ud835\udc12\ud835\udc28\ud835\udc2e\ud835\udc25 \ud835\udc2d\ud835\udc28 \ud835\udc32\ud835\udc28\ud835\udc2e.",
+            "downloadable": false,
+            "download_count": 0,
+            "duration": 227079,
+            "full_duration": 227082,
+            "embeddable_by": "all",
+            "genre": "Latin",
+            "has_downloads_left": false,
+            "id": 2299156892,
+            "kind": "track",
+            "label_name": null,
+            "last_modified": "2026-05-10T00:03:15Z",
+            "license": "all-rights-reserved",
+            "likes_count": 2,
+            "permalink": "bandolera",
+            "permalink_url": "https://soundcloud.com/compi-flow/bandolera",
+            "playback_count": 34559,
+            "public": true,
+            "publisher_metadata": {
+                "id": 2299156892,
+                "urn": "soundcloud:tracks:2299156892",
+                "artist": "COMPI FLOW",
+                "isrc": "QT4BX2600006"
+            },
+            "purchase_title": null,
+            "purchase_url": null,
+            "release_date": null,
+            "reposts_count": 0,
+            "secret_token": null,
+            "sharing": "public",
+            "state": "finished",
+            "streamable": true,
+            "tag_list": "\"chicago,california,cali,boston,n.y,ny,new york,marc anthony,compiflow,flow,compi,compi flow,l.a,la,bad bunny,enrigue igzesia,don omar\"",
+            "title": "Bandolera",
+            "uri": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2299156892",
+            "urn": "soundcloud:tracks:2299156892",
+            "user_id": 1573125567,
+            "visuals": {
+                "urn": "soundcloud:tracks:2299156892",
+                "enabled": true,
+                "visuals": [
+                    {
+                        "urn": "soundcloud:visuals:264125553",
+                        "entry_time": 0,
+                        "visual_url": "https://i1.sndcdn.com/visuals-BGKIrlwBmyriyF83-hsL15Q-original.jpg"
+                    }
+                ],
+                "tracking": null
+            },
+            "waveform_url": "https://wave.sndcdn.com/dipv0AaCA9SS_m.json",
+            "display_date": "2026-04-11T12:40:45Z",
+            "media": {
+                "transcodings": [
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299156892/f8f0ba8b-d5bc-49c9-8086-6364b5b0ca95/stream/hls",
+                        "preset": "aac_160k",
+                        "duration": 227079,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299156892/6bd801b9-6c73-4277-8a8f-fef2eb663e91/stream/hls",
+                        "preset": "aac_96k",
+                        "duration": 227079,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "lq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299156892/b6507ab3-0f20-4355-9fc9-74916f6df0cc/stream/hls",
+                        "preset": "abr_sq",
+                        "duration": 227079,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpegurl"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299156892/ea2469bb-14c9-49b8-be09-3e72f575a216/stream/hls",
+                        "preset": "mp3_1_0",
+                        "duration": 227082,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299156892/ea2469bb-14c9-49b8-be09-3e72f575a216/stream/progressive",
+                        "preset": "mp3_1_0",
+                        "duration": 227082,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "progressive",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    }
+                ]
+            },
+            "station_urn": "soundcloud:system-playlists:track-stations:2299156892",
+            "station_permalink": "track-stations:2299156892",
+            "track_authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW8iOiJOTCIsInN1YiI6IiIsInJpZCI6Ijg1N2YyYzdhLWQwNzctNDRlZC1iNjI4LTE0NDc3MmM2YWUyMyIsImlhdCI6MTc4ODUyNDE4NH0.kitE4o4YNUh3ojBOH1iiuDWBAhgg7aJ2MsQHelB1Ei0",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE",
+            "user": {
+                "avatar_url": "https://i1.sndcdn.com/avatars-hulv4zB3NwHmDidC-qt5g1A-large.jpg",
+                "first_name": "",
+                "followers_count": 111,
+                "full_name": "",
+                "id": 1573125567,
+                "kind": "user",
+                "last_modified": "2026-07-05T21:33:55Z",
+                "last_name": "",
+                "permalink": "compi-flow",
+                "permalink_url": "https://soundcloud.com/compi-flow",
+                "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A1573125567",
+                "urn": "soundcloud:users:1573125567",
+                "username": "COMPI FLOW",
+                "verified": false,
+                "city": "New York",
+                "country_code": "US",
+                "badges": {
+                    "pro": false,
+                    "creator_mid_tier": false,
+                    "pro_unlimited": true,
+                    "verified": false
+                },
+                "station_urn": "soundcloud:system-playlists:artist-stations:1573125567",
+                "station_permalink": "artist-stations:1573125567"
+            }
+        },
+        {
+            "artwork_url": "https://i1.sndcdn.com/artworks-24KGtVfn57uaeXvA-AWd60A-large.jpg",
+            "caption": null,
+            "commentable": true,
+            "comment_count": 0,
+            "created_at": "2026-04-09T00:19:31Z",
+            "description": "Link to buy Debut Album No Advertisments, Download at ko-fi Link - https://ko-fi.com/s/0a76bbaf36\n\nFollow my socials for more -\n\nInstagram : https://instagram.openinapp.co/COMPI-FLOW-instagram/page - opens the app\n\nTiktok: https://openinapp.link/z1p1d - opens in app\n\n\ud835\udc13\ud835\udc21\ud835\udc1a\ud835\udc27\ud835\udc24s \ud835\udc1f\ud835\udc28\ud835\udc2b \ud835\udc32\ud835\udc28\ud835\udc2e\ud835\udc2b \ud835\udc00\ud835\udc2d\ud835\udc2d\ud835\udc1e\ud835\udc27\ud835\udc2d\ud835\udc22\ud835\udc28\ud835\udc27.\ud835\udc01\ud835\udc2b\ud835\udc22\ud835\udc27\ud835\udc20\ud835\udc22\ud835\udc27' \ud835\udc0d\ud835\udc1e\ud835\udc30 \ud835\udc06\ud835\udc1e\ud835\udc27\ud835\udc2b\ud835\udc1e \ud835\udc12\ud835\udc1a\ud835\udc25\ud835\udc2c\ud835\udc1a \ud835\udc05\ud835\udc2e\ud835\udc27\ud835\udc24, \ud835\udc02\ud835\udc25\ud835\udc1a\ud835\udc2c\ud835\udc2c\ud835\udc22\ud835\udc1c \ud835\udc12\ud835\udc28\ud835\udc2e\ud835\udc27\ud835\udc1d\ud835\udc2c \ud835\udc11\ud835\udc1e\ud835\udc20\ud835\udc20\ud835\udc1a\ud835\udc1e\ud835\udc2d\u00f3\ud835\udc27, \ud835\udc0b\ud835\udc1a\ud835\udc2d\ud835\udc22\ud835\udc27 \ud835\udc12\ud835\udc28\ud835\udc2e\ud835\udc25 \ud835\udc2d\ud835\udc28 \ud835\udc32\ud835\udc28\ud835\udc2e.",
+            "downloadable": false,
+            "download_count": 0,
+            "duration": 165736,
+            "full_duration": 165720,
+            "embeddable_by": "all",
+            "genre": "Latin",
+            "has_downloads_left": false,
+            "id": 2299169954,
+            "kind": "track",
+            "label_name": null,
+            "last_modified": "2026-05-10T00:03:57Z",
+            "license": "all-rights-reserved",
+            "likes_count": 2,
+            "permalink": "chillin-wit-da-hunnies",
+            "permalink_url": "https://soundcloud.com/compi-flow/chillin-wit-da-hunnies",
+            "playback_count": 31835,
+            "public": true,
+            "publisher_metadata": {
+                "id": 2299169954,
+                "urn": "soundcloud:tracks:2299169954",
+                "artist": "COMPI FLOW",
+                "isrc": "QT4BX2600019"
+            },
+            "purchase_title": null,
+            "purchase_url": null,
+            "release_date": null,
+            "reposts_count": 0,
+            "secret_token": null,
+            "sharing": "public",
+            "state": "finished",
+            "streamable": true,
+            "tag_list": "\"latin pop,pop,latin,daddy yankee,marc anthony,p.r,pr,puerto rico,new york,boston,chicago,Los Angeles,la,don omar,enrigue igzesia,bad bunny,flow,compi,compi flow,compiflow\"",
+            "title": "Chillin Wit Da Hunnies",
+            "uri": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2299169954",
+            "urn": "soundcloud:tracks:2299169954",
+            "user_id": 1573125567,
+            "visuals": {
+                "urn": "soundcloud:tracks:2299169954",
+                "enabled": true,
+                "visuals": [
+                    {
+                        "urn": "soundcloud:visuals:264125529",
+                        "entry_time": 0,
+                        "visual_url": "https://i1.sndcdn.com/visuals-Ubkldpa84uSeP3Hr-KKI0kw-original.jpg"
+                    }
+                ],
+                "tracking": null
+            },
+            "waveform_url": "https://wave.sndcdn.com/Vf36v0cNvQx9_m.json",
+            "display_date": "2026-04-11T12:40:54Z",
+            "media": {
+                "transcodings": [
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299169954/e98b7178-8f13-478f-97e9-542e88f089a6/stream/hls",
+                        "preset": "aac_160k",
+                        "duration": 165736,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299169954/381f1a57-d96a-46c9-a81b-43979cb03886/stream/hls",
+                        "preset": "aac_96k",
+                        "duration": 165736,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "lq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299169954/bf924689-7920-4ba8-baeb-4ebcc88b3e07/stream/hls",
+                        "preset": "abr_sq",
+                        "duration": 165736,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpegurl"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299169954/eec7d2cc-0c97-46a5-9fd9-1df22ca0d015/stream/hls",
+                        "preset": "mp3_1_0",
+                        "duration": 165720,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299169954/eec7d2cc-0c97-46a5-9fd9-1df22ca0d015/stream/progressive",
+                        "preset": "mp3_1_0",
+                        "duration": 165720,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "progressive",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    }
+                ]
+            },
+            "station_urn": "soundcloud:system-playlists:track-stations:2299169954",
+            "station_permalink": "track-stations:2299169954",
+            "track_authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW8iOiJOTCIsInN1YiI6IiIsInJpZCI6IjAyM2RkOGI4LWIwNTQtNGFmYS1hMTUyLWMyZmNkZTgwNjQzMiIsImlhdCI6MTc4ODUyNDE4NH0.UcZV06RLsQNn9FVZuwpuKPsp2G7ieSWyUF0YdCem7XQ",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE",
+            "user": {
+                "avatar_url": "https://i1.sndcdn.com/avatars-hulv4zB3NwHmDidC-qt5g1A-large.jpg",
+                "first_name": "",
+                "followers_count": 111,
+                "full_name": "",
+                "id": 1573125567,
+                "kind": "user",
+                "last_modified": "2026-07-05T21:33:55Z",
+                "last_name": "",
+                "permalink": "compi-flow",
+                "permalink_url": "https://soundcloud.com/compi-flow",
+                "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A1573125567",
+                "urn": "soundcloud:users:1573125567",
+                "username": "COMPI FLOW",
+                "verified": false,
+                "city": "New York",
+                "country_code": "US",
+                "badges": {
+                    "pro": false,
+                    "creator_mid_tier": false,
+                    "pro_unlimited": true,
+                    "verified": false
+                },
+                "station_urn": "soundcloud:system-playlists:artist-stations:1573125567",
+                "station_permalink": "artist-stations:1573125567"
+            }
+        },
+        {
+            "artwork_url": "https://i1.sndcdn.com/artworks-LU3ODsFFoyvZCLSa-lOvcBA-large.jpg",
+            "caption": null,
+            "commentable": true,
+            "comment_count": 0,
+            "created_at": "2026-04-09T01:39:11Z",
+            "description": "Link to buy Debut Album No Advertisments, Download at ko-fi Link - https://ko-fi.com/s/0a76bbaf36\n\nFollow my socials for more -\n\nInstagram : https://instagram.openinapp.co/COMPI-FLOW-instagram/page - opens the app\n\nTiktok: https://openinapp.link/z1p1d - opens in app\n\n\ud835\udc13\ud835\udc21\ud835\udc1a\ud835\udc27\ud835\udc24s \ud835\udc1f\ud835\udc28\ud835\udc2b \ud835\udc32\ud835\udc28\ud835\udc2e\ud835\udc2b \ud835\udc00\ud835\udc2d\ud835\udc2d\ud835\udc1e\ud835\udc27\ud835\udc2d\ud835\udc22\ud835\udc28\ud835\udc27.\ud835\udc01\ud835\udc2b\ud835\udc22\ud835\udc27\ud835\udc20\ud835\udc22\ud835\udc27' \ud835\udc0d\ud835\udc1e\ud835\udc30 \ud835\udc06\ud835\udc1e\ud835\udc27\ud835\udc2b\ud835\udc1e \ud835\udc12\ud835\udc1a\ud835\udc25\ud835\udc2c\ud835\udc1a \ud835\udc05\ud835\udc2e\ud835\udc27\ud835\udc24, \ud835\udc02\ud835\udc25\ud835\udc1a\ud835\udc2c\ud835\udc2c\ud835\udc22\ud835\udc1c \ud835\udc12\ud835\udc28\ud835\udc2e\ud835\udc27\ud835\udc1d\ud835\udc2c \ud835\udc11\ud835\udc1e\ud835\udc20\ud835\udc20\ud835\udc1a\ud835\udc1e\ud835\udc2d\u00f3\ud835\udc27, \ud835\udc0b\ud835\udc1a\ud835\udc2d\ud835\udc22\ud835\udc27 \ud835\udc12\ud835\udc28\ud835\udc2e\ud835\udc25 \ud835\udc2d\ud835\udc28 \ud835\udc32\ud835\udc28\ud835\udc2e.",
+            "downloadable": false,
+            "download_count": 0,
+            "duration": 200180,
+            "full_duration": 200176,
+            "embeddable_by": "all",
+            "genre": "Latin",
+            "has_downloads_left": false,
+            "id": 2299197929,
+            "kind": "track",
+            "label_name": null,
+            "last_modified": "2026-05-10T00:04:58Z",
+            "license": "all-rights-reserved",
+            "likes_count": 3,
+            "permalink": "destined-to-your-love",
+            "permalink_url": "https://soundcloud.com/compi-flow/destined-to-your-love",
+            "playback_count": 32303,
+            "public": true,
+            "publisher_metadata": {
+                "id": 2299197929,
+                "urn": "soundcloud:tracks:2299197929",
+                "artist": "COMPI FLOW",
+                "isrc": "QT4BX2600014"
+            },
+            "purchase_title": null,
+            "purchase_url": null,
+            "release_date": null,
+            "reposts_count": 0,
+            "secret_token": null,
+            "sharing": "public",
+            "state": "finished",
+            "streamable": true,
+            "tag_list": "\"daddy yankee,boston,chicago,p.r,pr,puerto rico,new york,marc anthony,enrigue igzesia,Los Angeles,don omor,bad bunny,latin pop,compi,flow,compi flow\"",
+            "title": "Destined to your Love",
+            "uri": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2299197929",
+            "urn": "soundcloud:tracks:2299197929",
+            "user_id": 1573125567,
+            "visuals": {
+                "urn": "soundcloud:tracks:2299197929",
+                "enabled": true,
+                "visuals": [
+                    {
+                        "urn": "soundcloud:visuals:264125511",
+                        "entry_time": 0,
+                        "visual_url": "https://i1.sndcdn.com/visuals-QABatPWN4C3h8rBB-XyK63g-original.jpg"
+                    }
+                ],
+                "tracking": null
+            },
+            "waveform_url": "https://wave.sndcdn.com/Fj8yRxuOwF9c_m.json",
+            "display_date": "2026-04-11T12:41:43Z",
+            "media": {
+                "transcodings": [
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299197929/bc060ccd-9b79-420c-bf30-90da8ad6f3db/stream/hls",
+                        "preset": "aac_160k",
+                        "duration": 200180,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299197929/41ee3522-8f43-42b2-84c0-8b4e46746c13/stream/hls",
+                        "preset": "aac_96k",
+                        "duration": 200180,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""
+                        },
+                        "quality": "lq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299197929/695b65bb-c48a-49d6-a28b-a5250d34b705/stream/hls",
+                        "preset": "abr_sq",
+                        "duration": 200180,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpegurl"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": false
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299197929/31663815-6bc7-4551-8d73-6eba25e5b4e3/stream/hls",
+                        "preset": "mp3_1_0",
+                        "duration": 200176,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "hls",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    },
+                    {
+                        "url": "https://api-v2.soundcloud.com/media/soundcloud:tracks:2299197929/31663815-6bc7-4551-8d73-6eba25e5b4e3/stream/progressive",
+                        "preset": "mp3_1_0",
+                        "duration": 200176,
+                        "snipped": false,
+                        "format": {
+                            "protocol": "progressive",
+                            "mime_type": "audio/mpeg"
+                        },
+                        "quality": "sq",
+                        "is_legacy_transcoding": true
+                    }
+                ]
+            },
+            "station_urn": "soundcloud:system-playlists:track-stations:2299197929",
+            "station_permalink": "track-stations:2299197929",
+            "track_authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW8iOiJOTCIsInN1YiI6IiIsInJpZCI6Ijg5YjViNTk5LTU4NTgtNDU5Mi1iMTkzLTkzODA0NTFiMGJkYiIsImlhdCI6MTc4ODUyNDE4NH0.d3Vk88lFExpk49XJDDoWoYJ1y24kC7HrLUUd_UNy6uA",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE",
+            "user": {
+                "avatar_url": "https://i1.sndcdn.com/avatars-hulv4zB3NwHmDidC-qt5g1A-large.jpg",
+                "first_name": "",
+                "followers_count": 111,
+                "full_name": "",
+                "id": 1573125567,
+                "kind": "user",
+                "last_modified": "2026-07-05T21:33:55Z",
+                "last_name": "",
+                "permalink": "compi-flow",
+                "permalink_url": "https://soundcloud.com/compi-flow",
+                "uri": "https://api.soundcloud.com/users/soundcloud%3Ausers%3A1573125567",
+                "urn": "soundcloud:users:1573125567",
+                "username": "COMPI FLOW",
+                "verified": false,
+                "city": "New York",
+                "country_code": "US",
+                "badges": {
+                    "pro": false,
+                    "creator_mid_tier": false,
+                    "pro_unlimited": true,
+                    "verified": false
+                },
+                "station_urn": "soundcloud:system-playlists:artist-stations:1573125567",
+                "station_permalink": "artist-stations:1573125567"
+            }
+        },
+        {
+            "id": 2299204430,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299975763,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299207856,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299220828,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299224098,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299228028,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299231355,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299232696,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299238159,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2299239257,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2124802053,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        },
+        {
+            "id": 2125635600,
+            "kind": "track",
+            "monetization_model": "AD_SUPPORTED",
+            "policy": "MONETIZE"
+        }
+    ],
+    "track_count": 17
+}

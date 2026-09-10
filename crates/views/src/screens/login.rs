@@ -1,4 +1,4 @@
-use crate::shared::popups::{AccountPicker, BrowserPicker, CookiePrompt};
+use crate::shared::popups::{AccountPicker, BrowserPicker, SecretPrompt};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClipboardItem, Context, Entity, FontWeight, IntoElement, Pixels, Render,
@@ -79,6 +79,10 @@ impl LoginView {
 
     fn start(&self, slug: &'static str, method: SignIn, cx: &mut Context<Self>) {
         self.acted(cx);
+        if matches!(method, SignIn::Secret) {
+            let hint = crate::shared::secret(slug).hint;
+            self.secret.update(cx, |input, cx| input.set_hint(hint, cx));
+        }
         self.session
             .update(cx, |session, cx| session.sign_in(slug, method, cx));
     }
@@ -106,7 +110,7 @@ impl LoginView {
             ),
             SignIn::Secret => (
                 format!("sign-in-{slug}-cookies"),
-                t!("login-connect-cookies"),
+                i18n::lookup(crate::shared::secret_label(slug), None),
             ),
             SignIn::Path(_) => (
                 format!("sign-in-{slug}-path"),
@@ -284,8 +288,8 @@ impl LoginView {
             )
     }
 
-    fn secret_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        CookiePrompt::new(self.secret.clone())
+    fn secret_prompt(&self, slug: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        SecretPrompt::new(self.secret.clone(), slug)
             .on_submit(cx.listener(|this, _, _, cx| this.submit(cx)))
             .on_cancel(cx.listener(|this, _, _, cx| this.abandon(cx)))
     }
@@ -326,17 +330,21 @@ impl LoginView {
 impl Render for LoginView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.session.read(cx).state().clone();
+        let signed_in_as = self
+            .session
+            .read(cx)
+            .profile()
+            .map(|profile| profile.display_name.clone());
         let pending = self.session.read(cx).is_pending();
         let providers: Vec<state::ProviderInfo> = self.session.read(cx).providers().collect();
         let guest = providers
-            .iter()
+            .get(self.tab)
             .filter(|info| {
                 info.options
                     .iter()
                     .any(|option| matches!(option, SignIn::Anonymous))
             })
-            .map(|info| info.slug)
-            .next();
+            .map(|info| info.slug);
         let waiting = match &state {
             SessionState::Authorizing(prompt) => !matches!(
                 prompt,
@@ -361,6 +369,18 @@ impl Render for LoginView {
                     }))
             })
             .collect::<Vec<_>>();
+        // self.tab always indexes providers; it is set from the same list
+        // above and clamped nowhere else, so this never falls to "".
+        let provider_name = providers
+            .get(self.tab)
+            .map(|info| info.name)
+            .unwrap_or_default();
+        let secret_slug = providers
+            .iter()
+            .find(|info| info.pending)
+            .or_else(|| providers.get(self.tab))
+            .map(|info| info.slug)
+            .unwrap_or_default();
         let column = providers.into_iter().nth(self.tab).map(|info| Column {
             slug: info.slug,
             name: info.name,
@@ -381,7 +401,10 @@ impl Render for LoginView {
                 t!("login-signed-out")
             }
             SessionState::Authorizing(_) => t!("login-authorizing"),
-            SessionState::SignedIn(profile) => t!("login-signed-in", name = &profile.display_name),
+            SessionState::SignedIn => match &signed_in_as {
+                Some(name) => t!("login-signed-in", name = name.as_str()),
+                None => t!("login-signed-out"),
+            },
             SessionState::Failed(_) => t!("login-signed-out"),
         };
 
@@ -434,7 +457,11 @@ impl Render for LoginView {
                     ),
             )
             .when_some(failure, |this, failure| {
-                this.child(crate::shared::trouble::trouble(failure, true))
+                this.child(crate::shared::trouble::trouble(
+                    failure,
+                    provider_name,
+                    true,
+                ))
             })
             .when_some(code, |this, (code, url)| {
                 this.child(self.code_prompt(code, url, cx).into_any_element())
@@ -462,7 +489,7 @@ impl Render for LoginView {
             })
             .when(orphan, |this| this.child(self.consent(cx)))
             .when(secret, |this| {
-                this.child(self.secret_prompt(cx).into_any_element())
+                this.child(self.secret_prompt(secret_slug, cx).into_any_element())
             })
             .when_some(browsers, |this, (slug, names)| {
                 this.child(self.browser_modal(slug, names, cx).into_any_element())

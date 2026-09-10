@@ -10,8 +10,8 @@ use music::{Album, GenreItem, GenreSection, Playlist};
 use router::{Destination, navigate};
 use state::Playback;
 use ui::{
-    ActiveTheme as _, Button, Card, Deck, Glide, Mode, Popup, Skeleton, Text, Viewport, heading,
-    snapped,
+    ActiveTheme as _, Button, Card, Deck, Glide, Mode, Popup, Skeleton, Text, Viewport, eyebrow,
+    heading, snapped,
 };
 
 use crate::shared::album_grid::CardGrid;
@@ -216,8 +216,10 @@ impl Shelves {
                 div()
                     .flex()
                     .items_end()
+                    .gap_2()
                     .h(head(window, cx))
-                    .child(heading(SharedString::from(section.title.clone()), cx)),
+                    .child(heading(SharedString::from(section.title.clone()), cx))
+                    .children(credit(section, cx)),
             )
             .child(spread(cards, lanes))
             .into_any_element()
@@ -262,7 +264,15 @@ impl Shelves {
                     .justify_between()
                     .gap_4()
                     .h(head(window, cx))
-                    .child(heading(SharedString::from(section.title.clone()), cx))
+                    .child(
+                        div()
+                            .flex()
+                            .items_end()
+                            .gap_2()
+                            .min_w_0()
+                            .child(heading(SharedString::from(section.title.clone()), cx))
+                            .children(credit(section, cx)),
+                    )
                     .when(crowded, |this| {
                         this.child(self.arrows(place, &handle, &glide, me))
                     }),
@@ -480,6 +490,12 @@ pub(crate) fn grid(
 
 fn lanes(width: Pixels) -> usize {
     ((width / PLATE).floor().max(1.) as usize).min(LANES)
+}
+
+fn credit(section: &GenreSection, cx: &App) -> Option<Div> {
+    let provider = section.provider.clone()?;
+
+    Some(eyebrow(provider, cx).pb(px(2.)))
 }
 
 fn spread(cards: Vec<AnyElement>, lanes: usize) -> Div {

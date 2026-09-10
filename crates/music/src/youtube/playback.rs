@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use ytmusic::YtMusic;
 
+use crate::audio::trim;
 use crate::audio::{Output, RAMP, SmoothGain, Trimmed, Volume};
 use crate::spectrum::Spectrum;
-use crate::youtube::trim;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
 
 const NORMAL_CAP: f32 = 1.0;

@@ -5,7 +5,7 @@ use music::SignInProblem;
 use state::Failure;
 use ui::Notice;
 
-pub(crate) fn trouble(failure: Failure, centered: bool) -> AnyElement {
+pub(crate) fn trouble(failure: Failure, provider: &str, centered: bool) -> AnyElement {
     let Failure {
         problem,
         summary,
@@ -13,7 +13,11 @@ pub(crate) fn trouble(failure: Failure, centered: bool) -> AnyElement {
     } = failure;
 
     let message = match problem {
-        Some(problem) => i18n::lookup(reason(problem), None),
+        Some(problem) => {
+            let mut args = i18n::FluentArgs::new();
+            args.set("provider", provider.to_owned());
+            i18n::lookup(reason(problem), Some(&args))
+        }
         None => SharedString::from(sentence(summary, detail)),
     };
 
@@ -56,6 +60,7 @@ fn reason(problem: SignInProblem) -> &'static str {
         SignInProblem::Premium => "login-problem-premium",
         SignInProblem::Region => "login-problem-region",
         SignInProblem::Credentials => "login-problem-credentials",
+        SignInProblem::Secret => "login-problem-secret",
         SignInProblem::Network => "login-problem-network",
         SignInProblem::Cancelled => "login-problem-cancelled",
         SignInProblem::Refused => "login-problem-refused",

@@ -53,17 +53,14 @@ impl Detail {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedOut => {
-                if !this.id.as_deref().is_some_and(music::is_local_id) {
+            SessionEvent::SignedOut(slug) => {
+                if this.shown(slug).is_some() {
                     this.clear();
                     cx.notify();
                 }
             }
-            SessionEvent::SignedIn => {
-                if let (Some(kind), Some(id)) = (
-                    this.kind,
-                    this.id.clone().filter(|id| !music::is_local_id(id)),
-                ) {
+            SessionEvent::SignedIn(slug) => {
+                if let (Some(kind), Some(id)) = (this.kind, this.shown(slug)) {
                     this.clear();
                     match kind {
                         Collection::Album => this.open_album(&id, cx),
@@ -71,19 +68,7 @@ impl Detail {
                     }
                 }
             }
-            SessionEvent::Reconnected => {}
-            SessionEvent::LocalChanged => {
-                if let (Some(kind), Some(id)) = (
-                    this.kind,
-                    this.id.clone().filter(|id| music::is_local_id(id)),
-                ) {
-                    this.clear();
-                    match kind {
-                        Collection::Album => this.open_album(&id, cx),
-                        Collection::Playlist => this.open_playlist(&id, cx),
-                    }
-                }
-            }
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
 
@@ -185,10 +170,7 @@ impl Detail {
 
     pub fn open_album(&mut self, id: &str, cx: &mut Context<Self>) {
         let library = self.library.read(cx);
-        let known = library
-            .album(id)
-            .or_else(|| library.local_album(id))
-            .cloned();
+        let known = library.album(id).cloned();
         let header = known.as_ref().map(album_header);
         if self.open(Collection::Album, id, header, cx) && !self.loaded {
             self.album = known;
@@ -345,6 +327,12 @@ impl Detail {
             }
         }
         self.loaded = true;
+    }
+
+    fn shown(&self, slug: &str) -> Option<String> {
+        self.id
+            .clone()
+            .filter(|id| music::tag::slug_of(id) == Some(slug))
     }
 
     fn clear(&mut self) {

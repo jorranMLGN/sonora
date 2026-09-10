@@ -155,7 +155,12 @@ impl DetailView {
                 match trail.read(cx).can_go_back() {
                     true => router::back(cx),
                     false => router::navigate(
-                        router::Destination::Library(router::LibraryTab::Playlists),
+                        match Sonora::global(cx).session.read(cx).slug_for(id) {
+                            Some(slug) => {
+                                router::Destination::Library(slug, router::LibraryTab::Playlists)
+                            }
+                            None => router::Destination::Home,
+                        },
                         cx,
                     ),
                 }

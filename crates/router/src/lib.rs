@@ -8,24 +8,18 @@ pub use uri::destination;
 
 use gpui::{App, AppContext as _, Entity, Global, SharedString};
 
+pub const LOCAL: &str = "local";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibraryTab {
     Songs,
-    Albums,
-    Playlists,
-    Artists,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LocalTab {
-    Songs,
     Favorites,
     Albums,
-    Artists,
     Playlists,
+    Artists,
 }
 
-impl LocalTab {
+impl LibraryTab {
     pub const ALL: [Self; 5] = [
         Self::Favorites,
         Self::Songs,
@@ -33,6 +27,13 @@ impl LocalTab {
         Self::Artists,
         Self::Playlists,
     ];
+
+    pub fn tabs(all_tracks: bool) -> Vec<Self> {
+        Self::ALL
+            .into_iter()
+            .filter(|tab| all_tracks || *tab != Self::Songs)
+            .collect()
+    }
 
     pub fn key(self) -> &'static str {
         match self {
@@ -49,27 +50,23 @@ impl LocalTab {
 pub enum NavEntry {
     Home,
     Search,
-    Library,
     History,
-    Local,
+    Library(&'static str),
 }
 
 impl NavEntry {
-    pub const ALL: [Self; 5] = [
-        Self::Home,
-        Self::Search,
-        Self::Library,
-        Self::History,
-        Self::Local,
-    ];
+    pub fn entries(slugs: &[&'static str]) -> Vec<Self> {
+        let mut entries = vec![Self::Home, Self::Search, Self::History];
+        entries.extend(slugs.iter().copied().map(Self::Library));
+        entries
+    }
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Home => "home",
             Self::Search => "search",
-            Self::Library => "library",
             Self::History => "history",
-            Self::Local => "local",
+            Self::Library(slug) => slug,
         }
     }
 
@@ -77,9 +74,9 @@ impl NavEntry {
         match self {
             Self::Home => "nav-home",
             Self::Search => "nav-search",
-            Self::Library => "nav-library",
             Self::History => "nav-history",
-            Self::Local => "nav-local",
+            Self::Library(slug) if slug == LOCAL => "nav-local",
+            Self::Library(_) => "nav-library",
         }
     }
 }
@@ -135,21 +132,49 @@ impl Screen {
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|screen| screen.id() == id)
+        let name = music::tag::split(id).map_or(id, |(_, name)| name);
+        Self::ALL.into_iter().find(|screen| screen.id() == name)
     }
 
-    pub fn destination(self) -> Destination {
+    pub fn stored(self, slug: Option<&str>) -> String {
+        match (self.follows_provider(), slug) {
+            (true, Some(slug)) => format!("{slug}:{}", self.id()),
+            _ => self.id().to_owned(),
+        }
+    }
+
+    pub fn destination(self, slug: &'static str) -> Destination {
         match self {
             Self::Home => Destination::Home,
             Self::Search => Destination::Search,
             Self::History => Destination::History,
-            Self::Songs => Destination::Library(LibraryTab::Songs),
-            Self::Albums => Destination::Library(LibraryTab::Albums),
-            Self::Playlists => Destination::Library(LibraryTab::Playlists),
-            Self::Artists => Destination::Library(LibraryTab::Artists),
-            Self::Imported => Destination::Local(LocalTab::Songs),
+            Self::Songs => Destination::Library(slug, LibraryTab::Favorites),
+            Self::Albums => Destination::Library(slug, LibraryTab::Albums),
+            Self::Playlists => Destination::Library(slug, LibraryTab::Playlists),
+            Self::Artists => Destination::Library(slug, LibraryTab::Artists),
+            Self::Imported => Destination::Library(LOCAL, LibraryTab::Songs),
         }
     }
+
+    fn follows_provider(self) -> bool {
+        matches!(
+            self,
+            Self::Songs | Self::Albums | Self::Playlists | Self::Artists
+        )
+    }
+}
+
+pub fn startup(stored: &str, remembered: &str, slugs: &[&'static str]) -> Destination {
+    let known = |slug: &str| music::tag::SLUGS.into_iter().find(|found| *found == slug);
+    let slug = music::tag::slug_of(stored)
+        .and_then(known)
+        .filter(|slug| *slug == remembered || slugs.contains(slug))
+        .or_else(|| known(remembered))
+        .or_else(|| slugs.first().copied())
+        .unwrap_or(music::tag::SLUGS[0]);
+    Screen::from_id(stored)
+        .unwrap_or(Screen::Home)
+        .destination(slug)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,8 +190,7 @@ pub enum SettingsTab {
 pub enum Destination {
     Home,
     History,
-    Library(LibraryTab),
-    Local(LocalTab),
+    Library(&'static str, LibraryTab),
     Album(SharedString),
     Song(SharedString),
     Playlist(SharedString),
@@ -193,9 +217,8 @@ impl From<&ui::Pin> for Destination {
 impl Destination {
     pub fn same_section(&self, other: &Destination) -> bool {
         match (self, other) {
-            (Destination::Library(_), Destination::Library(_))
-            | (Destination::Local(_), Destination::Local(_))
-            | (Destination::Settings(_), Destination::Settings(_)) => true,
+            (Destination::Library(here, _), Destination::Library(there, _)) => here == there,
+            (Destination::Settings(_), Destination::Settings(_)) => true,
             _ => self == other,
         }
     }

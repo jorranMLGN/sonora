@@ -1,0 +1,548 @@
+use std::time::Duration;
+
+use serde::Deserialize;
+
+use crate::models::{
+    Album as AlbumModel, ArtistRef, Playlist as PlaylistModel, ReleaseType, Track as Model,
+};
+
+/// The envelope every v2 listing endpoint returns.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Page<T> {
+    #[serde(default = "Vec::new")]
+    pub collection: Vec<T>,
+    // pagination not implemented yet
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub next_href: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct User {
+    pub id: u64,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub permalink_url: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub followers_count: Option<u64>,
+    #[serde(default)]
+    pub followings_count: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Track {
+    pub id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub streamable: bool,
+    #[serde(default)]
+    pub policy: String,
+    #[serde(default)]
+    pub playback_count: Option<u64>,
+    #[serde(default)]
+    pub artwork_url: Option<String>,
+    #[serde(default)]
+    pub permalink_url: Option<String>,
+    #[serde(default)]
+    pub genre: Option<String>,
+    #[serde(default)]
+    pub media: Media,
+    pub user: User,
+}
+
+/// The set of encodings a track is offered in. Only `playback::pick` reads
+/// this; every other conversion in this module ignores it.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Media {
+    #[serde(default)]
+    pub transcodings: Vec<Transcoding>,
+}
+
+/// One offered encoding of a track. `url` here is not the audio itself: it
+/// answers with `{"url": "<cdn url>"}` when fetched, and that second URL is
+/// the actual stream (or, for `hls`, an `.m3u8` playlist of segment URLs).
+#[derive(Clone, Debug, Deserialize)]
+pub struct Transcoding {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub preset: String,
+    #[serde(default)]
+    pub format: Format,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Format {
+    #[serde(default)]
+    pub protocol: String,
+}
+
+pub fn saved_artist(raw: User) -> crate::SavedArtist {
+    crate::SavedArtist {
+        id: raw.id.to_string(),
+        name: raw.username,
+        cover: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        added_at: None,
+    }
+}
+
+/// Converts a fetched user into an artist page. SoundCloud has no artist
+/// discography endpoint reachable from a user id, so `albums` stays empty;
+/// `top_tracks` is supplied by the caller, which is the one that knows
+/// whether `/toptracks` or its fallback answered.
+pub fn artist(raw: User, top_tracks: Vec<Model>) -> crate::Artist {
+    crate::Artist {
+        name: raw.username,
+        cover_large: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        biography: raw.description.filter(|bio| !bio.is_empty()),
+        monthly_listeners: None,
+        top_tracks,
+        albums: Vec::new(),
+    }
+}
+
+/// Converts a fetched user into the lighter artist-profile view.
+///
+/// `/users/{id}/related_artists` returns 404 on this API, so unlike
+/// `spotify::artists::profile` this carries no related-artist list.
+pub fn artist_profile(raw: User) -> crate::ArtistProfile {
+    crate::ArtistProfile {
+        name: raw.username,
+        cover_large: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        biography: raw.description.filter(|bio| !bio.is_empty()),
+    }
+}
+
+pub fn user_detail(raw: User) -> crate::UserDetail {
+    crate::UserDetail {
+        id: raw.id.to_string(),
+        name: raw.username,
+        avatar: artwork(raw.avatar_url.as_deref(), "t500x500"),
+        followers: raw.followers_count,
+        following: raw.followings_count,
+        playlists: Vec::new(),
+    }
+}
+
+// filename substitution, not a request
+pub fn artwork(url: Option<&str>, size: &str) -> Option<String> {
+    let url = url?;
+    Some(match url.rsplit_once("-large.") {
+        Some((head, ext)) => format!("{head}-{size}.{ext}"),
+        None => url.to_string(),
+    })
+}
+
+pub fn track(raw: Track) -> Model {
+    let artist = raw.user.username.clone();
+    Model {
+        id: Some(raw.id.to_string()),
+        name: raw.title,
+        playable: raw.streamable && raw.policy != "BLOCK" && raw.policy != "SNIP",
+        artists: artist.clone(),
+        artist_refs: vec![ArtistRef {
+            name: artist,
+            id: Some(raw.user.id.to_string()),
+        }],
+        album: String::new(),
+        album_id: None,
+        cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        duration: Duration::from_millis(raw.duration),
+        added_at: None,
+        added_by: None,
+        playcount: raw.playback_count,
+        popularity: 0,
+        explicit: false,
+        track_number: 0,
+        disc_number: 1,
+        tags: raw.genre.into_iter().collect(),
+        languages: Vec::new(),
+        credits: Vec::new(),
+    }
+}
+
+/// One entry in a playlist's embedded track list.
+///
+/// SoundCloud inlines only the first five tracks in full; the rest arrive as
+/// id-and-policy stubs that a later task resolves in one batch request. Any
+/// entry lacking `user` falls through to `Stub` regardless of what other
+/// fields it carries, so those fields are silently discarded.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Entry {
+    Full(Box<Track>),
+    Stub(Stub),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Stub {
+    pub id: u64,
+}
+
+/// The id of every entry, full or stub, in the order the playlist gives them.
+pub fn entry_ids(entries: &[Entry]) -> Vec<u64> {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            Entry::Full(track) => track.id,
+            Entry::Stub(stub) => stub.id,
+        })
+        .collect()
+}
+
+/// A liked track as `/users/{id}/track_likes` wraps it.
+///
+/// `created_at` here is when the user liked the track, not when it was
+/// uploaded — that second timestamp lives inside `track` and must not be
+/// confused with this one.
+#[derive(Clone, Debug, Deserialize)]
+pub struct TrackLike {
+    // When the track was liked. `Track::added_at` wants exactly this, but
+    // no date parser is reachable from this crate, so nothing converts it
+    // yet; it stays here for the test that pins down the trap.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub created_at: Option<String>,
+    pub track: Track,
+}
+
+/// A liked set as `/users/{id}/playlist_likes` wraps it.
+///
+/// Same trap as `TrackLike`: `created_at` is when the user liked the set.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PlaylistLike {
+    // Same trap as `TrackLike::created_at`: this is when the set was liked,
+    // not created. It would fill `Album::added_at`, but no date parser is
+    // reachable from this crate, so nothing consumes it yet.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub created_at: Option<String>,
+    pub playlist: Playlist,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Playlist {
+    pub id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub set_type: String,
+    #[serde(default)]
+    pub sharing: String,
+    #[serde(default)]
+    pub track_count: u32,
+    #[serde(default)]
+    pub artwork_url: Option<String>,
+    #[serde(default)]
+    pub permalink_url: Option<String>,
+    #[serde(default)]
+    pub release_date: Option<String>,
+    #[serde(default)]
+    pub tracks: Vec<Entry>,
+    pub user: User,
+}
+
+/// Maps a SoundCloud `set_type` onto the shared release model.
+///
+/// A set with no recognised type is a plain playlist, not an album.
+pub fn release_type(set_type: &str) -> Option<ReleaseType> {
+    match set_type {
+        "album" => Some(ReleaseType::Album),
+        "ep" => Some(ReleaseType::Ep),
+        "single" => Some(ReleaseType::Single),
+        "compilation" => Some(ReleaseType::Compilation),
+        _ => None,
+    }
+}
+
+pub fn is_album(raw: &Playlist) -> bool {
+    release_type(&raw.set_type).is_some()
+}
+
+pub fn playlist(raw: Playlist) -> PlaylistModel {
+    PlaylistModel {
+        id: raw.id.to_string(),
+        name: raw.title,
+        owner: raw.user.username,
+        owner_id: raw.user.id.to_string(),
+        owned: false,
+        collaborative: false,
+        blend: false,
+        public: raw.sharing == "public",
+        cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        track_count: raw.track_count,
+        modified_at: None,
+    }
+}
+
+/// Converts a set the caller has already confirmed is an album.
+///
+/// The caller must check `is_album(&raw)` first; a plain playlist's
+/// `set_type` does not map onto a `ReleaseType` and this treats that as a
+/// caller bug, not a value to guess at.
+pub fn album(raw: Playlist) -> AlbumModel {
+    debug_assert!(
+        is_album(&raw),
+        "album() called on set_type {:?}, which is not an album; check is_album() first",
+        raw.set_type
+    );
+    let artist = raw.user.username.clone();
+    let release_type = release_type(&raw.set_type).unwrap_or(ReleaseType::Album);
+    AlbumModel {
+        id: raw.id.to_string(),
+        name: raw.title,
+        artists: artist.clone(),
+        artist_refs: vec![ArtistRef {
+            name: artist,
+            id: Some(raw.user.id.to_string()),
+        }],
+        cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        cover_large: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        release_type,
+        year: 0,
+        track_count: raw.track_count,
+        release_date: raw.release_date.unwrap_or_default(),
+        label: String::new(),
+        copyrights: Vec::new(),
+        added_at: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Entry, Playlist, Track as Raw, User, album, artist, artist_profile, artwork, entry_ids,
+        is_album, playlist, release_type, track, user_detail,
+    };
+
+    fn fixture() -> Raw {
+        let json = include_str!("fixtures/track.json");
+        serde_json::from_str(json).expect("the captured track fixture must parse")
+    }
+
+    #[test]
+    fn parses_the_captured_track() {
+        let raw = fixture();
+        assert!(raw.id > 0);
+        assert!(!raw.title.is_empty());
+    }
+
+    #[test]
+    fn converts_the_captured_track() {
+        let converted = track(fixture());
+        assert!(converted.id.is_some());
+        assert!(!converted.name.is_empty());
+        assert!(!converted.artists.is_empty());
+        assert!(converted.duration.as_millis() > 0);
+        assert_eq!(converted.disc_number, 1);
+        assert!(!converted.explicit);
+        assert!(converted.album.is_empty());
+        assert!(converted.album_id.is_none());
+    }
+
+    #[test]
+    fn refuses_a_blocked_track() {
+        let mut raw = fixture();
+        raw.policy = "BLOCK".to_string();
+        assert!(!track(raw).playable);
+    }
+
+    #[test]
+    fn refuses_a_snipped_track() {
+        let mut raw = fixture();
+        raw.policy = "SNIP".to_string();
+        assert!(!track(raw).playable);
+    }
+
+    #[test]
+    fn refuses_an_unstreamable_track() {
+        let mut raw = fixture();
+        raw.streamable = false;
+        assert!(!track(raw).playable);
+    }
+
+    #[test]
+    fn upgrades_the_artwork_size() {
+        let url = artwork(
+            Some("https://i1.sndcdn.com/artworks-abc-large.jpg"),
+            "t500x500",
+        );
+        assert_eq!(
+            url.as_deref(),
+            Some("https://i1.sndcdn.com/artworks-abc-t500x500.jpg")
+        );
+    }
+
+    #[test]
+    fn leaves_an_unsized_artwork_alone() {
+        let url = artwork(Some("https://i1.sndcdn.com/artworks-abc.jpg"), "t500x500");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://i1.sndcdn.com/artworks-abc.jpg")
+        );
+    }
+
+    #[test]
+    fn has_no_artwork_without_a_url() {
+        assert!(artwork(None, "t500x500").is_none());
+    }
+
+    #[test]
+    fn an_unknown_policy_stays_playable() {
+        let mut raw = fixture();
+        raw.policy = "SOMETHING_ELSE".to_string();
+        assert!(
+            track(raw).playable,
+            "a denylist must let an unrecognised policy through; an allowlist would not"
+        );
+    }
+
+    #[test]
+    fn maps_the_known_set_types() {
+        use crate::models::ReleaseType;
+        assert_eq!(release_type("album"), Some(ReleaseType::Album));
+        assert_eq!(release_type("ep"), Some(ReleaseType::Ep));
+        assert_eq!(release_type("single"), Some(ReleaseType::Single));
+        assert_eq!(release_type("compilation"), Some(ReleaseType::Compilation));
+    }
+
+    #[test]
+    fn treats_an_unknown_set_type_as_a_playlist() {
+        assert_eq!(release_type(""), None);
+        assert_eq!(release_type("playlist"), None);
+    }
+
+    #[test]
+    fn recognises_the_captured_album() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_album.json")).unwrap();
+        assert!(is_album(&raw));
+        let converted = album(raw);
+        assert!(!converted.name.is_empty());
+        assert!(!converted.artists.is_empty());
+    }
+
+    #[test]
+    fn recognises_the_captured_set_as_a_playlist() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_set.json")).unwrap();
+        assert!(!is_album(&raw));
+        let converted = playlist(raw);
+        assert!(!converted.name.is_empty());
+        assert!(!converted.owner.is_empty());
+    }
+
+    #[test]
+    fn reads_visibility_from_sharing() {
+        let mut raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_set.json")).unwrap();
+        raw.sharing = "private".to_string();
+        assert!(!playlist(raw.clone()).public);
+        raw.sharing = "public".to_string();
+        assert!(playlist(raw).public);
+    }
+
+    #[test]
+    fn parses_a_playlist_of_mixed_full_and_stub_entries() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_album.json")).unwrap();
+        assert_eq!(raw.tracks.len(), 17, "the album fixture has 17 entries");
+        let full = raw
+            .tracks
+            .iter()
+            .filter(|e| matches!(e, Entry::Full(_)))
+            .count();
+        let stub = raw
+            .tracks
+            .iter()
+            .filter(|e| matches!(e, Entry::Stub(_)))
+            .count();
+        assert_eq!((full, stub), (5, 12), "only the first five arrive in full");
+    }
+
+    #[test]
+    #[should_panic(expected = "which is not an album")]
+    fn album_panics_on_a_plain_playlist_in_debug_builds() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_set.json")).unwrap();
+        album(raw);
+    }
+
+    #[test]
+    fn lists_entry_ids_in_playlist_order() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_set.json")).unwrap();
+        let ids = entry_ids(&raw.tracks);
+        assert_eq!(ids.len(), raw.tracks.len());
+        assert!(ids.iter().all(|id| *id > 0));
+    }
+
+    #[test]
+    fn parses_a_search_page() {
+        let page: super::Page<Raw> =
+            serde_json::from_str(include_str!("fixtures/search_tracks.json")).unwrap();
+        assert_eq!(page.collection.len(), 5);
+        assert!(page.collection.iter().all(|t| t.id > 0));
+        assert!(
+            page.next_href.is_some(),
+            "the fixture was captured with more results to come"
+        );
+    }
+
+    fn user_fixture() -> User {
+        serde_json::from_str(include_str!("fixtures/user.json"))
+            .expect("the captured user fixture must parse")
+    }
+
+    #[test]
+    fn parses_the_captured_user() {
+        let raw = user_fixture();
+        assert!(raw.id > 0);
+        assert!(!raw.username.is_empty());
+        assert!(raw.permalink_url.is_some());
+        assert!(raw.description.is_some());
+        assert!(raw.followers_count.is_some());
+        assert!(raw.followings_count.is_some());
+    }
+
+    #[test]
+    fn converts_a_user_into_an_artist() {
+        let top_tracks = vec![track(fixture())];
+        let converted = artist(user_fixture(), top_tracks.clone());
+        assert_eq!(converted.name, user_fixture().username);
+        assert!(converted.cover_large.is_some());
+        assert!(converted.biography.is_some());
+        assert_eq!(converted.top_tracks.len(), top_tracks.len());
+        assert!(
+            converted.albums.is_empty(),
+            "soundcloud has no discography endpoint reachable from a user id"
+        );
+    }
+
+    #[test]
+    fn converts_a_user_into_an_artist_profile_with_no_related_artists() {
+        let converted = artist_profile(user_fixture());
+        assert_eq!(converted.name, user_fixture().username);
+        assert!(converted.cover_large.is_some());
+        assert!(converted.biography.is_some());
+    }
+
+    #[test]
+    fn converts_a_user_into_a_user_detail() {
+        let converted = user_detail(user_fixture());
+        assert_eq!(converted.id, user_fixture().id.to_string());
+        assert_eq!(converted.name, user_fixture().username);
+        assert!(converted.avatar.is_some());
+        assert!(converted.followers.is_some());
+        assert!(converted.following.is_some());
+        assert!(converted.playlists.is_empty());
+    }
+}
