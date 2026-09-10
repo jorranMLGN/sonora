@@ -17,7 +17,7 @@ use router::{
 use state::{AppSettings, Origin, Playback, PlaybackState, Session, Sonora};
 
 use crate::shared::menus::{ItemMenu, pin_menu};
-use crate::shared::nav_label;
+use crate::shared::{nav_label, provider_logo};
 
 const SETTINGS_TABS: [(&str, SettingsTab); 5] = [
     ("settings-tab-general", SettingsTab::General),
@@ -530,10 +530,7 @@ fn nav(session: &Session) -> Vec<(Option<NavEntry>, &'static str, Destination)> 
     nav.extend(libraries(session).map(|slug| {
         (
             Some(NavEntry::Library(slug)),
-            match slug == LOCAL {
-                true => "icons/file-music.svg",
-                false => "icons/library-big.svg",
-            },
+            provider_logo(slug),
             Destination::Library(slug, LibraryTab::Favorites),
         )
     }));
