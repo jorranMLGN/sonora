@@ -1385,13 +1385,13 @@ impl Playback {
         self.seek_on_play = Some(at);
     }
 
-    fn ask_for_reconnect(&mut self, cx: &mut Context<Self>) -> bool {
+    fn ask_for_reconnect(&mut self, slug: &'static str, cx: &mut Context<Self>) -> bool {
         if self.track.is_none() {
             return false;
         }
         self.awaiting_reconnect = self
             .session
-            .update(cx, |session, cx| session.reconnect_if_stale(cx));
+            .update(cx, |session, cx| session.reconnect_if_stale(slug, cx));
         self.awaiting_reconnect
     }
 
@@ -1526,7 +1526,7 @@ impl Playback {
                 cx.emit(PlaybackEvent::EndedPlayback);
                 self.advance(ended, cx);
             }
-            BackendEvent::Unavailable if self.ask_for_reconnect(cx) => {
+            BackendEvent::Unavailable if self.ask_for_reconnect(slug, cx) => {
                 self.state = PlaybackState::Loading;
                 log::warn!("playback: the provider went stale, waiting for a reconnect");
             }

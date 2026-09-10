@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,9 +99,9 @@ pub struct Session {
     input: Option<UnboundedSender<String>>,
     local_provider: Arc<dyn MusicProvider>,
     watch: Option<Task<()>>,
-    reconnect: Option<Task<()>>,
-    reconnecting: bool,
-    attempt: usize,
+    reconnect: HashMap<&'static str, Task<()>>,
+    reconnecting: HashSet<&'static str>,
+    attempt: HashMap<&'static str, usize>,
 }
 
 impl EventEmitter<SessionEvent> for Session {}
@@ -134,9 +134,9 @@ impl Session {
             input: None,
             local_provider,
             watch: None,
-            reconnect: None,
-            reconnecting: false,
-            attempt: 0,
+            reconnect: HashMap::new(),
+            reconnecting: HashSet::new(),
+            attempt: HashMap::new(),
         };
         session.restore_local(cx);
         session
@@ -229,9 +229,7 @@ impl Session {
         if self.active == Some(index) && matches!(self.state, SessionState::SignedIn) {
             return;
         }
-        self.reconnect = None;
-        self.reconnecting = false;
-        self.attempt = 0;
+        self.stop_reconnect(self.providers[index].slug());
         self.active = Some(index);
         self.restore(cx);
     }
@@ -523,10 +521,6 @@ impl Session {
     }
 
     fn release(&mut self, cx: &mut Context<Self>) {
-        self.watch = None;
-        self.reconnect = None;
-        self.reconnecting = false;
-        self.attempt = 0;
         self.prompt_task = None;
         self.input = None;
         if let Some(index) = self.awaiting.take() {
@@ -537,6 +531,7 @@ impl Session {
         if let Some(slug) = released {
             self.tasks.remove(slug);
             self.connected.remove(slug);
+            self.stop_reconnect(slug);
         }
         self.playcounts = false;
         self.state = SessionState::SignedOut;
@@ -582,7 +577,7 @@ impl Session {
         self.connect(slug, session);
         self.warn_expired(slug, expired, cx);
         self.state = SessionState::SignedIn;
-        self.attempt = 0;
+        self.attempt.remove(slug);
         self.start_heartbeat(cx);
         cx.notify();
         cx.emit(SessionEvent::SignedIn(slug));
@@ -592,10 +587,7 @@ impl Session {
         let slug = self.providers[index].slug();
         self.connected.remove(slug);
         self.playcounts = false;
-        self.watch = None;
-        self.reconnect = None;
-        self.reconnecting = false;
-        self.attempt = 0;
+        self.stop_reconnect(slug);
         cx.emit(SessionEvent::SignedOut(slug));
     }
 
@@ -604,7 +596,7 @@ impl Session {
             loop {
                 cx.background_executor().timer(HEARTBEAT).await;
                 if this
-                    .update(cx, |this, cx| this.reconnect_if_stale(cx))
+                    .update(cx, |this, cx| this.reconnect_stale(cx))
                     .is_err()
                 {
                     return;
@@ -613,47 +605,77 @@ impl Session {
         }));
     }
 
-    pub fn reconnect_if_stale(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.reconnecting {
+    /// Forgets any reconnect in flight for one provider.
+    fn stop_reconnect(&mut self, slug: &str) {
+        self.reconnect.remove(slug);
+        self.reconnecting.remove(slug);
+        self.attempt.remove(slug);
+    }
+
+    /// Reconnects every connected provider whose session has gone stale.
+    ///
+    /// Every one, not only the active one. Playback, search, the library and
+    /// the feed all reach providers this session is not "on", so a session
+    /// that dies in the background takes those with it — and nothing else
+    /// looks. Checking the active provider alone left a dead one failing
+    /// every track it owned until the app was restarted.
+    fn reconnect_stale(&mut self, cx: &mut Context<Self>) {
+        let connected: Vec<&'static str> = self.connected.keys().copied().collect();
+        for slug in connected {
+            self.reconnect_if_stale(slug, cx);
+        }
+    }
+
+    /// Reconnects one provider if its session has gone stale, and reports
+    /// whether a reconnect is now in flight for it.
+    pub fn reconnect_if_stale(&mut self, slug: &str, cx: &mut Context<Self>) -> bool {
+        if self.reconnecting.contains(slug) {
             return true;
         }
-        if !matches!(self.state, SessionState::SignedIn) {
-            return false;
-        }
-        let Some(active) = self.active else {
+        let Some(index) = self
+            .providers
+            .iter()
+            .position(|provider| provider.slug() == slug)
+        else {
             return false;
         };
-        let slug = self.providers[active].slug();
+        // a provider being signed in is already on its way back
+        if self.awaiting == Some(index) {
+            return false;
+        }
+        let slug = self.providers[index].slug();
         let Some(entry) = self.connected.get(slug) else {
             return false;
         };
         if entry.client.alive() {
-            self.attempt = 0;
+            self.attempt.remove(slug);
             return false;
         }
-        let wait = BACKOFF[self.attempt.min(BACKOFF.len() - 1)];
-        self.attempt += 1;
-        self.reconnecting = true;
+        let attempt = self.attempt.entry(slug).or_default();
+        let wait = BACKOFF[(*attempt).min(BACKOFF.len() - 1)];
+        *attempt += 1;
+        self.reconnecting.insert(slug);
         log::warn!(
             "session: the {} session went stale, reconnecting in {}s",
-            self.providers[active].name(),
+            self.providers[index].name(),
             wait.as_secs()
         );
-        let provider = self.providers[active].clone();
+        let provider = self.providers[index].clone();
         let io = self.io.clone();
-        self.reconnect = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             let restored = join(io.spawn(async move { provider.restore().await })).await;
             this.update(cx, |this, cx| {
-                this.reconnecting = false;
+                this.reconnecting.remove(slug);
                 match restored {
                     Ok(Some(session)) => this.reconnected(slug, session, cx),
-                    Ok(None) => log::warn!("session: nothing stored to reconnect with"),
-                    Err(error) => log::warn!("session: cannot reconnect: {error:#}"),
+                    Ok(None) => log::warn!("session: nothing stored to reconnect {slug} with"),
+                    Err(error) => log::warn!("session: cannot reconnect {slug}: {error:#}"),
                 }
             })
             .ok();
-        }));
+        });
+        self.reconnect.insert(slug, task);
         true
     }
 
@@ -663,10 +685,14 @@ impl Session {
         session: ProviderSession,
         cx: &mut Context<Self>,
     ) {
-        self.attempt = 0;
-        self.playcounts = session.playcounts;
+        self.attempt.remove(slug);
+        // a background provider coming back must not restyle the table the
+        // active provider's pages are drawn with
+        if self.provider_slug() == Some(slug) {
+            self.playcounts = session.playcounts;
+        }
         self.connect(slug, session);
-        log::debug!("session: reconnected");
+        log::debug!("session: reconnected {slug}");
         cx.notify();
         cx.emit(SessionEvent::Reconnected(slug));
     }
