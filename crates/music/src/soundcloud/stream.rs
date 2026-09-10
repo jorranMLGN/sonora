@@ -48,20 +48,36 @@ pub fn segments(playlist: &str) -> Vec<String> {
 
 /// Whether this playlist's segments need an initialisation segment to decode.
 ///
-/// HLS gained fragmented-MP4 segments at version 6. Below that, segments carry
-/// their own headers and an absent `#EXT-X-MAP` is normal; at or above it, an
-/// absent one means the media segments have no moov box and decode to silence.
-/// A playlist with no `#EXT-X-VERSION` line at all defaults to `true`: the
-/// only playlists this provider has actually seen (soundcloud's) declare
-/// version 7, so treating an unversioned one as fragmented is the safer
-/// default — a false negative here is silent, a false positive just refuses
-/// loudly instead of playing something that happened to be raw audio.
+/// Fragmented-mp4 segments carry no headers of their own: without the moov
+/// box out of `#EXT-X-MAP` they decode to silence. Every other container
+/// soundcloud serves carries its own headers and needs nothing.
+///
+/// The segment name says which one it is, and `#EXT-X-VERSION` does not —
+/// that names the playlist features in use, not the container. Soundcloud
+/// serves its mp3 transcodings as version 6 with self-contained `.mp3`
+/// segments and no `#EXT-X-MAP`, which is correct and playable, so reading
+/// the version as a container refused every track offering no aac
+/// transcoding at all.
+///
+/// This therefore asks for positive evidence of fragmented mp4 rather than
+/// assuming it: a segment name it does not recognise is played, not refused.
 fn needs_init_segment(playlist: &str) -> bool {
-    playlist
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("#EXT-X-VERSION:"))
-        .and_then(|version| version.trim().parse::<u32>().ok())
-        .is_none_or(|version| version >= 6)
+    segments(playlist).iter().any(|url| fragmented(url))
+}
+
+/// Whether a segment url names a fragmented-mp4 file.
+///
+/// The name is the last path element with any query stripped: every
+/// soundcloud segment url carries an `expires`/`Signature` query, and some
+/// names carry dots of their own (`Npsj1UIY4m9e.128.mp3`), so only the last
+/// extension of that element counts.
+fn fragmented(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    matches!(
+        name.rsplit_once('.').map(|(_, extension)| extension),
+        Some("m4s" | "mp4" | "fmp4")
+    )
 }
 
 /// Fetches a media playlist and assembles it into one buffer: the init
@@ -160,7 +176,7 @@ async fn fetch_segment(http: &Client, url: &str) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{init_segment, needs_init_segment, segments};
+    use super::{fragmented, init_segment, needs_init_segment, segments};
 
     const PLAYLIST: &str = "#EXTM3U\n\
         #EXT-X-VERSION:7\n\
@@ -228,13 +244,32 @@ mod tests {
         assert!(segments("#EXTM3U\n\n#EXT-X-ENDLIST\n").is_empty());
     }
 
+    /// Soundcloud serves its mp3 transcodings exactly like this: version 6,
+    /// self-contained `.mp3` segments, and no `#EXT-X-MAP` — correct, and
+    /// playable. Tracks that offer no aac transcoding at all have only this.
+    const MP3_PLAYLIST: &str = "#EXTM3U\n\
+        #EXT-X-VERSION:6\n\
+        #EXT-X-PLAYLIST-TYPE:VOD\n\
+        #EXT-X-TARGETDURATION:10\n\
+        #EXT-X-MEDIA-SEQUENCE:0\n\
+        #EXTINF:1.985272,\n\
+        https://cf-hls-media.sndcdn.com/media/159660/0/31762/Npsj1UIY4m9e.128.mp3?Policy=abc\n\
+        #EXTINF:2.977908,\n\
+        https://cf-hls-media.sndcdn.com/media/159660/1/31762/Npsj1UIY4m9e.128.mp3?Policy=abc\n\
+        #EXT-X-ENDLIST\n";
+
+    #[test]
+    fn mp3_segments_need_no_init_segment_whatever_the_version_says() {
+        assert!(!needs_init_segment(MP3_PLAYLIST));
+    }
+
     #[test]
     fn a_version_7_playlist_needs_an_init_segment() {
         assert!(needs_init_segment(PLAYLIST));
     }
 
     #[test]
-    fn a_version_3_playlist_needs_no_init_segment() {
+    fn self_contained_segments_need_no_init_segment() {
         let playlist = "#EXTM3U\n\
             #EXT-X-VERSION:3\n\
             #EXTINF:10.0,\n\
@@ -244,36 +279,33 @@ mod tests {
     }
 
     #[test]
-    fn a_playlist_with_no_version_line_defaults_to_needing_one() {
+    fn a_segment_name_it_does_not_recognise_is_played_not_refused() {
         let playlist = "#EXTM3U\n\
             #EXTINF:10.0,\n\
-            https://cf-hls.sndcdn.com/a/0.aac\n\
-            #EXT-X-ENDLIST\n";
-        assert!(needs_init_segment(playlist));
-    }
-
-    // HLS introduced fragmented mp4 segments at version 6, so that is the
-    // exact boundary `needs_init_segment` switches on. These two pin it
-    // against an off-by-one (`> 6` instead of `>= 6`), which the version-7
-    // and version-3 cases above are both too far from the line to catch.
-
-    #[test]
-    fn version_6_is_the_first_version_that_needs_an_init_segment() {
-        let playlist = "#EXTM3U\n\
-            #EXT-X-VERSION:6\n\
-            #EXTINF:10.0,\n\
-            https://cf-hls.sndcdn.com/a/0.aac\n\
-            #EXT-X-ENDLIST\n";
-        assert!(needs_init_segment(playlist));
-    }
-
-    #[test]
-    fn version_5_is_the_last_version_that_needs_no_init_segment() {
-        let playlist = "#EXTM3U\n\
-            #EXT-X-VERSION:5\n\
-            #EXTINF:10.0,\n\
-            https://cf-hls.sndcdn.com/a/0.aac\n\
+            https://cf-hls.sndcdn.com/a/0.weird\n\
             #EXT-X-ENDLIST\n";
         assert!(!needs_init_segment(playlist));
+    }
+
+    // The segment name is what decides, so these pin the two ways soundcloud
+    // makes it hard to read: a signed query after the extension, and dots
+    // inside the name itself.
+
+    #[test]
+    fn the_query_string_does_not_hide_the_extension() {
+        assert!(fragmented(
+            "https://x.sndcdn.com/a/data000.m4s?expires=1&Signature=abc"
+        ));
+        assert!(!fragmented(
+            "https://x.sndcdn.com/a/0.mp3?expires=1&Signature=abc"
+        ));
+    }
+
+    #[test]
+    fn only_the_last_extension_of_the_name_counts() {
+        assert!(!fragmented(
+            "https://x.sndcdn.com/media/0/Npsj1UIY4m9e.128.mp3?Policy=abc"
+        ));
+        assert!(fragmented("https://x.sndcdn.com/a/seg.128.mp4"));
     }
 }
