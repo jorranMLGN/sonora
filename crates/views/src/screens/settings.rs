@@ -1367,7 +1367,6 @@ impl SettingsView {
         let session = self.session.read(cx);
         let pending = session.is_pending();
         let signed_out = matches!(session.state(), SessionState::SignedOut);
-        let guest = !session.authenticated();
         let waiting = match session.state() {
             SessionState::Authorizing(prompt) => !matches!(
                 prompt,
@@ -1383,7 +1382,7 @@ impl SettingsView {
                 options: info.options,
                 stored: info.stored,
                 active: info.active && !signed_out,
-                guest: info.active && !signed_out && guest,
+                guest: info.guest,
                 cancel: waiting && info.pending,
                 error: info.error,
             })
@@ -1434,8 +1433,10 @@ impl SettingsView {
         let status = match (active, guest, stored) {
             (true, true, _) => t!("settings-provider-guest"),
             (true, false, _) => t!("settings-provider-current"),
-            (false, _, true) => t!("settings-provider-connected"),
-            (false, _, false) => t!("settings-provider-none"),
+            // a guest is connected, but says "Connected" to nobody's account
+            (false, true, _) => t!("settings-provider-guest-idle"),
+            (false, false, true) => t!("settings-provider-connected"),
+            (false, false, false) => t!("settings-provider-none"),
         };
         let mut seen_browser = false;
         let methods: Vec<SignIn> = options

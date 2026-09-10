@@ -536,6 +536,7 @@ settings-provider-none = Not connected
 settings-provider-connected = Connected
 settings-provider-current = Playing from this service
 settings-provider-guest = Playing as a guest
+settings-provider-guest-idle = Connected as a guest
 settings-provider-switch = Switch to
 settings-sign-out = Sign out
 settings-local-folder = Imported music folder

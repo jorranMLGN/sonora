@@ -70,6 +70,7 @@ pub struct ProviderInfo {
     pub options: Vec<SignIn>,
     pub stored: bool,
     pub active: bool,
+    pub guest: bool,
     pub pending: bool,
     pub error: Option<Failure>,
 }
@@ -184,6 +185,7 @@ impl Session {
                 options: provider.sign_in_options(),
                 stored: provider.stored(),
                 active: self.active == Some(index),
+                guest: self.guest_for(provider.slug()),
                 pending: self.awaiting == Some(index),
                 error: match &self.error {
                     Some((failed, failure)) if *failed == index => Some(failure.clone()),
@@ -294,15 +296,21 @@ impl Session {
             .unwrap_or(usize::MAX)
     }
 
-    pub fn authenticated(&self) -> bool {
-        self.provider_slug()
-            .is_some_and(|slug| self.authenticated_for(slug))
-    }
-
     pub fn authenticated_for(&self, slug: &str) -> bool {
         self.connected
             .get(slug)
             .is_some_and(|entry| entry.authenticated)
+    }
+
+    /// Whether the provider is connected, but with no account behind it.
+    ///
+    /// Not the inverse of [`Session::authenticated_for`]: a provider whose
+    /// restore has not landed yet is neither. Reading the inverse would call
+    /// every stored provider a guest for the first moments after launch.
+    pub fn guest_for(&self, slug: &str) -> bool {
+        self.connected
+            .get(slug)
+            .is_some_and(|entry| !entry.authenticated)
     }
 
     pub fn playcounts(&self) -> bool {
