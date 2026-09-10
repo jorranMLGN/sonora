@@ -1,6 +1,8 @@
 use gpui::{App, Menu, MenuItem};
 use i18n::t;
-use input::{Quit, RefreshLibrary, SignOut, SongNext, SongPrevious, TogglePlayback};
+use input::{
+    Quit, RefreshLibrary, SignOut, SongNext, SongPrevious, ToggleMiniPlayer, TogglePlayback,
+};
 use router::Destination;
 use state::Sonora;
 
@@ -20,6 +22,8 @@ pub fn register(lingers: bool, cx: &mut App) {
         }
     })
     .detach();
+
+    cx.on_action(|_: &ToggleMiniPlayer, cx: &mut App| crate::mini::toggle(cx));
 
     cx.on_action(|_: &SignOut, cx: &mut App| {
         let session = Sonora::global(cx).session.clone();

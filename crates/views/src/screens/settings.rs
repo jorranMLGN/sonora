@@ -15,7 +15,9 @@ use gpui::{ScrollHandle, prelude::*, svg};
 use i18n::{Language, t};
 use music::{AccountChoice, SignIn, SignInPrompt, WritingSystem};
 use router::{NavEntry, Screen, SettingsTab};
-use state::{AppSettings, Failure, Playback, SYSTEM_FONT, Session, SessionState, Sonora};
+use state::{
+    AppSettings, Failure, MiniCorner, Playback, SYSTEM_FONT, Session, SessionState, Sonora,
+};
 use ui::{ActiveTheme as _, Scrollbar, Scroller, eyebrow};
 use ui::{
     Avatar, Button, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE, MAX_TRANSPARENCY,
@@ -40,6 +42,7 @@ const TYPEFACE_GUESS: usize = 24;
 const TYPEFACE_BATCH: usize = 3;
 const STARTUP: &str = "startup";
 const ENTRIES: &str = "entries";
+const MINI_CORNER: &str = "mini-corner";
 const MOTION: &str = "motion";
 const PACE: &str = "pace";
 const SAVER: &str = "saver";
@@ -190,6 +193,8 @@ impl SettingsView {
                 Row::Item(self.language_row(cx).into_any_element()),
                 self.title("settings-group-window", cx),
                 Row::Item(self.tray_row(cx).into_any_element()),
+                Row::Item(self.mini_on_top_row(cx).into_any_element()),
+                Row::Item(self.mini_corner_row(cx).into_any_element()),
                 self.title("settings-group-accounts", cx),
                 Row::Item(self.accounts_row(cx).into_any_element()),
                 self.title("settings-group-library", cx),
@@ -1020,6 +1025,54 @@ impl SettingsView {
                         .update(cx, |settings, cx| settings.set_adaptive_menu(!on, cx));
                 }))
                 .into_any_element(),
+        )
+    }
+
+    fn mini_on_top_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).mini_on_top();
+
+        self.row(
+            t!("settings-mini-on-top"),
+            t!("settings-mini-on-top-detail"),
+            muted,
+            small,
+            Switch::new("mini-on-top", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_mini_on_top(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn mini_corner_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let chosen = self.settings.read(cx).mini_corner();
+        let current = i18n::lookup(chosen.key(), None);
+
+        let picker = Picker::new(MINI_CORNER, &self.popovers, current)
+            .width(Picker::NARROW)
+            .items(MiniCorner::ALL.map(|corner| {
+                MenuItem::new(corner.key(), i18n::lookup(corner.key(), None))
+                    .selected(corner == chosen)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings
+                            .update(cx, |settings, cx| settings.set_mini_corner(corner, cx));
+                        cx.notify();
+                    }))
+            }));
+
+        self.row(
+            t!("settings-mini-corner"),
+            t!("settings-mini-corner-detail"),
+            muted,
+            small,
+            picker.into_any_element(),
         )
     }
 

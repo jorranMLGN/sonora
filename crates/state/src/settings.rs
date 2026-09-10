@@ -15,6 +15,38 @@ use ui::{
 use crate::queue::{Resume, gap_target};
 use crate::{Repeat, Sonora, Whence};
 
+/// Which screen corner the mini player opens in.
+///
+/// Only where it opens: it can be dragged from there. gpui can size a window
+/// but not move one, so a change of corner means closing and reopening it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MiniCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
+impl MiniCorner {
+    pub const ALL: [MiniCorner; 4] = [
+        MiniCorner::TopLeft,
+        MiniCorner::TopRight,
+        MiniCorner::BottomLeft,
+        MiniCorner::BottomRight,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            MiniCorner::TopLeft => "mini-corner-top-left",
+            MiniCorner::TopRight => "mini-corner-top-right",
+            MiniCorner::BottomLeft => "mini-corner-bottom-left",
+            MiniCorner::BottomRight => "mini-corner-bottom-right",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SideTab {
@@ -125,6 +157,10 @@ fn system_font() -> String {
     SYSTEM_FONT.to_owned()
 }
 
+fn yes() -> bool {
+    true
+}
+
 const SAVE_DELAY: Duration = Duration::from_millis(300);
 const DEFAULT_VOLUME: f32 = 0.7;
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
@@ -165,6 +201,10 @@ struct Values {
     sidebar_right_width: f32,
     sidebar_right_open: bool,
     sidebar_right_tab: SideTab,
+    #[serde(default)]
+    mini_corner: MiniCorner,
+    #[serde(default = "yes")]
+    mini_on_top: bool,
     shuffle: bool,
     repeat: Repeat,
     radio: bool,
@@ -231,6 +271,8 @@ impl Default for Values {
             sidebar_open: true,
             sidebar_right_width: DEFAULT_SIDEBAR_RIGHT_WIDTH,
             sidebar_right_open: false,
+            mini_corner: MiniCorner::default(),
+            mini_on_top: true,
             sidebar_right_tab: SideTab::Queue,
             shuffle: false,
             repeat: Repeat::Off,
@@ -411,6 +453,14 @@ impl AppSettings {
 
     pub fn sidebar_right_open(&self) -> bool {
         self.values.sidebar_right_open
+    }
+
+    pub fn mini_corner(&self) -> MiniCorner {
+        self.values.mini_corner
+    }
+
+    pub fn mini_on_top(&self) -> bool {
+        self.values.mini_on_top
     }
 
     pub fn sidebar_right_tab(&self) -> SideTab {
@@ -704,6 +754,22 @@ impl AppSettings {
 
     pub fn set_sidebar_right_width(&mut self, width: f32, cx: &mut Context<Self>) {
         self.values.sidebar_right_width = width;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_mini_on_top(&mut self, on_top: bool, cx: &mut Context<Self>) {
+        if self.values.mini_on_top == on_top {
+            return;
+        }
+        self.values.mini_on_top = on_top;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_mini_corner(&mut self, corner: MiniCorner, cx: &mut Context<Self>) {
+        if self.values.mini_corner == corner {
+            return;
+        }
+        self.values.mini_corner = corner;
         self.schedule_save(cx);
     }
 

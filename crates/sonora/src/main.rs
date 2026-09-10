@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod above;
 mod actions;
 mod assets;
 mod dock;
 mod http;
 mod logging;
 mod memory;
+mod mini;
 mod single;
 mod tray;
 
@@ -119,6 +121,7 @@ fn main() {
             cx.set_quit_mode(QuitMode::Explicit);
         }
         actions::register(lingers, cx);
+        mini::watch(cx);
         memory::watch(cx);
 
         open_window(cx);
