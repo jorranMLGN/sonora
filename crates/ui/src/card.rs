@@ -40,6 +40,7 @@ pub struct Card {
     size: Option<Text>,
     weight: Option<FontWeight>,
     meta: Option<AnyElement>,
+    mark: Option<SharedString>,
     bare: bool,
     trailing: Option<AnyElement>,
     cover: Option<String>,
@@ -75,6 +76,7 @@ impl Card {
             size: None,
             weight: None,
             meta: None,
+            mark: None,
             bare: false,
             trailing: None,
             cover: None,
@@ -209,6 +211,11 @@ impl Card {
         self
     }
 
+    pub fn mark(mut self, icon: impl Into<SharedString>) -> Self {
+        self.mark = Some(icon.into());
+        self
+    }
+
     pub fn bare_meta(mut self, meta: impl IntoElement) -> Self {
         self.meta = Some(meta.into_any_element());
         self.bare = true;
@@ -283,6 +290,7 @@ impl RenderOnce for Card {
             size,
             weight,
             meta,
+            mark,
             bare,
             trailing,
             cover,
@@ -461,7 +469,7 @@ impl RenderOnce for Card {
                 .child(div().flex_none().child(ExplicitBadge::new()))
                 .into_any_element(),
         };
-        let caption = meta.map(|meta| match bare {
+        let words = meta.map(|meta| match bare {
             true => div().child(meta),
             false => div()
                 .min_w_0()
@@ -469,6 +477,22 @@ impl RenderOnce for Card {
                 .text_size(theme.text(Text::Small))
                 .text_color(theme.muted_foreground)
                 .child(meta),
+        });
+        let badge = mark.map(|icon| {
+            svg()
+                .path(icons::path(icon))
+                .size(theme.text(Text::Small))
+                .flex_none()
+                .text_color(theme.muted_foreground)
+        });
+        let caption = (words.is_some() || badge.is_some()).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .min_w_0()
+                .children(words)
+                .children(badge)
         });
 
         let mut card = base

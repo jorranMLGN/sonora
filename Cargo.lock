@@ -6240,6 +6240,7 @@ name = "router"
 version = "0.30.0"
 dependencies = [
  "gpui",
+ "music",
  "ui",
 ]
 
@@ -7033,6 +7034,7 @@ dependencies = [
  "views",
  "windows-sys 0.61.2",
  "winresource",
+ "x11rb",
 ]
 
 [[package]]

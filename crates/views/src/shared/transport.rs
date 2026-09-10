@@ -134,7 +134,7 @@ fn repeat(playback: &Entity<Playback>, cx: &App) -> Button {
         })
 }
 
-fn previous(playback: &Entity<Playback>, cx: &App) -> Button {
+pub(crate) fn previous(playback: &Entity<Playback>, cx: &App) -> Button {
     let enabled = playback.read(cx).has_previous(cx);
     let playback = playback.clone();
 
@@ -149,7 +149,7 @@ fn previous(playback: &Entity<Playback>, cx: &App) -> Button {
         })
 }
 
-fn next(playback: &Entity<Playback>, queue: &Entity<Queue>, cx: &App) -> Button {
+pub(crate) fn next(playback: &Entity<Playback>, queue: &Entity<Queue>, cx: &App) -> Button {
     let enabled = queue.read(cx).has_next();
     let playback = playback.clone();
 

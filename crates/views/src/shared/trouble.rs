@@ -60,6 +60,7 @@ fn reason(problem: SignInProblem) -> &'static str {
         SignInProblem::Premium => "login-problem-premium",
         SignInProblem::Region => "login-problem-region",
         SignInProblem::Credentials => "login-problem-credentials",
+        SignInProblem::Secret => "login-problem-secret",
         SignInProblem::Network => "login-problem-network",
         SignInProblem::Cancelled => "login-problem-cancelled",
         SignInProblem::Refused => "login-problem-refused",

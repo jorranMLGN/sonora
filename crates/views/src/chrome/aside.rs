@@ -10,7 +10,7 @@ use gpui::{
 };
 use i18n::t;
 use music::{Track, Voice};
-use router::{Destination, LibraryTab, Link as _, LocalTab};
+use router::{Destination, LibraryTab, Link as _};
 use state::{
     AppSettings, Lyrics, LyricsState, Playback, PlaybackState, Queue, RomanizationScripts, SideTab,
     Sonora, Whence,
@@ -1591,22 +1591,29 @@ impl Aside {
     fn playing_from(&self, cx: &App) -> Option<(SharedString, Destination)> {
         let origin = self.playback.read(cx).origin()?;
         let id = SharedString::from(origin.id.clone());
-        let place = match origin.whence {
+        let shelf = |slug: &str| match slug == router::LOCAL && origin.id.is_empty() {
+            true => LibraryTab::Songs,
+            false => LibraryTab::Favorites,
+        };
+        let place = match &origin.whence {
             Whence::Album => Destination::Album(id),
             Whence::Playlist => Destination::Playlist(id),
             Whence::Artist => Destination::Artist(id),
             Whence::Radio => Destination::Song(id),
-            Whence::Saved => Destination::Library(LibraryTab::Songs),
-            Whence::Local => match origin.id.is_empty() {
-                true => Destination::Local(LocalTab::Songs),
-                false => Destination::Local(LocalTab::Favorites),
-            },
+            Whence::Saved(slug) => {
+                let known = Sonora::global(cx)
+                    .session
+                    .read(cx)
+                    .registered_slugs()
+                    .into_iter()
+                    .find(|known| known == slug)?;
+                Destination::Library(known, shelf(known))
+            }
         };
-        let name = match origin.whence {
-            Whence::Saved => t!("library-liked-songs"),
-            Whence::Local => match origin.id.is_empty() {
-                true => t!("nav-local"),
-                false => t!("library-liked-songs"),
+        let name = match &origin.whence {
+            Whence::Saved(slug) => match shelf(slug) {
+                LibraryTab::Songs => t!("nav-local"),
+                _ => t!("library-liked-songs"),
             },
             _ => origin.name.clone()?,
         };

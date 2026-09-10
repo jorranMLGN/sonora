@@ -23,8 +23,10 @@ pub(crate) mod trouble;
 pub(crate) mod visualizer;
 
 use gpui::prelude::*;
-use gpui::{App, Div, Pixels, div, px, svg};
+use gpui::{App, Div, Pixels, SharedString, div, px, svg};
 use i18n::t;
+use router::{LOCAL, NavEntry};
+use state::{Session, Sonora};
 use ui::{ActiveTheme as _, Text};
 
 const NOTE: Pixels = px(14.);
@@ -52,12 +54,37 @@ pub(crate) fn firefox_note(cx: &App) -> Div {
         .child(t!("login-browser-firefox"))
 }
 
+pub(crate) fn nav_label(entry: NavEntry, session: &Session) -> SharedString {
+    match entry {
+        NavEntry::Library(slug) if slug != LOCAL => session
+            .provider_name_for(slug)
+            .map_or_else(|| i18n::lookup(entry.key(), None), SharedString::from),
+        _ => i18n::lookup(entry.key(), None),
+    }
+}
+
 pub(crate) fn provider_logo(slug: &str) -> &'static str {
     match slug {
         "soundcloud" => "icons/soundcloud.svg",
         "spotify" => "icons/spotify.svg",
         "youtube" => "icons/youtubemusic.svg",
+        LOCAL => "icons/file-music.svg",
         _ => "icons/music.svg",
+    }
+}
+
+pub(crate) fn provider_mark(id: &str, cx: &App) -> Option<&'static str> {
+    let slug = Sonora::global(cx).session.read(cx).slug_for(id)?;
+
+    provider_mark_of(slug, cx)
+}
+
+pub(crate) fn provider_mark_of(slug: &str, cx: &App) -> Option<&'static str> {
+    let session = Sonora::global(cx).session.read(cx);
+
+    match session.active_slugs().len() < 2 {
+        true => None,
+        false => Some(provider_logo(slug)),
     }
 }
 
@@ -73,6 +100,7 @@ pub(crate) struct Secret {
     pub steps: [&'static str; 4],
     pub note: &'static str,
     pub hint: &'static str,
+    pub site: &'static str,
 }
 
 const COOKIES: Secret = Secret {
@@ -86,6 +114,7 @@ const COOKIES: Secret = Secret {
     ],
     note: "login-cookie-step-note",
     hint: "login-cookie-hint",
+    site: "music.youtube.com",
 };
 
 const TOKEN: Secret = Secret {
@@ -99,6 +128,7 @@ const TOKEN: Secret = Secret {
     ],
     note: "login-token-step-note",
     hint: "login-token-hint",
+    site: "soundcloud.com",
 };
 
 pub(crate) fn secret(slug: &str) -> Secret {

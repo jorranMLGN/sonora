@@ -93,10 +93,16 @@ impl TrackCard {
                 .child(clock(track.duration))
         });
 
+        let mark = track
+            .id
+            .as_deref()
+            .and_then(|id| crate::shared::provider_mark(id, cx));
+
         Card::new((self.id, place), SharedString::from(track.name.clone()))
             .cover(track.cover.clone())
             .tint(tint)
             .when(track.explicit, Card::explicit)
+            .when_some(mark, Card::mark)
             .when_some(artists, Card::bare_meta)
             .when_some(length, Card::trailing)
             .when_some(self.context, |card, handler| {

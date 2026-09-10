@@ -152,6 +152,7 @@ pub enum GenreItem {
 pub struct GenreSection {
     pub title: String,
     pub items: Vec<GenreItem>,
+    pub provider: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

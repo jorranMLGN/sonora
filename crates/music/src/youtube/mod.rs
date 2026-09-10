@@ -69,6 +69,7 @@ impl YouTubeProvider {
             playback: Arc::new(Factory::new(api)),
             authenticated: true,
             playcounts: false,
+            expired: false,
         }
     }
 
@@ -82,6 +83,7 @@ impl YouTubeProvider {
             playback: Arc::new(Factory::new(api)),
             authenticated: false,
             playcounts: false,
+            expired: false,
         }
     }
 

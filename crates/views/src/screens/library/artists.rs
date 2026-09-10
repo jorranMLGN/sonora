@@ -49,19 +49,19 @@ pub(super) const COLUMNS: &[ColumnSpec<ArtistField>] = &[INDEX, COVER, NAME, ADD
 pub(super) struct ArtistSource {
     library: Entity<Library>,
     playback: Entity<Playback>,
-    local: bool,
+    slug: &'static str,
 }
 
 impl ArtistSource {
     pub(super) fn shelved(
         library: Entity<Library>,
         playback: Entity<Playback>,
-        local: bool,
+        slug: &'static str,
     ) -> Self {
         Self {
             library,
             playback,
-            local,
+            slug,
         }
     }
 
@@ -81,12 +81,10 @@ impl ArtistSource {
     }
 
     fn artists<'a>(&self, cx: &'a App) -> &'a [SavedArtist] {
-        let library = self.library.read(cx);
-        let state = match self.local {
-            true => library.local_state(),
-            false => library.state(),
+        let Some(shelf) = self.library.read(cx).shelf(self.slug) else {
+            return &[];
         };
-        match state {
+        match &shelf.state {
             LibraryState::Ready { artists, .. } => artists.as_slice(),
             _ => &[],
         }
@@ -117,10 +115,7 @@ impl TableSource for ArtistSource {
     }
 
     fn is_loading(&self, cx: &App) -> bool {
-        match self.local {
-            true => self.library.read(cx).local_loading(LibraryPart::Artists),
-            false => self.library.read(cx).loading(LibraryPart::Artists),
-        }
+        super::loading(&self.library, self.slug, LibraryPart::Artists, cx)
     }
 
     fn pin(&self, row: usize, cx: &App) -> Option<Pin> {

@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod above;
 mod actions;
 mod assets;
 mod dock;
 mod http;
 mod logging;
 mod memory;
+mod mini;
 mod single;
 mod tray;
 
@@ -16,7 +18,6 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowOptions, point, px, size,
 };
 use music::LyricsProvider;
-use router::Screen;
 use state::Sonora;
 use ui::ActiveTheme as _;
 use ui::ThemeKind;
@@ -60,8 +61,8 @@ fn main() {
 
         let providers: Vec<Arc<dyn music::MusicProvider>> = vec![
             Arc::new(music::spotify::SpotifyProvider::from_env()),
-            Arc::new(music::youtube::YouTubeProvider::new()),
             Arc::new(music::soundcloud::SoundCloudProvider::new()),
+            Arc::new(music::youtube::YouTubeProvider::new()),
         ];
         let local_provider: Arc<dyn music::MusicProvider> =
             Arc::new(music::local::LocalProvider::new(
@@ -78,10 +79,12 @@ fn main() {
         ];
         state::init(cx, io, providers, local_provider, lyrics);
         let start = opened_start.unwrap_or_else(|| {
-            let startup = Sonora::global(cx).settings.read(cx).startup().to_owned();
-            Screen::from_id(&startup)
-                .unwrap_or(Screen::Home)
-                .destination()
+            let sonora = Sonora::global(cx);
+            let settings = sonora.settings.read(cx);
+            let startup = settings.startup().to_owned();
+            let provider = settings.provider().to_owned();
+            let slugs = sonora.session.read(cx).active_slugs();
+            router::startup(&startup, &provider, &slugs)
         });
         router::init(start, cx);
         let (look, overrides, language, pack, stillness, pace, remembered) = {
@@ -118,6 +121,7 @@ fn main() {
             cx.set_quit_mode(QuitMode::Explicit);
         }
         actions::register(lingers, cx);
+        mini::watch(cx);
         memory::watch(cx);
 
         open_window(cx);

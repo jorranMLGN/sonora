@@ -9,7 +9,7 @@ use gpui::{
 };
 use gpui::{Window, div, px};
 use i18n::t;
-use input::{ToggleFullscreen, ToggleLyrics, ToggleQueue};
+use input::{ToggleFullscreen, ToggleLyrics, ToggleMiniPlayer, ToggleQueue};
 use state::{AppSettings, Playback, Queue, SideTab, Sonora};
 use ui::{
     Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Popup, Room, Scrollbar, Scrubber,
@@ -225,6 +225,15 @@ impl PlayerBar {
                 SideTab::Queue,
             ))
             .into_any_element()
+    }
+
+    fn mini_button(&self) -> Button {
+        Button::new("toggle-mini")
+            .ghost()
+            .small()
+            .icon("icons/picture-in-picture.svg")
+            .tooltip_above("player-mini")
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleMiniPlayer), cx))
     }
 
     fn fullscreen_button(&self) -> Button {
@@ -466,6 +475,7 @@ impl Render for PlayerBar {
                         .child(div().flex_1().min_w_0().child(seek))
                         .children(sides)
                         .child(self.sound(px(VOLUME_TIGHT), cx))
+                        .child(self.mini_button())
                         .child(self.fullscreen_button()),
                 ),
             false => base
@@ -494,6 +504,7 @@ impl Render for PlayerBar {
                         .min_w_0()
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
+                        .child(self.mini_button())
                         .child(self.fullscreen_button()),
                 ),
         };

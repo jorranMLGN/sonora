@@ -349,6 +349,7 @@ pub(crate) fn title<F>(
     explicit: bool,
     press: Option<Tap>,
     is_liked: Option<AnyElement>,
+    mark: Option<AnyElement>,
 ) -> AnyElement {
     let text = div()
         .id(("track-title", cell.row))
@@ -372,7 +373,18 @@ pub(crate) fn title<F>(
         .when(explicit, |this| {
             this.child(div().flex_none().child(ExplicitBadge::new()))
         })
+        .when_some(mark, |this, mark| this.child(mark))
         .when_some(is_liked, |this, is_liked| this.child(is_liked))
+        .into_any_element()
+}
+
+pub(crate) fn mark(icon: &'static str, cx: &App) -> AnyElement {
+    div()
+        .flex_none()
+        .child(Glyph {
+            icon,
+            color: cx.theme().muted_foreground,
+        })
         .into_any_element()
 }
 

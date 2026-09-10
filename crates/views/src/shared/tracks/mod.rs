@@ -329,6 +329,11 @@ impl TrackSource {
             track.explicit,
             None,
             self.liked_button(cell, track, cx),
+            track
+                .id
+                .as_deref()
+                .and_then(|id| crate::shared::provider_mark(id, cx))
+                .map(|icon| cells::mark(icon, cx)),
         )
     }
 

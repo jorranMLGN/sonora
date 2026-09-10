@@ -164,24 +164,23 @@ impl Lyrics {
         if let Some(found) = self.cache.get(id) {
             return Some(found.clone());
         }
-        let (hits, instrumental) = self.store.get(&self.key(id, cx), &self.known(cx))?;
+        let (hits, instrumental) = self.store.get(id, &self.known(cx))?;
         let found = Found { hits, instrumental };
         self.cache.insert(id.to_owned(), found.clone());
         Some(found)
     }
 
-    fn key(&self, id: &str, cx: &Context<Self>) -> String {
-        match self.session.read(cx).slug_for(id) {
-            Some(slug) => format!("{slug}:{id}"),
-            None => id.to_owned(),
-        }
-    }
-
     fn known(&self, cx: &Context<Self>) -> Vec<&'static str> {
+        let session = self.session.read(cx);
         self.providers
             .iter()
             .map(|provider| provider.name())
-            .chain(self.session.read(cx).provider_name())
+            .chain(
+                session
+                    .active_slugs()
+                    .into_iter()
+                    .filter_map(|slug| session.provider_name_for(slug)),
+            )
             .collect()
     }
 
@@ -205,9 +204,10 @@ impl Lyrics {
             return None;
         }
         let session = self.session.read(cx);
+        let slug = session.slug_for(id)?;
         Some(Native {
-            api: session.client()?,
-            source: session.provider_name()?,
+            api: session.client_for_slug(slug)?,
+            source: session.provider_name_for(slug)?,
             id: id.to_owned(),
         })
     }
@@ -240,7 +240,7 @@ impl Lyrics {
         };
         if self.ahead_of.as_deref() == Some(id.as_str())
             || self.cache.contains_key(&id)
-            || self.store.holds(&self.key(&id, cx))
+            || self.store.holds(&id)
         {
             return;
         }
@@ -264,7 +264,7 @@ impl Lyrics {
             .slug_for(&id)
             .map(|provider| TrackKey {
                 provider,
-                id: id.clone(),
+                id: music::tag::untag(&id).to_owned(),
             });
         let query = query_for(&track, key);
         let providers = self.providers.clone();
@@ -405,7 +405,7 @@ impl Lyrics {
         let mut hits = ranked;
         keep_displayed_first(&mut hits, displayed);
         if !hits.is_empty() || instrumental {
-            self.store.put(self.key(&id, cx), &hits, instrumental);
+            self.store.put(id.clone(), &hits, instrumental);
             self.schedule_save(cx);
         }
         self.cache.insert(

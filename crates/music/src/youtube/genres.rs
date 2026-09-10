@@ -78,7 +78,11 @@ fn section(shelf: &Value) -> Option<GenreSection> {
     let title = shelf_title(shelf).unwrap_or_default();
     let items: Vec<GenreItem> = shelf.items(&["contents"]).iter().filter_map(item).collect();
 
-    (!items.is_empty()).then_some(GenreSection { title, items })
+    (!items.is_empty()).then_some(GenreSection {
+        title,
+        items,
+        provider: None,
+    })
 }
 
 fn sections(answer: &Value) -> Vec<GenreSection> {

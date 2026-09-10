@@ -156,20 +156,17 @@ impl ItemMenu {
         let library = Sonora::global(cx).library.clone();
         let held: Vec<String> = tracks.iter().filter_map(|track| track.id.clone()).collect();
         let imported = !held.is_empty() && held.iter().all(|id| music::is_local_id(id));
-        let ids: Vec<String> = match imported {
-            true => held,
-            false => held
-                .into_iter()
-                .filter(|id| !music::is_local_id(id))
-                .collect(),
-        };
+        let owner = held
+            .iter()
+            .find(|id| imported || !music::is_local_id(id))
+            .and_then(|id| Sonora::global(cx).session.read(cx).slug_for(id));
+        let ids: Vec<String> = held
+            .into_iter()
+            .filter(|id| music::tag::slug_of(id) == owner)
+            .collect();
         let barren = ids.is_empty();
-        let shelf = match imported {
-            true => library.read(cx).local_state(),
-            false => library.read(cx).state(),
-        };
-        let playlists: Vec<Playlist> = match shelf {
-            LibraryState::Ready { playlists, .. } => playlists
+        let playlists: Vec<Playlist> = match owner.map(|slug| library.read(cx).state_for(slug)) {
+            Some(LibraryState::Ready { playlists, .. }) => playlists
                 .iter()
                 .filter(|playlist| playlist.owned || playlist.collaborative)
                 .cloned()
@@ -183,7 +180,7 @@ impl ItemMenu {
                 PlaylistEditor::open(
                     Edit::Create {
                         tracks: created.clone(),
-                        local: imported,
+                        slug: owner,
                     },
                     window,
                     cx,
@@ -969,8 +966,9 @@ fn media_kind(kind: PinKind) -> MediaKind {
 }
 
 fn saved_track(id: &str, cx: &App) -> Option<Track> {
+    let slug = Sonora::global(cx).session.read(cx).slug_for(id)?;
     let library = Sonora::global(cx).library.read(cx);
-    let LibraryState::Ready { tracks, .. } = library.state() else {
+    let LibraryState::Ready { tracks, .. } = library.state_for(slug) else {
         return None;
     };
 
@@ -982,10 +980,9 @@ fn saved_track(id: &str, cx: &App) -> Option<Track> {
 
 fn copy_link(kind: MediaKind, id: &str, cx: &mut App) {
     let session = Sonora::global(cx).session.read(cx);
-    let client = match music::is_local_id(id) {
-        true => session.local_client(),
-        false => session.client(),
-    };
+    let client = session
+        .slug_for(id)
+        .and_then(|slug| session.client_for_slug(slug));
     let Some(client) = client else {
         return;
     };

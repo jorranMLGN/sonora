@@ -22,17 +22,19 @@ pub struct Profile {
 impl Profile {
     pub fn new(session: Entity<Session>, io: Io, cx: &mut Context<Self>) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn => {
-                if let Some(id) = this.id.clone() {
+            SessionEvent::SignedIn(slug) => {
+                if let Some(id) = this.shown(slug) {
                     this.clear();
                     this.open(&id, cx);
                 }
             }
-            SessionEvent::SignedOut => {
-                this.clear();
-                cx.notify();
+            SessionEvent::SignedOut(slug) => {
+                if this.shown(slug).is_some() {
+                    this.clear();
+                    cx.notify();
+                }
             }
-            SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::Reconnected(_) => {}
         })
         .detach();
 
@@ -80,7 +82,11 @@ impl Profile {
         self.clear();
         self.id = Some(id.to_owned());
 
-        let Some(client) = self.session.read(cx).client() else {
+        let session = self.session.read(cx);
+        let picked = session
+            .slug_for(id)
+            .and_then(|slug| session.client_for_slug(slug));
+        let Some(client) = picked else {
             cx.notify();
             return;
         };
@@ -138,7 +144,13 @@ impl Profile {
 
     fn build_mosaics(&mut self, cx: &mut Context<Self>) {
         let wanted = self.adopt_mosaics();
-        let Some(client) = self.session.read(cx).client() else {
+        let session = self.session.read(cx);
+        let picked = self
+            .id
+            .as_deref()
+            .and_then(|id| session.slug_for(id))
+            .and_then(|slug| session.client_for_slug(slug));
+        let Some(client) = picked else {
             return;
         };
 
@@ -215,6 +227,12 @@ impl Profile {
         {
             playlist.cover = Some(cover);
         }
+    }
+
+    fn shown(&self, slug: &str) -> Option<String> {
+        self.id
+            .clone()
+            .filter(|id| music::tag::slug_of(id) == Some(slug))
     }
 
     fn clear(&mut self) {

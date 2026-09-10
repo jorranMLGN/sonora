@@ -330,6 +330,11 @@ impl LoginView {
 impl Render for LoginView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.session.read(cx).state().clone();
+        let signed_in_as = self
+            .session
+            .read(cx)
+            .profile()
+            .map(|profile| profile.display_name.clone());
         let pending = self.session.read(cx).is_pending();
         let providers: Vec<state::ProviderInfo> = self.session.read(cx).providers().collect();
         let guest = providers
@@ -396,7 +401,10 @@ impl Render for LoginView {
                 t!("login-signed-out")
             }
             SessionState::Authorizing(_) => t!("login-authorizing"),
-            SessionState::SignedIn(profile) => t!("login-signed-in", name = &profile.display_name),
+            SessionState::SignedIn => match &signed_in_as {
+                Some(name) => t!("login-signed-in", name = name.as_str()),
+                None => t!("login-signed-out"),
+            },
             SessionState::Failed(_) => t!("login-signed-out"),
         };
 

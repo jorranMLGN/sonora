@@ -1,9 +1,10 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Error;
-use gpui::{Context, Entity, EventEmitter, Task};
+use gpui::{App, Context, Entity, EventEmitter, Task};
 use music::{
     MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession, SignIn, SignInFailure,
     SignInProblem, SignInPrompt, UserProfile,
@@ -12,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::catalog::CatalogSource;
 use crate::settings::AppSettings;
-use crate::{Io, join};
+use crate::{Io, Outcome, Toasts, join};
 
 const HEARTBEAT: Duration = Duration::from_secs(30);
 const BACKOFF: [Duration; 5] = [
@@ -53,15 +54,14 @@ pub enum SessionState {
     SignedOut,
     Restoring,
     Authorizing(Option<SignInPrompt>),
-    SignedIn(UserProfile),
+    SignedIn,
     Failed(Failure),
 }
 
 pub enum SessionEvent {
-    SignedIn,
-    SignedOut,
-    Reconnected,
-    LocalChanged,
+    SignedIn(&'static str),
+    SignedOut(&'static str),
+    Reconnected(&'static str),
 }
 
 pub struct ProviderInfo {
@@ -70,8 +70,17 @@ pub struct ProviderInfo {
     pub options: Vec<SignIn>,
     pub stored: bool,
     pub active: bool,
+    pub guest: bool,
     pub pending: bool,
     pub error: Option<Failure>,
+}
+
+pub(crate) struct Connected {
+    pub(crate) client: Arc<dyn MusicApi>,
+    pub(crate) catalog: Arc<CatalogSource>,
+    pub(crate) playback: Arc<dyn PlaybackFactory>,
+    pub(crate) profile: UserProfile,
+    pub(crate) authenticated: bool,
 }
 
 pub struct Session {
@@ -82,24 +91,17 @@ pub struct Session {
     resume: Option<(usize, UserProfile)>,
     error: Option<(usize, Failure)>,
     settings: Entity<AppSettings>,
-    client: Option<Arc<dyn MusicApi>>,
-    catalog: Option<Arc<CatalogSource>>,
-    playback: Option<Arc<dyn PlaybackFactory>>,
-    authenticated: bool,
+    connected: HashMap<&'static str, Connected>,
     playcounts: bool,
     io: Io,
-    task: Option<Task<()>>,
+    tasks: HashMap<&'static str, Task<()>>,
     prompt_task: Option<Task<()>>,
     input: Option<UnboundedSender<String>>,
     local_provider: Arc<dyn MusicProvider>,
-    local_client: Option<Arc<dyn MusicApi>>,
-    local_catalog: Option<Arc<CatalogSource>>,
-    local_playback: Option<Arc<dyn PlaybackFactory>>,
-    local_task: Option<Task<()>>,
     watch: Option<Task<()>>,
-    reconnect: Option<Task<()>>,
-    reconnecting: bool,
-    attempt: usize,
+    reconnect: HashMap<&'static str, Task<()>>,
+    reconnecting: HashSet<&'static str>,
+    attempt: HashMap<&'static str, usize>,
 }
 
 impl EventEmitter<SessionEvent> for Session {}
@@ -124,24 +126,17 @@ impl Session {
             resume: None,
             error: None,
             settings,
-            client: None,
-            catalog: None,
-            playback: None,
-            authenticated: false,
+            connected: HashMap::new(),
             playcounts: false,
             io,
-            task: None,
+            tasks: HashMap::new(),
             prompt_task: None,
             input: None,
             local_provider,
-            local_client: None,
-            local_catalog: None,
-            local_playback: None,
-            local_task: None,
             watch: None,
-            reconnect: None,
-            reconnecting: false,
-            attempt: 0,
+            reconnect: HashMap::new(),
+            reconnecting: HashSet::new(),
+            attempt: HashMap::new(),
         };
         session.restore_local(cx);
         session
@@ -151,27 +146,29 @@ impl Session {
         &self.state
     }
 
+    pub(crate) fn connected(&self, slug: &str) -> Option<&Connected> {
+        self.connected.get(slug)
+    }
+
+    pub fn client_for_slug(&self, slug: &str) -> Option<Arc<dyn MusicApi>> {
+        self.connected.get(slug).map(|entry| entry.client.clone())
+    }
+
     pub fn client(&self) -> Option<Arc<dyn MusicApi>> {
-        self.client.clone()
+        self.client_for_slug(self.provider_slug()?)
     }
 
     pub fn playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
-        self.playback.clone()
+        self.playback_for_slug(self.provider_slug()?)
     }
 
-    pub fn local_client(&self) -> Option<Arc<dyn MusicApi>> {
-        self.local_client.clone()
+    pub fn playback_for_slug(&self, slug: &str) -> Option<Arc<dyn PlaybackFactory>> {
+        self.connected.get(slug).map(|entry| entry.playback.clone())
     }
 
     pub(crate) fn catalog(&self, id: &str) -> Option<Arc<CatalogSource>> {
-        match music::is_local_id(id) {
-            true => self.local_catalog.clone(),
-            false => self.catalog.clone(),
-        }
-    }
-
-    pub fn local_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
-        self.local_playback.clone()
+        let slug = self.slug_for(id)?;
+        self.connected.get(slug).map(|entry| entry.catalog.clone())
     }
 
     pub fn local_path(&self) -> Option<String> {
@@ -188,16 +185,13 @@ impl Session {
                 options: provider.sign_in_options(),
                 stored: provider.stored(),
                 active: self.active == Some(index),
+                guest: self.guest_for(provider.slug()),
                 pending: self.awaiting == Some(index),
                 error: match &self.error {
                     Some((failed, failure)) if *failed == index => Some(failure.clone()),
                     _ => None,
                 },
             })
-    }
-
-    pub fn connected(&self) -> impl Iterator<Item = ProviderInfo> + '_ {
-        self.providers().filter(|info| info.stored)
     }
 
     pub fn forget(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -211,8 +205,14 @@ impl Session {
         if self.active == Some(index) {
             return self.sign_out(cx);
         }
+        let slug = self.providers[index].slug();
         self.providers[index].sign_out();
+        self.tasks.remove(slug);
+        let dropped = self.connected.remove(slug).is_some();
         cx.notify();
+        if dropped {
+            cx.emit(SessionEvent::SignedOut(slug));
+        }
     }
 
     pub fn switch(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -226,10 +226,10 @@ impl Session {
         else {
             return;
         };
-        if self.active == Some(index) && matches!(self.state, SessionState::SignedIn(_)) {
+        if self.active == Some(index) && matches!(self.state, SessionState::SignedIn) {
             return;
         }
-        self.release(cx);
+        self.stop_reconnect(self.providers[index].slug());
         self.active = Some(index);
         self.restore(cx);
     }
@@ -239,35 +239,76 @@ impl Session {
         Some(provider.name())
     }
 
+    fn provider_for(&self, slug: &str) -> Option<&Arc<dyn MusicProvider>> {
+        self.providers
+            .iter()
+            .find(|provider| provider.slug() == slug)
+            .or_else(|| Some(&self.local_provider).filter(|local| local.slug() == slug))
+    }
+
+    pub fn provider_name_for(&self, slug: &str) -> Option<&'static str> {
+        self.provider_for(slug).map(|provider| provider.name())
+    }
+
+    pub fn has_all_tracks(&self, slug: &str) -> bool {
+        self.provider_for(slug)
+            .is_some_and(|provider| provider.has_all_tracks())
+    }
+
+    pub fn registered_slugs(&self) -> Vec<&'static str> {
+        self.providers
+            .iter()
+            .chain([&self.local_provider])
+            .map(|provider| provider.slug())
+            .collect()
+    }
+
+    pub fn profile(&self) -> Option<&UserProfile> {
+        self.profile_for(self.provider_slug()?)
+    }
+
+    pub fn profile_for(&self, slug: &str) -> Option<&UserProfile> {
+        self.connected.get(slug).map(|entry| &entry.profile)
+    }
+
     pub fn provider_slug(&self) -> Option<&'static str> {
         let provider = &self.providers[self.active?];
         Some(provider.slug())
     }
 
-    pub fn local_slug(&self) -> &'static str {
-        self.local_provider.slug()
-    }
-
     pub fn active_slugs(&self) -> Vec<&'static str> {
-        let mut slugs = Vec::new();
-        if self.client.is_some() {
-            slugs.extend(self.provider_slug());
-        }
-        if self.local_client.is_some() {
-            slugs.push(self.local_slug());
-        }
+        let mut slugs: Vec<&'static str> = self.connected.keys().copied().collect();
+        slugs.sort_unstable_by_key(|slug| self.order_of(slug));
         slugs
     }
 
     pub fn slug_for(&self, id: &str) -> Option<&'static str> {
-        match music::is_local_id(id) {
-            true => Some(self.local_slug()),
-            false => self.provider_slug(),
-        }
+        let slug = music::tag::slug_of(id)?;
+        self.connected.keys().copied().find(|known| *known == slug)
     }
 
-    pub fn authenticated(&self) -> bool {
-        self.authenticated
+    fn order_of(&self, slug: &str) -> usize {
+        self.providers
+            .iter()
+            .position(|provider| provider.slug() == slug)
+            .unwrap_or(usize::MAX)
+    }
+
+    pub fn authenticated_for(&self, slug: &str) -> bool {
+        self.connected
+            .get(slug)
+            .is_some_and(|entry| entry.authenticated)
+    }
+
+    /// Whether the provider is connected, but with no account behind it.
+    ///
+    /// Not the inverse of [`Session::authenticated_for`]: a provider whose
+    /// restore has not landed yet is neither. Reading the inverse would call
+    /// every stored provider a guest for the first moments after launch.
+    pub fn guest_for(&self, slug: &str) -> bool {
+        self.connected
+            .get(slug)
+            .is_some_and(|entry| !entry.authenticated)
     }
 
     pub fn playcounts(&self) -> bool {
@@ -285,18 +326,29 @@ impl Session {
         if self.is_pending() {
             return;
         }
+        if self.active.is_none() {
+            self.active = self
+                .remaining()
+                .or((!self.providers.is_empty()).then_some(0));
+        }
         let Some(active) = self.active else {
             self.state = SessionState::SignedOut;
             cx.notify();
-            cx.emit(SessionEvent::SignedOut);
             return;
         };
+        let others: Vec<usize> = (0..self.providers.len())
+            .filter(|index| *index != active && self.providers[*index].stored())
+            .collect();
+        for index in others {
+            self.rejoin(index, cx);
+        }
         self.state = SessionState::Restoring;
         cx.notify();
 
+        let slug = self.providers[active].slug();
         let provider = self.providers[active].clone();
         let io = self.io.clone();
-        self.task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let restored = join(io.spawn(async move { provider.restore().await })).await;
 
             this.update(cx, |this, cx| match restored {
@@ -304,12 +356,49 @@ impl Session {
                 Ok(None) => {
                     this.state = SessionState::SignedOut;
                     cx.notify();
-                    cx.emit(SessionEvent::SignedOut);
+                    cx.emit(SessionEvent::SignedOut(slug));
                 }
                 Err(error) => this.failed(&error, cx),
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(slug, task);
+    }
+
+    fn rejoin(&mut self, index: usize, cx: &mut Context<Self>) {
+        let slug = self.providers[index].slug();
+        if self.connected.contains_key(slug) {
+            return;
+        }
+        let provider = self.providers[index].clone();
+        let io = self.io.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let restored = join(io.spawn(async move { provider.restore().await })).await;
+
+            this.update(cx, |this, cx| match restored {
+                Ok(Some(session)) => this.joined(slug, session, cx),
+                Ok(None) => log::warn!("session: nothing stored for {slug}"),
+                Err(error) => log::warn!("session: cannot restore {slug}: {error:#}"),
+            })
+            .ok();
+        });
+        self.tasks.insert(slug, task);
+    }
+
+    fn joined(&mut self, slug: &'static str, session: ProviderSession, cx: &mut Context<Self>) {
+        let expired = session.expired;
+        self.connect(slug, session);
+        self.warn_expired(slug, expired, cx);
+        cx.notify();
+        cx.emit(SessionEvent::SignedIn(slug));
+    }
+
+    fn warn_expired(&self, slug: &'static str, expired: bool, cx: &mut App) {
+        if !expired {
+            return;
+        }
+        let name = self.provider_name_for(slug).unwrap_or(slug);
+        Toasts::about(Outcome::Failed, "toast-session-expired", name, cx);
     }
 
     pub fn sign_in(&mut self, slug: &str, method: SignIn, cx: &mut Context<Self>) {
@@ -323,8 +412,12 @@ impl Session {
         else {
             return;
         };
-        self.resume = match &self.state {
-            SessionState::SignedIn(profile) => self.active.map(|active| (active, profile.clone())),
+        self.resume = match self.state {
+            SessionState::SignedIn => self.active.and_then(|active| {
+                let held = self.providers[active].slug();
+                let profile = self.connected.get(held)?.profile.clone();
+                Some((active, profile))
+            }),
             _ => None,
         };
         self.error = None;
@@ -350,9 +443,10 @@ impl Session {
             prompt_tx.send(prompt).ok();
         });
 
+        let awaited = self.providers[index].slug();
         let provider = self.providers[index].clone();
         let io = self.io.clone();
-        self.task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let authorized =
                 join(io.spawn(async move { provider.sign_in(method, prompt, input_rx).await }))
                     .await;
@@ -366,31 +460,34 @@ impl Session {
                 }
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(awaited, task);
     }
 
     pub fn cancel_sign_in(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.state, SessionState::Authorizing(_)) {
             return;
         }
-        if let Some(index) = self.awaiting {
+        let abandoned = self.awaiting.take();
+        if let Some(index) = abandoned {
+            self.tasks.remove(self.providers[index].slug());
             let provider = self.providers[index].clone();
             self.io.spawn(async move { provider.abandon() });
         }
-        self.task = None;
         self.prompt_task = None;
         self.input = None;
-        self.awaiting = None;
         self.error = None;
-        if let Some((index, profile)) = self.resume.take() {
+        if let Some((index, _)) = self.resume.take() {
             self.active = Some(index);
-            self.state = SessionState::SignedIn(profile);
+            self.state = SessionState::SignedIn;
             cx.notify();
             return;
         }
         self.state = SessionState::SignedOut;
         cx.notify();
-        cx.emit(SessionEvent::SignedOut);
+        if let Some(index) = abandoned.or(self.active) {
+            cx.emit(SessionEvent::SignedOut(self.providers[index].slug()));
+        }
     }
 
     pub fn submit_input(&mut self, text: String, cx: &mut Context<Self>) {
@@ -424,63 +521,74 @@ impl Session {
     }
 
     fn release(&mut self, cx: &mut Context<Self>) {
-        self.task = None;
-        self.watch = None;
-        self.reconnect = None;
-        self.reconnecting = false;
-        self.attempt = 0;
         self.prompt_task = None;
         self.input = None;
-        self.awaiting = None;
+        if let Some(index) = self.awaiting.take() {
+            self.tasks.remove(self.providers[index].slug());
+        }
         self.resume = None;
-        self.client = None;
-        self.catalog = None;
-        self.playback = None;
-        self.authenticated = false;
+        let released = self.provider_slug();
+        if let Some(slug) = released {
+            self.tasks.remove(slug);
+            self.connected.remove(slug);
+            self.stop_reconnect(slug);
+        }
         self.playcounts = false;
         self.state = SessionState::SignedOut;
         cx.notify();
-        cx.emit(SessionEvent::SignedOut);
+        if let Some(slug) = released {
+            cx.emit(SessionEvent::SignedOut(slug));
+        }
     }
 
-    fn signed_in(&mut self, session: ProviderSession, index: usize, cx: &mut Context<Self>) {
+    fn connect(&mut self, slug: &'static str, mut session: ProviderSession) {
+        session.profile.id = music::tag::tag(slug, &session.profile.id);
+        let client = music::tagged::new(slug, session.api);
+        self.connected.insert(
+            slug,
+            Connected {
+                catalog: Arc::new(CatalogSource::new(client.clone())),
+                client,
+                playback: session.playback,
+                profile: session.profile,
+                authenticated: session.authenticated,
+            },
+        );
+    }
+
+    fn signed_in(&mut self, mut session: ProviderSession, index: usize, cx: &mut Context<Self>) {
+        let slug = self.providers[index].slug();
+        session.profile.id = music::tag::tag(slug, &session.profile.id);
         let replaced = self
             .resume
             .take()
-            .is_some_and(|(held, profile)| held != index || profile.id != session.profile.id);
-        if replaced {
-            self.drop_previous_session(cx);
+            .filter(|(held, profile)| *held != index || profile.id != session.profile.id);
+        if let Some((held, _)) = replaced {
+            self.drop_previous_session(held, cx);
         }
         self.active = Some(index);
         self.awaiting = None;
         self.error = None;
-        let slug = self.providers[index].slug();
         self.settings.update(cx, |settings, cx| {
             settings.set_provider(slug, cx);
         });
-        self.catalog = Some(Arc::new(CatalogSource::new(session.api.clone())));
-        self.client = Some(session.api);
-        self.playback = Some(session.playback);
-        self.authenticated = session.authenticated;
         self.playcounts = session.playcounts;
-        self.state = SessionState::SignedIn(session.profile);
-        self.attempt = 0;
+        let expired = session.expired;
+        self.connect(slug, session);
+        self.warn_expired(slug, expired, cx);
+        self.state = SessionState::SignedIn;
+        self.attempt.remove(slug);
         self.start_heartbeat(cx);
         cx.notify();
-        cx.emit(SessionEvent::SignedIn);
+        cx.emit(SessionEvent::SignedIn(slug));
     }
 
-    fn drop_previous_session(&mut self, cx: &mut Context<Self>) {
-        self.client = None;
-        self.catalog = None;
-        self.playback = None;
-        self.authenticated = false;
+    fn drop_previous_session(&mut self, index: usize, cx: &mut Context<Self>) {
+        let slug = self.providers[index].slug();
+        self.connected.remove(slug);
         self.playcounts = false;
-        self.watch = None;
-        self.reconnect = None;
-        self.reconnecting = false;
-        self.attempt = 0;
-        cx.emit(SessionEvent::SignedOut);
+        self.stop_reconnect(slug);
+        cx.emit(SessionEvent::SignedOut(slug));
     }
 
     fn start_heartbeat(&mut self, cx: &mut Context<Self>) {
@@ -488,7 +596,7 @@ impl Session {
             loop {
                 cx.background_executor().timer(HEARTBEAT).await;
                 if this
-                    .update(cx, |this, cx| this.reconnect_if_stale(cx))
+                    .update(cx, |this, cx| this.reconnect_stale(cx))
                     .is_err()
                 {
                     return;
@@ -497,85 +605,125 @@ impl Session {
         }));
     }
 
-    pub fn reconnect_if_stale(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.reconnecting {
+    /// Forgets any reconnect in flight for one provider.
+    fn stop_reconnect(&mut self, slug: &str) {
+        self.reconnect.remove(slug);
+        self.reconnecting.remove(slug);
+        self.attempt.remove(slug);
+    }
+
+    /// Reconnects every connected provider whose session has gone stale.
+    ///
+    /// Every one, not only the active one. Playback, search, the library and
+    /// the feed all reach providers this session is not "on", so a session
+    /// that dies in the background takes those with it — and nothing else
+    /// looks. Checking the active provider alone left a dead one failing
+    /// every track it owned until the app was restarted.
+    fn reconnect_stale(&mut self, cx: &mut Context<Self>) {
+        let connected: Vec<&'static str> = self.connected.keys().copied().collect();
+        for slug in connected {
+            self.reconnect_if_stale(slug, cx);
+        }
+    }
+
+    /// Reconnects one provider if its session has gone stale, and reports
+    /// whether a reconnect is now in flight for it.
+    pub fn reconnect_if_stale(&mut self, slug: &str, cx: &mut Context<Self>) -> bool {
+        if self.reconnecting.contains(slug) {
             return true;
         }
-        if !matches!(self.state, SessionState::SignedIn(_)) {
-            return false;
-        }
-        let Some(client) = &self.client else {
-            return false;
-        };
-        if client.alive() {
-            self.attempt = 0;
-            return false;
-        }
-        let Some(active) = self.active else {
+        let Some(index) = self
+            .providers
+            .iter()
+            .position(|provider| provider.slug() == slug)
+        else {
             return false;
         };
-        let wait = BACKOFF[self.attempt.min(BACKOFF.len() - 1)];
-        self.attempt += 1;
-        self.reconnecting = true;
+        // a provider being signed in is already on its way back
+        if self.awaiting == Some(index) {
+            return false;
+        }
+        let slug = self.providers[index].slug();
+        let Some(entry) = self.connected.get(slug) else {
+            return false;
+        };
+        if entry.client.alive() {
+            self.attempt.remove(slug);
+            return false;
+        }
+        let attempt = self.attempt.entry(slug).or_default();
+        let wait = BACKOFF[(*attempt).min(BACKOFF.len() - 1)];
+        *attempt += 1;
+        self.reconnecting.insert(slug);
         log::warn!(
             "session: the {} session went stale, reconnecting in {}s",
-            self.providers[active].name(),
+            self.providers[index].name(),
             wait.as_secs()
         );
-        let provider = self.providers[active].clone();
+        let provider = self.providers[index].clone();
         let io = self.io.clone();
-        self.reconnect = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
             let restored = join(io.spawn(async move { provider.restore().await })).await;
             this.update(cx, |this, cx| {
-                this.reconnecting = false;
+                this.reconnecting.remove(slug);
                 match restored {
-                    Ok(Some(session)) => this.reconnected(session, cx),
-                    Ok(None) => log::warn!("session: nothing stored to reconnect with"),
-                    Err(error) => log::warn!("session: cannot reconnect: {error:#}"),
+                    Ok(Some(session)) => this.reconnected(slug, session, cx),
+                    Ok(None) => log::warn!("session: nothing stored to reconnect {slug} with"),
+                    Err(error) => log::warn!("session: cannot reconnect {slug}: {error:#}"),
                 }
             })
             .ok();
-        }));
+        });
+        self.reconnect.insert(slug, task);
         true
     }
 
-    fn reconnected(&mut self, session: ProviderSession, cx: &mut Context<Self>) {
-        self.attempt = 0;
-        self.catalog = Some(Arc::new(CatalogSource::new(session.api.clone())));
-        self.client = Some(session.api);
-        self.playback = Some(session.playback);
-        self.authenticated = session.authenticated;
-        self.playcounts = session.playcounts;
-        log::debug!("session: reconnected");
+    fn reconnected(
+        &mut self,
+        slug: &'static str,
+        session: ProviderSession,
+        cx: &mut Context<Self>,
+    ) {
+        self.attempt.remove(slug);
+        // a background provider coming back must not restyle the table the
+        // active provider's pages are drawn with
+        if self.provider_slug() == Some(slug) {
+            self.playcounts = session.playcounts;
+        }
+        self.connect(slug, session);
+        log::debug!("session: reconnected {slug}");
         cx.notify();
-        cx.emit(SessionEvent::Reconnected);
+        cx.emit(SessionEvent::Reconnected(slug));
     }
 
     fn failed(&mut self, error: &Error, cx: &mut Context<Self>) {
         let failure = Failure::new(error);
-        if let Some(failed) = self.awaiting.or(self.active) {
-            self.error = Some((failed, failure.clone()));
+        let failed = self.awaiting.take().or(self.active);
+        if let Some(index) = failed {
+            self.error = Some((index, failure.clone()));
         }
-        self.awaiting = None;
-        if let Some((index, profile)) = self.resume.take() {
+        if let Some((index, _)) = self.resume.take() {
             self.active = Some(index);
-            self.state = SessionState::SignedIn(profile);
+            self.state = SessionState::SignedIn;
             cx.notify();
             return;
         }
-        self.client = None;
-        self.catalog = None;
-        self.playback = None;
+        if let Some(slug) = self.provider_slug() {
+            self.connected.remove(slug);
+        }
         self.state = SessionState::Failed(failure);
         cx.notify();
-        cx.emit(SessionEvent::SignedOut);
+        if let Some(index) = failed {
+            cx.emit(SessionEvent::SignedOut(self.providers[index].slug()));
+        }
     }
 
     fn restore_local(&mut self, cx: &mut Context<Self>) {
+        let slug = self.local_provider.slug();
         let provider = self.local_provider.clone();
         let io = self.io.clone();
-        self.local_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let restored = join(io.spawn(async move { provider.restore().await })).await;
             this.update(cx, |this, cx| {
                 if let Ok(Some(session)) = restored {
@@ -583,13 +731,15 @@ impl Session {
                 }
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(slug, task);
     }
 
     pub fn choose_local_folder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let slug = self.local_provider.slug();
         let provider = self.local_provider.clone();
         let io = self.io.clone();
-        self.local_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let prompt: PromptSink = Arc::new(|_| {});
             let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let signed_in = join(
@@ -604,24 +754,23 @@ impl Session {
                 }
             })
             .ok();
-        }));
+        });
+        self.tasks.insert(slug, task);
     }
 
     pub fn clear_local_folder(&mut self, cx: &mut Context<Self>) {
+        let slug = self.local_provider.slug();
         self.local_provider.sign_out();
-        self.local_client = None;
-        self.local_catalog = None;
-        self.local_playback = None;
-        self.local_task = None;
+        self.connected.remove(slug);
+        self.tasks.remove(slug);
         cx.notify();
-        cx.emit(SessionEvent::LocalChanged);
+        cx.emit(SessionEvent::SignedOut(slug));
     }
 
     fn local_signed_in(&mut self, session: ProviderSession, cx: &mut Context<Self>) {
-        self.local_catalog = Some(Arc::new(CatalogSource::new(session.api.clone())));
-        self.local_client = Some(session.api);
-        self.local_playback = Some(session.playback);
+        let slug = self.local_provider.slug();
+        self.connect(slug, session);
         cx.notify();
-        cx.emit(SessionEvent::LocalChanged);
+        cx.emit(SessionEvent::SignedIn(slug));
     }
 }

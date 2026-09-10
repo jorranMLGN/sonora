@@ -249,7 +249,11 @@ fn section(section: Section) -> Option<GenreSection> {
         .unwrap_or_default();
     let items: Vec<GenreItem> = section.items.items.into_iter().filter_map(item).collect();
 
-    (!items.is_empty()).then_some(GenreSection { title, items })
+    (!items.is_empty()).then_some(GenreSection {
+        title,
+        items,
+        provider: None,
+    })
 }
 
 fn item(item: Item) -> Option<GenreItem> {

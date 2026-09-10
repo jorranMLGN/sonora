@@ -69,6 +69,13 @@ impl RenderOnce for SecretPrompt {
             )
             .child(secret)
             .action(
+                Button::new("open-site")
+                    .ghost()
+                    .icon("icons/link.svg")
+                    .label(t!("login-secret-open", site = keys.site))
+                    .on_click(move |_, _, cx| cx.open_url(&format!("https://{}", keys.site))),
+            )
+            .action(
                 Button::new("cancel-secret")
                     .ghost()
                     .label(t!("common-cancel"))

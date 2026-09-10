@@ -12,6 +12,8 @@ pub mod netease;
 pub mod soundcloud;
 mod spectrum;
 pub mod spotify;
+pub mod tag;
+pub mod tagged;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -36,10 +38,7 @@ pub const LOCAL_ARTIST_PREFIX: &str = "local-artist:";
 pub const LOCAL_PLAYLIST_PREFIX: &str = "local-playlist:";
 
 pub fn is_local_id(id: &str) -> bool {
-    id.starts_with(LOCAL_TRACK_PREFIX)
-        || id.starts_with(LOCAL_ALBUM_PREFIX)
-        || id.starts_with(LOCAL_ARTIST_PREFIX)
-        || id.starts_with(LOCAL_PLAYLIST_PREFIX)
+    tag::slug_of(id) == Some("local")
 }
 
 pub fn distinct_covers(tracks: &[Track], wanted: usize) -> Vec<String> {
@@ -84,6 +83,15 @@ pub trait MusicApi: Send + Sync {
 
     async fn all_tracks(&self, limit: u32) -> Result<Vec<Track>> {
         self.saved_tracks(limit).await
+    }
+
+    /// Whether `all_tracks` answers with something other than `saved_tracks`.
+    ///
+    /// The local provider scans a folder, so it has both a Songs tab holding
+    /// everything and a separate Favorites tab. A streaming provider's Songs
+    /// tab *is* its favourites, so it shows one tab fewer.
+    fn has_all_tracks(&self) -> bool {
+        false
     }
 
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()>;
@@ -211,6 +219,8 @@ pub struct ProviderSession {
     pub playback: Arc<dyn PlaybackFactory>,
     pub authenticated: bool,
     pub playcounts: bool,
+    /// A stored credential was rejected and this session fell back to guest.
+    pub expired: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -227,6 +237,7 @@ pub enum SignInProblem {
     Premium,
     Region,
     Credentials,
+    Secret,
     Network,
     Cancelled,
     Refused,
@@ -241,6 +252,7 @@ impl std::fmt::Display for SignInFailure {
             SignInProblem::Premium => "the account has no premium subscription",
             SignInProblem::Region => "the account is out of its home region",
             SignInProblem::Credentials => "the stored credentials are no longer valid",
+            SignInProblem::Secret => "the pasted credential was not accepted",
             SignInProblem::Network => "the service could not be reached",
             SignInProblem::Cancelled => "authorization was cancelled in the browser",
             SignInProblem::Refused => "the service refused the session",
@@ -277,6 +289,13 @@ pub trait MusicProvider: Send + Sync {
     fn location(&self) -> Option<String> {
         None
     }
+
+    /// The same fact as `MusicApi::has_all_tracks`, answerable before the
+    /// provider is connected — the tab set cannot wait for a client.
+    fn has_all_tracks(&self) -> bool {
+        false
+    }
+
     async fn restore(&self) -> Result<Option<ProviderSession>>;
     async fn sign_in(
         &self,
@@ -306,6 +325,10 @@ mod sign_in_failure_tests {
             (
                 SignInProblem::Credentials,
                 "the stored credentials are no longer valid",
+            ),
+            (
+                SignInProblem::Secret,
+                "the pasted credential was not accepted",
             ),
             (SignInProblem::Network, "the service could not be reached"),
             (
