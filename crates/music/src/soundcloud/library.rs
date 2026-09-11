@@ -119,14 +119,14 @@ pub async fn followed(http: &Http, user: &str, limit: u32) -> Result<Vec<crate::
         .collect())
 }
 
-/// Likes or unlikes a track.
+/// Likes or unlikes a track as `user`.
 ///
-/// UNVERIFIED: no write endpoint on this API has been exercised against the
-/// live service. This follows `PUT`/`DELETE /likes/tracks/{id}` as the
-/// steps describe.
-pub async fn set_track_liked(http: &Http, id: &str, liked: bool) -> Result<()> {
+/// `PUT`/`DELETE /users/{user}/track_likes/{id}`, the pair the web player
+/// names `soundLikesCreate` and `soundLikesDelete`. There is no
+/// `/likes/tracks/{id}` on this API; it answers 404.
+pub async fn set_track_liked(http: &Http, user: &str, id: &str, liked: bool) -> Result<()> {
     require_authenticated(http)?;
-    let path = format!("/likes/tracks/{id}");
+    let path = format!("/users/{user}/track_likes/{id}");
     if liked {
         http.put_empty(&path).await
     } else {
@@ -136,28 +136,28 @@ pub async fn set_track_liked(http: &Http, id: &str, liked: bool) -> Result<()> {
 
 /// Follows or unfollows an artist.
 ///
-/// UNVERIFIED: this follows `PUT`/`DELETE /me/followings/{id}` as the steps
-/// describe; nothing here has been exercised against the live service.
+/// `POST`/`DELETE /me/followings/{id}`, the pair the web player names
+/// `myFollowingsCreate` and `myFollowingsDelete`. Following is a `POST`,
+/// not a `PUT`, unlike every like.
 pub async fn set_followed(http: &Http, id: &str, followed: bool) -> Result<()> {
     require_authenticated(http)?;
     let path = format!("/me/followings/{id}");
     if followed {
-        http.put_empty(&path).await
+        http.post_empty(&path).await
     } else {
         http.delete(&path).await
     }
 }
 
-/// Saves or unsaves a set (album or playlist) to the signed-in user's
-/// library. SoundCloud has no album-save distinct from liking a set, so
-/// this backs both `set_album_saved` and playlist-library membership.
+/// Saves or unsaves a set (album or playlist) to `user`'s library.
+/// SoundCloud has no album-save distinct from liking a set, so this backs
+/// both `set_album_saved` and playlist-library membership.
 ///
-/// UNVERIFIED: this follows `PUT`/`DELETE /me/library/albums_and_playlists/{id}`
-/// as the steps describe; nothing here has been exercised against the live
-/// service.
-pub async fn set_saved(http: &Http, id: &str, saved: bool) -> Result<()> {
+/// `PUT`/`DELETE /users/{user}/playlist_likes/{id}`, the pair the web player
+/// names `playlistLikesCreate` and `playlistLikesDelete`.
+pub async fn set_saved(http: &Http, user: &str, id: &str, saved: bool) -> Result<()> {
     require_authenticated(http)?;
-    let path = format!("/me/library/albums_and_playlists/{id}");
+    let path = format!("/users/{user}/playlist_likes/{id}");
     if saved {
         http.put_empty(&path).await
     } else {

@@ -330,6 +330,25 @@ impl Http {
             .with_context(|| format!("cannot read the soundcloud response for {path}"))
     }
 
+    pub async fn post_empty(&self, path: &str) -> Result<()> {
+        let response = self
+            .execute(path, Repeat::Never, |agent, id| {
+                agent
+                    .post(format!("{BASE}{path}"))
+                    .query(&[("client_id", id)])
+            })
+            .await?;
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(anyhow::Error::new(AuthRejected)
+                .context(format!("soundcloud refused {path} with {status}")));
+        }
+        if !status.is_success() {
+            anyhow::bail!("soundcloud refused {path} with {status}");
+        }
+        Ok(())
+    }
+
     pub async fn put_empty(&self, path: &str) -> Result<()> {
         let response = self
             .execute(path, Repeat::Safe, |agent, id| {
