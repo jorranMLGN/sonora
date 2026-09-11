@@ -24,7 +24,6 @@ const POLL: Duration = Duration::from_millis(20);
 fn rank(preset: &str) -> u8 {
     match preset {
         "aac_160k" => 4,
-        "abr_sq" => 3,
         "aac_96k" => 2,
         "mp3_0_0" => 1,
         _ => 1,
@@ -34,15 +33,20 @@ fn rank(preset: &str) -> u8 {
 /// Chooses which transcoding to play.
 ///
 /// The only `progressive` transcoding soundcloud offers is a legacy 128kbps
-/// mp3; every better encoding (`aac_160k`, `aac_96k`, `abr_sq`) is hls-only.
-/// So this prefers the best-ranked hls entry and falls back to progressive
-/// only when no hls entry is offered at all. Filtering happens on
-/// `format.protocol`, never on `preset` alone: `mp3_0_0` exists as both an
-/// hls and a progressive entry.
+/// mp3; every better encoding (`aac_160k`, `aac_96k`) is hls-only. So this
+/// prefers the best-ranked hls entry and falls back to progressive only when
+/// no hls entry is offered at all. Filtering happens on `format.protocol`,
+/// never on `preset` alone: `mp3_0_0` exists as both an hls and a progressive
+/// entry.
+///
+/// An `abr_` preset is never chosen. It names an adaptive master playlist of
+/// variants, which `stream::assemble` cannot read, and soundcloud refuses to
+/// resolve it with a 404 anyway — so ranking it would only fail a track that
+/// has a playable `aac_96k` beside it.
 pub fn pick(transcodings: &[Transcoding]) -> Option<&Transcoding> {
     transcodings
         .iter()
-        .filter(|t| t.format.protocol == "hls")
+        .filter(|t| t.format.protocol == "hls" && !t.preset.starts_with("abr_"))
         .max_by_key(|t| rank(&t.preset))
         .or_else(|| {
             transcodings
@@ -662,6 +666,7 @@ mod tests {
             format: Format {
                 protocol: protocol.to_string(),
             },
+            legacy: false,
         }
     }
 

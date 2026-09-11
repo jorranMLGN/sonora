@@ -58,8 +58,9 @@ pub struct Track {
     pub user: User,
 }
 
-/// The set of encodings a track is offered in. Only `playback::pick` reads
-/// this; every other conversion in this module ignores it.
+/// The set of encodings a track is offered in. `playback::pick` chooses from
+/// it, and `track` reads it only to refuse a track offered solely behind drm:
+/// its unencrypted legacy mp3 is still listed, but resolves to a 404.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Media {
     #[serde(default)]
@@ -77,6 +78,8 @@ pub struct Transcoding {
     pub preset: String,
     #[serde(default)]
     pub format: Format,
+    #[serde(default, rename = "is_legacy_transcoding")]
+    pub legacy: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -146,7 +149,10 @@ pub fn track(raw: Track) -> Model {
     Model {
         id: Some(raw.id.to_string()),
         name: raw.title,
-        playable: raw.streamable && raw.policy != "BLOCK" && raw.policy != "SNIP",
+        playable: raw.streamable
+            && raw.policy != "BLOCK"
+            && raw.policy != "SNIP"
+            && !drm_only(&raw.media),
         artists: artist.clone(),
         artist_refs: vec![ArtistRef {
             name: artist,
@@ -314,6 +320,18 @@ pub fn album(raw: Playlist) -> AlbumModel {
         copyrights: Vec::new(),
         added_at: None,
     }
+}
+
+fn drm_only(media: &Media) -> bool {
+    let encrypted = media
+        .transcodings
+        .iter()
+        .any(|t| t.format.protocol.contains("encrypted"));
+    let open = media
+        .transcodings
+        .iter()
+        .any(|t| !t.legacy && matches!(t.format.protocol.as_str(), "hls" | "progressive"));
+    encrypted && !open
 }
 
 #[cfg(test)]
