@@ -18,6 +18,7 @@ use server::{Playing, ServerEvent, Serving};
 use wire::Refusal;
 
 const ROOM: &str = "Sonora";
+const AUTOSTART: &str = "SONORA_JAM_AUTOSTART";
 const PROBE: [&str; 2] = ["8.8.8.8:80", "192.168.1.1:9"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +103,25 @@ impl Jam {
             now: watch::channel(None).0,
             serve: None,
             follow: None,
+        }
+    }
+
+    pub fn autostart(&mut self, cx: &mut Context<Self>) {
+        match std::env::var(AUTOSTART) {
+            Err(_) => return,
+            Ok(value) if value == "0" => return,
+            Ok(_) => {}
+        }
+
+        self.start(cx);
+        let JamRole::Hosting {
+            code, addresses, ..
+        } = &self.role
+        else {
+            return;
+        };
+        for address in addresses {
+            log::info!("jam: hosting at http://{address}/c/{code}");
         }
     }
 
