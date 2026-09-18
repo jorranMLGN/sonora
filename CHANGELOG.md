@@ -7,6 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by
+  pasting the OAuth token your browser shows, then play your likes, playlists and sets, search
+  tracks, playlists and albums, open an artist page and start a radio from any track. Liking,
+  following and saving a set write back to your SoundCloud account.
+- Spotify, YouTube Music and SoundCloud can be connected at the same time. Each connected provider
+  keeps its own group in the sidebar and its own library, so signing in to one no longer signs you
+  out of another, and signing out of one leaves the rest playing.
+- Search asks every connected provider at once and gives each one its own column. Local files keep
+  their own filter on the Local Music screen.
+- Home weaves its feed from every connected provider instead of only the one you last signed in to.
+- Tracks, search results and quick pick cards show which provider they came from, and the library
+  rows in the sidebar carry their provider's logo.
+- A mini player: press M, or the button in the player bar, for a small window with artwork and
+  transport. Settings > General > Window chooses whether it stays above other windows and which
+  corner it opens in.
+
+### Changed
+
+- Sign-in problems name the provider you are connecting to instead of always naming Spotify, and
+  the paste-a-credential flow is labelled by the credential it asks for.
+- A provider connected without an account reads as a guest in Settings.
+- A session that expires says so in a toast instead of leaving the library quietly empty.
+
+### Fixed
+
+- Dragging the seek bar or the volume slider no longer lets the window drag region underneath steal
+  the press.
+- A track that turned out to be unplayable stays skipped when the queue is restored at startup.
+
 ## [0.30.0] - 2026-09-04
 
 ### Added
