@@ -659,3 +659,54 @@ tags-isrc = ISRC
 tags-comment = Comment
 toast-tags-saved = Saved the tags for { $name }
 toast-tags-failed = The tags could not be saved
+
+# jam
+jam-title = Jam
+jam-empty = Share what you are playing with the speakers around you
+jam-start = Start a jam
+jam-stop = Stop the jam
+jam-join = Join a jam
+jam-join-hint = Address, like 192.168.1.20:8990
+jam-code-hint = Code
+jam-cancel = Cancel
+jam-leave = Leave
+jam-kick = Remove this listener
+jam-open-on = Open on another device
+jam-code = Code { $code }
+jam-lead = Lead
+jam-lead-detail = How far ahead of the sound the stream runs
+jam-joining = Connecting to { $at }
+jam-lost = Lost the host, trying again
+jam-listening = Listening to { $room }
+jam-no-listeners = Nobody is listening yet
+jam-listeners = { $count ->
+    [one] { $count } listener
+   *[other] { $count } listeners
+}
+jam-refused-protocol = That Sonora speaks a different jam version
+jam-refused-code = That code does not open this jam
+jam-refused-codec = That device cannot play what this jam sends
+jam-refused-full = This jam is full
+jam-refused-closed = This jam has nothing to send yet
+toast-jam-refused = { $reason }
+toast-jam-ended = The jam ended
+
+# jam receiver page
+jam-page-title = Sonora jam
+jam-page-play = Play
+jam-page-stop = Stop
+jam-page-offset = Delay on this device
+jam-page-buffer = Buffer
+jam-page-waiting = Waiting for the host
+jam-page-connected = Connected
+jam-page-lost = Lost the host
+jam-page-nothing = Nothing playing
+
+# jam settings
+settings-group-jam = Jam
+settings-jam-name = Jam name
+settings-jam-name-detail = What listeners see when they join
+settings-jam-lead = Jam lead
+settings-jam-lead-detail = Milliseconds of buffer a listener keeps ahead of the sound
+
+settings-jam-lead-value = { $lead } ms
