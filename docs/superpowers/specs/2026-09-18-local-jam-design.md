@@ -260,7 +260,7 @@ Bye
 // host -> receiver
 Welcome { protocol: u32, room: String, format: Format, lead_ms: u32, origin: u64 }
 Refused { reason: Refusal }          // Protocol | Code | Codec | Full | Closed
-Mark    { kind: MarkKind, at: u64 }  // Quiet | Cut, at = sample index
+Mark    { mark: MarkKind, at: u64 }  // Quiet | Cut, at = sample index
 Now     { title, artist, album, cover: Option<String>, duration_ms: u64 }
 Pong    { t0: u64, t1: u64, t2: u64 }
 Ended   { reason: Farewell }         // HostLeft | Kicked

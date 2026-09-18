@@ -163,6 +163,9 @@ fn yes() -> bool {
 
 const SAVE_DELAY: Duration = Duration::from_millis(300);
 const DEFAULT_VOLUME: f32 = 0.7;
+const DEFAULT_JAM_PORT: u16 = 8990;
+const DEFAULT_JAM_LEAD: u32 = 250;
+const JAM_PORT_ENV: &str = "SONORA_JAM_PORT";
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
 const DEFAULT_SIDEBAR_RIGHT_WIDTH: f32 = 254.;
 const DEFAULT_FONT_SIZE: f32 = 14.;
@@ -229,6 +232,26 @@ struct Values {
     #[serde(skip_serializing_if = "Option::is_none")]
     window: Option<Frame>,
     appearance: Appearance,
+    #[serde(default)]
+    jam: Jam,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct Jam {
+    port: u16,
+    lead_ms: u32,
+    name: String,
+}
+
+impl Default for Jam {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_JAM_PORT,
+            lead_ms: DEFAULT_JAM_LEAD,
+            name: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -291,6 +314,7 @@ impl Default for Values {
             resume: None,
             window: None,
             appearance: Appearance::default(),
+            jam: Jam::default(),
         }
     }
 }
@@ -461,6 +485,40 @@ impl AppSettings {
 
     pub fn mini_on_top(&self) -> bool {
         self.values.mini_on_top
+    }
+
+    pub fn jam_port(&self) -> u16 {
+        match std::env::var(JAM_PORT_ENV) {
+            Err(_) => self.values.jam.port,
+            Ok(value) => value.parse().unwrap_or_else(|_| {
+                log::warn!("settings: cannot read {JAM_PORT_ENV}");
+                self.values.jam.port
+            }),
+        }
+    }
+
+    pub fn jam_lead(&self) -> u32 {
+        self.values.jam.lead_ms
+    }
+
+    pub fn jam_name(&self) -> &str {
+        &self.values.jam.name
+    }
+
+    pub fn set_jam_lead(&mut self, lead_ms: u32, cx: &mut Context<Self>) {
+        if self.values.jam.lead_ms == lead_ms {
+            return;
+        }
+        self.values.jam.lead_ms = lead_ms;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_jam_name(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.values.jam.name == name {
+            return;
+        }
+        self.values.jam.name = name;
+        self.schedule_save(cx);
     }
 
     pub fn sidebar_right_tab(&self) -> SideTab {
