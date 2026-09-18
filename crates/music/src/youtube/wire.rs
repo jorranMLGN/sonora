@@ -85,8 +85,10 @@ pub fn album_detail(source: ytmusic::AlbumDetail) -> AlbumDetail {
         .enumerate()
         .map(|(index, item)| track(item, index as u32))
         .collect();
+    let album = album(source.album);
     AlbumDetail {
-        album: album(source.album),
+        cover_max: album.cover_large.clone(),
+        album,
         tracks,
     }
 }

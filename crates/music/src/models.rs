@@ -132,6 +132,7 @@ pub struct Album {
 pub struct AlbumDetail {
     pub album: Album,
     pub tracks: Vec<Track>,
+    pub cover_max: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

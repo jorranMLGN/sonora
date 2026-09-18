@@ -109,8 +109,10 @@ pub async fn tracks(http: &Http, id: &str) -> Result<Vec<crate::Track>> {
 pub async fn album(http: &Http, id: &str) -> Result<crate::AlbumDetail> {
     let raw = fetch_raw(http, id).await?;
     let tracks = resolve_tracks(http, id, &raw).await?;
+    let album = wire::album(raw);
     Ok(crate::AlbumDetail {
-        album: wire::album(raw),
+        cover_max: album.cover_large.clone(),
+        album,
         tracks,
     })
 }
