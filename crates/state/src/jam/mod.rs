@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod cast;
 mod clock;
 mod receiver;
@@ -244,7 +242,10 @@ impl Jam {
                 self.role = JamRole::Idle;
                 cx.emit(JamEvent::Refused(reason));
             }
-            ReceiverEvent::Ended(_) => self.role = JamRole::Idle,
+            ReceiverEvent::Ended(reason) => {
+                log::info!("jam: the host ended the session: {reason:?}");
+                self.role = JamRole::Idle;
+            }
             ReceiverEvent::Lost => self.role = JamRole::Lost { at: at.to_owned() },
         }
         cx.notify();

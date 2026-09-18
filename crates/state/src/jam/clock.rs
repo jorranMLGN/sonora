@@ -61,12 +61,9 @@ impl Clock {
         self.best().map(|sample| sample.offset()).unwrap_or(0)
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.samples.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.samples.is_empty()
     }
 }
 

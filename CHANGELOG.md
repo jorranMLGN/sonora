@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Start a jam and send whatever Sonora is playing to the other devices on your network, whichever
+  provider it came from.
+- Listen from any phone, tablet or laptop by opening a page Sonora serves on your network: no
+  account, no app, and a slider to line the sound up by ear.
+- Listen from a second Sonora, which keeps itself in step with the host on its own.
 - SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by
   pasting the OAuth token your browser shows, then play your likes, playlists and sets, search
   tracks, playlists and albums, open an artist page and start a radio from any track. Liking,
