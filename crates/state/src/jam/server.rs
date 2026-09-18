@@ -7,8 +7,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use futures::{SinkExt, StreamExt};
-use http_body_util::Full;
-use hyper::body::{Bytes, Incoming};
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Bytes, Frame, Incoming};
 use hyper::header::{CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -39,6 +40,8 @@ const HELLO_WAIT: Duration = Duration::from_secs(5);
 const ASK_WAIT: Duration = Duration::from_secs(10);
 const ADDS: usize = 50;
 const FORMAT_WAIT: Duration = Duration::from_secs(120);
+const WAV_HEADER: usize = 44;
+const ENDLESS: u32 = u32::MAX;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Playing {
@@ -140,11 +143,13 @@ pub async fn run(listener: StdListener, serving: Serving) {
     }
 }
 
+type Body = BoxBody<Bytes, Infallible>;
+
 async fn answer(
     mut req: Request<Incoming>,
     peer: SocketAddr,
     shared: Arc<Shared>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<Body>, Infallible> {
     if blocked(&shared, peer.ip()) {
         return Ok(refuse(StatusCode::TOO_MANY_REQUESTS));
     }
@@ -152,12 +157,25 @@ async fn answer(
     let path = req.uri().path().to_owned();
     let page = format!("/c/{}", shared.serving.code);
     let socket = format!("{page}/ws");
+    let stream = format!("{page}/stream.wav");
 
     if req.method() == Method::GET && path == page {
         return Ok(Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "text/html; charset=utf-8")
-            .body(Full::new(Bytes::from(shared.page.clone())))
+            .body(boxed(Bytes::from(shared.page.clone())))
+            .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR)));
+    }
+
+    if req.method() == Method::GET && path == stream {
+        let Some(format) = awaited(&shared).await else {
+            return Ok(refuse(StatusCode::SERVICE_UNAVAILABLE));
+        };
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "audio/wav")
+            .header("cache-control", "no-store")
+            .body(wav(&shared, format))
             .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR)));
     }
 
@@ -187,7 +205,7 @@ async fn answer(
             .header(CONNECTION, "Upgrade")
             .header(UPGRADE, "websocket")
             .header(SEC_WEBSOCKET_ACCEPT, accept)
-            .body(Full::default())
+            .body(boxed(Bytes::new()))
             .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR)));
     }
 
@@ -507,12 +525,60 @@ fn strike(shared: &Shared, peer: IpAddr) {
     entry.0 += 1;
 }
 
-fn refuse(status: StatusCode) -> Response<Full<Bytes>> {
+fn refuse(status: StatusCode) -> Response<Body> {
     Response::builder()
         .status(status)
         .header("content-type", "text/plain; charset=utf-8")
-        .body(Full::new(Bytes::from_static(b"no\n")))
-        .unwrap_or_default()
+        .body(boxed(Bytes::from_static(b"no\n")))
+        .unwrap_or_else(|_| Response::new(boxed(Bytes::new())))
+}
+
+fn boxed(bytes: Bytes) -> Body {
+    Full::new(bytes).boxed()
+}
+
+fn wav(shared: &Arc<Shared>, format: wire::Format) -> Body {
+    let head = header(format);
+    let chunks = shared.serving.broadcast.subscribe();
+    let sound = futures::stream::unfold(chunks, |mut chunks| async move {
+        loop {
+            match chunks.recv().await {
+                Ok(chunk) if chunk.bytes.is_empty() => continue,
+                Ok(chunk) => {
+                    let frame = Frame::data(Bytes::from(chunk.bytes.clone()));
+                    return Some((Ok(frame), chunks));
+                }
+                Err(RecvError::Lagged(missed)) => {
+                    log::debug!("jam: a stream fell {missed} chunks behind");
+                }
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    let opening = futures::stream::once(async move { Ok(Frame::data(Bytes::from(head))) });
+    BodyExt::boxed(StreamBody::new(opening.chain(sound)))
+}
+
+fn header(format: wire::Format) -> Vec<u8> {
+    let channels = format.channels.max(1);
+    let rate = format.rate.max(1);
+    let bytes_per_frame = channels as u32 * 2;
+
+    let mut head = Vec::with_capacity(WAV_HEADER);
+    head.extend_from_slice(b"RIFF");
+    head.extend_from_slice(&ENDLESS.to_le_bytes());
+    head.extend_from_slice(b"WAVEfmt ");
+    head.extend_from_slice(&16u32.to_le_bytes());
+    head.extend_from_slice(&1u16.to_le_bytes());
+    head.extend_from_slice(&channels.to_le_bytes());
+    head.extend_from_slice(&rate.to_le_bytes());
+    head.extend_from_slice(&(rate * bytes_per_frame).to_le_bytes());
+    head.extend_from_slice(&(bytes_per_frame as u16).to_le_bytes());
+    head.extend_from_slice(&16u16.to_le_bytes());
+    head.extend_from_slice(b"data");
+    head.extend_from_slice(&ENDLESS.to_le_bytes());
+    head
 }
 
 fn rendered() -> String {
