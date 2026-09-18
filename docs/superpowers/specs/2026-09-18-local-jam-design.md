@@ -261,7 +261,9 @@ Bye
 Welcome { protocol: u32, room: String, format: Format, lead_ms: u32, origin: u64 }
 Refused { reason: Refusal }          // Protocol | Code | Codec | Full | Closed
 Mark    { mark: MarkKind, at: u64 }  // Quiet | Cut, at = sample index
-Now     { title, artist, album, cover: Option<String>, duration_ms: u64 }
+Now     { title, artist, album, cover: Option<String>, duration_ms: u64,
+          provider: String }
+Transport { playing: bool, position_ms: u64 }
 Pong    { t0: u64, t1: u64, t2: u64 }
 Ended   { reason: Farewell }         // HostLeft | Kicked
 
@@ -269,11 +271,20 @@ struct Format { rate: u32, channels: u16, codec: Codec }
 enum Codec { Pcm16 }                 // the only one v1 speaks
 ```
 
-`Now` is metadata for the page to show, at whatever rate the track changes. It
-is not part of the audio timeline and a receiver that ignores it still plays
-correctly.
+`Now` is metadata for the page to show, at whatever rate the track changes, and
+`provider` is the slug the track's id carries, so a receiver can say where the
+sound comes from. `Transport` is the host's own transport state, sent whenever
+it moves — roughly twice a second while playing. Neither is part of the audio
+timeline: a receiver that ignores both still plays correctly, which is why they
+are separate messages rather than fields on a chunk.
 
-`protocol` is a single `u32`, refused on mismatch, no negotiation. The codec
+`position_ms` is the host's presentation position, not the sample cursor. A page
+anchors on it and counts forward locally, the way `state::LiveClock` does, so the
+readout is smooth between updates without pretending to be sample-accurate.
+
+`protocol` is a single `u32`, refused on mismatch, no negotiation, and it stands
+at **2**: adding `provider` and `Transport` changed the shape on the wire, and a
+build that predates them should be turned away rather than half work. The codec
 is the one thing that does negotiate, because it is the one thing v1 already
 knows will grow.
 
@@ -404,9 +415,25 @@ language. A receiver whose own language differs gets the host's; matching the
 receiver would mean parsing `Accept-Language` and shipping every locale to the
 page, which v1 does not do.
 
-The page shows: the room name, what is playing from `Now`, a Play/Stop button, a
-level meter, the offset slider, and a buffer-health indicator so a user can see
-whether the network is the problem.
+**The artwork is the album's largest, not the list thumbnail.** `Track::cover` is
+deliberately the smallest image a provider offers, because it feeds grids; a page
+filling a phone screen at three device pixels per CSS pixel needs the other end
+of the range. `AlbumDetail::cover_max` carries it, `state::Cover` resolves and
+caches it for whatever is playing, and the jam sends that URL when it has one.
+
+The page shows: the room name, the artwork and the track from `Now`, badges for
+the connection, the provider and the host's transport state, a progress bar that
+counts forward locally between `Transport` messages, a Play/Stop button, the
+offset slider, and a diagnostic line — buffer depth, stream format, chunks
+received and the last round trip.
+
+**The diagnostics are not decoration.** An `AudioContext` only makes sound after
+a gesture, so a page that has received everything correctly and been tapped
+nowhere is indistinguishable from a broken one unless it says so. The page
+therefore separates what arrived from what was scheduled: a chunk counter that
+rises while nothing plays points at the browser, and a counter that stays at zero
+points at the host. It also renders a JavaScript failure on the page itself,
+because a receiver has no console a user will open.
 
 ## Security
 
@@ -543,8 +570,10 @@ the process.
 
 - **Opus or any compression.** Raw PCM only.
 - **mDNS or any discovery.** Manual address.
-- **Any control from a receiver.** A receiver listens. No transport, no queue,
-  no library.
+- **Transport from a receiver.** A listener cannot play, pause, seek or skip.
+  Adding to the queue is the one exception, and it is a setting (see below).
+- **Browsing the host's library from a receiver.** Search answers with tracks
+  and nothing else: no albums, no playlists, no saved items.
 - **TLS**, and therefore the AudioWorklet path.
 - **A variable-ratio resampler.** Frame drop and insert only.
 - **Anything past the LAN.** No relay, no NAT traversal, no port mapping.
@@ -554,6 +583,31 @@ the process.
 - **Measuring the host's own output latency**, and therefore locking receivers
   to the host's own speakers.
 - **Per-receiver volume from the host.** A receiver sets its own.
+
+## Guests adding to the queue
+
+A listener can search what the host can play and put a track at the end of the
+queue. That is the whole of it: no reordering, no removing, no skipping to it.
+
+The wire carries `Find { query }` and `Add { id }` from the receiver, and
+`Found { query, hits }`, `Added { title }` and `Denied { reason }` back.
+
+Three things make it safe enough for a home network:
+
+- **It is a setting.** `jam.guests_add`, default on, because a jam nobody can
+  add to is a speaker rather than a jam. Off makes the host answer `Denied`.
+- **The host does the searching.** A listener never gets a client, a token or a
+  provider session; it gets a list of titles and the ids belonging to them. The
+  host resolves an id through its own `MusicApi` and appends the resulting
+  `Track` — the same path the app's own queue uses.
+- **Fifty adds per connection.** Past that the host answers `Denied { Busy }`.
+  A reconnect resets it, which is fine: the limit is there to stop a stuck
+  finger, not a determined guest who already has the code.
+
+**The search does not block the audio.** A session's select loop never awaits a
+host answer: it hands the question to the entity over a channel and keeps
+streaming, and the answer arrives later through the session's own outbox. A
+search that takes ten seconds costs a listener nothing but a spinner.
 
 ## Testing
 

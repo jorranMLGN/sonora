@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 3;
 pub const MAGIC: [u8; 4] = *b"SNJ1";
 pub const HEADER: usize = 16;
 
@@ -41,6 +41,24 @@ pub enum Refusal {
     Closed,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hit {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover: Option<String>,
+    pub duration_ms: u64,
+    pub provider: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Denial {
+    Closed,
+    Unknown,
+    Busy,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Farewell {
     HostLeft,
@@ -59,6 +77,12 @@ pub enum FromReceiver {
     },
     Ping {
         t0: u64,
+    },
+    Find {
+        query: String,
+    },
+    Add {
+        id: String,
     },
     Bye,
 }
@@ -86,11 +110,26 @@ pub enum FromHost {
         album: String,
         cover: Option<String>,
         duration_ms: u64,
+        provider: String,
+    },
+    Transport {
+        playing: bool,
+        position_ms: u64,
     },
     Pong {
         t0: u64,
         t1: u64,
         t2: u64,
+    },
+    Found {
+        query: String,
+        hits: Vec<Hit>,
+    },
+    Added {
+        title: String,
+    },
+    Denied {
+        reason: Denial,
     },
     Ended {
         reason: Farewell,
@@ -186,6 +225,7 @@ mod tests {
             album: "y".into(),
             cover: None,
             duration_ms: 214_000,
+            provider: "spotify".into(),
         };
         let line = encode(&sent).unwrap();
         assert!(!line.contains('\n'));

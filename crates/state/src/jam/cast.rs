@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use music::cast::{self, Feed};
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::{broadcast, watch};
 
 use super::wire::{Codec, Format, Header, MarkKind};
 
@@ -24,7 +24,7 @@ pub struct Chunk {
 
 pub struct Broadcast {
     live: Arc<Mutex<Option<&'static str>>>,
-    format: Arc<Mutex<Option<Format>>>,
+    format: watch::Sender<Option<Format>>,
     origin: Arc<AtomicU64>,
     cut: Arc<AtomicBool>,
     chunks: broadcast::Sender<Arc<Chunk>>,
@@ -33,7 +33,7 @@ pub struct Broadcast {
 impl Broadcast {
     pub fn new(feeds: UnboundedReceiver<Feed>) -> Self {
         let live = Arc::new(Mutex::new(None));
-        let format = Arc::new(Mutex::new(None));
+        let format = watch::channel(None).0;
         let origin = Arc::new(AtomicU64::new(now()));
         let cut = Arc::new(AtomicBool::new(false));
         let (chunks, _) = broadcast::channel(CHUNKS);
@@ -80,10 +80,11 @@ impl Broadcast {
     }
 
     pub fn format(&self) -> Option<Format> {
-        match self.format.lock() {
-            Ok(format) => *format,
-            Err(poisoned) => *poisoned.into_inner(),
-        }
+        *self.format.borrow()
+    }
+
+    pub fn formats(&self) -> watch::Receiver<Option<Format>> {
+        self.format.subscribe()
     }
 
     pub fn origin(&self) -> u64 {
@@ -94,7 +95,7 @@ impl Broadcast {
 struct Chunker {
     feeds: UnboundedReceiver<Feed>,
     live: Arc<Mutex<Option<&'static str>>>,
-    format: Arc<Mutex<Option<Format>>>,
+    format: watch::Sender<Option<Format>>,
     origin: Arc<AtomicU64>,
     cut: Arc<AtomicBool>,
     chunks: broadcast::Sender<Arc<Chunk>>,
@@ -202,12 +203,8 @@ impl Chunker {
     }
 
     fn publish(&self, format: Option<Format>) {
-        let mut held = match self.format.lock() {
-            Ok(held) => held,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if *held != format {
-            *held = format;
+        if *self.format.borrow() != format {
+            self.format.send_replace(format);
         }
     }
 

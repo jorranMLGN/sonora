@@ -11,7 +11,10 @@
         --fg: #f3f3f5;
         --dim: #9a9aa5;
         --line: #26262d;
+        --fill: #1a1a20;
         --accent: #5b8cff;
+        --live: #3ecf8e;
+        --warn: #e8734a;
       }
       @media (prefers-color-scheme: light) {
         :root {
@@ -19,6 +22,7 @@
           --fg: #16161a;
           --dim: #6a6a75;
           --line: #e2e2e8;
+          --fill: #f1f1f5;
         }
       }
       * { box-sizing: border-box; }
@@ -26,23 +30,47 @@
         margin: 0;
         min-height: 100dvh;
         display: flex;
-        align-items: center;
         justify-content: center;
-        padding: 24px 16px;
+        padding: 24px 16px 40px;
         background: var(--bg);
         color: var(--fg);
         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
       }
-      main { width: 100%; max-width: 420px; }
-      h1 { margin: 0 0 4px; font-size: 20px; font-weight: 650; }
-      .room { color: var(--dim); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
-      .card { margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; }
-      .title { font-size: 17px; font-weight: 600; }
-      .artist, .album { color: var(--dim); font-size: 14px; }
+      main { width: 100%; max-width: 440px; }
+      .eyebrow {
+        color: var(--dim);
+        font-size: 12px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+      .art {
+        width: 100%;
+        aspect-ratio: 1;
+        margin: 14px 0 18px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--fill) center/cover no-repeat;
+      }
+      h1 { margin: 0; font-size: 21px; font-weight: 650; line-height: 1.25; }
+      .artist { margin-top: 2px; font-size: 15px; }
+      .album, .meta { color: var(--dim); font-size: 13px; }
+      .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .badge {
+        padding: 3px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .badge.live { border-color: var(--live); color: var(--live); }
+      .badge.warn { border-color: var(--warn); color: var(--warn); }
+      .track { margin-top: 14px; height: 4px; border-radius: 999px; background: var(--fill); }
+      .track > div { height: 100%; width: 0; border-radius: 999px; background: var(--accent); }
+      .times { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--dim); }
       button {
         width: 100%;
-        margin-top: 18px;
-        padding: 14px;
+        margin-top: 20px;
+        padding: 15px;
         border: 0;
         border-radius: 12px;
         background: var(--accent);
@@ -51,31 +79,75 @@
         font-weight: 600;
         cursor: pointer;
       }
-      button:disabled { opacity: 0.5; cursor: default; }
-      label { display: block; margin-top: 22px; font-size: 13px; color: var(--dim); }
-      input[type="range"] { width: 100%; margin-top: 8px; accent-color: var(--accent); }
-      .row { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: var(--dim); }
-      .state { margin-top: 16px; font-size: 13px; color: var(--dim); }
-      .dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--dim); }
-      .dot.live { background: #3ecf8e; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .card { margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; }
+      label { display: block; font-size: 13px; color: var(--dim); }
+      input[type="range"] { width: 100%; margin-top: 10px; accent-color: var(--accent); }
+      .row { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--dim); }
+      .hint { margin-top: 14px; font-size: 13px; color: var(--warn); }
+      .find { display: flex; gap: 8px; margin-top: 10px; }
+      .find input[type="search"] {
+        flex: 1;
+        min-width: 0;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      .find button { width: auto; margin: 0; padding: 11px 16px; }
+      .hits { margin-top: 12px; display: flex; flex-direction: column; gap: 2px; }
+      .hit { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+      .hit:first-child { border-top: 0; }
+      .thumb { width: 40px; height: 40px; flex: none; border-radius: 6px; background: var(--fill) center/cover no-repeat; }
+      .hit .who { flex: 1; min-width: 0; }
+      .hit .who div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hit .name { font-size: 14px; }
+      .hit .by { font-size: 12px; color: var(--dim); }
+      .hit button { width: 38px; margin: 0; padding: 8px 0; border-radius: 9px; flex: none; }
+      .said { margin-top: 10px; font-size: 13px; color: var(--dim); }
+      .fault { margin-top: 10px; font-size: 12px; color: var(--warn); word-break: break-word; }
     </style>
   </head>
   <body>
     <main>
-      <div class="room" id="room">{{jam-page-title}}</div>
+      <div class="eyebrow" id="room">{{jam-page-title}}</div>
+      <div class="art" id="art"></div>
+
       <h1 id="title">{{jam-page-nothing}}</h1>
       <div class="artist" id="artist"></div>
       <div class="album" id="album"></div>
 
-      <button id="play">{{jam-page-play}}</button>
+      <div class="badges">
+        <span class="badge" id="link">{{jam-page-waiting}}</span>
+        <span class="badge" id="provider" hidden></span>
+        <span class="badge" id="state" hidden></span>
+      </div>
+
+      <div class="track"><div id="progress"></div></div>
+      <div class="times"><span id="at">0:00</span><span id="total">0:00</span></div>
+
+      <button id="play" disabled>{{jam-page-play}}</button>
+      <div class="hint" id="hint">{{jam-page-tap}}</div>
+
+      <div class="card">
+        <label for="query">{{jam-page-search}}</label>
+        <form class="find" id="find">
+          <input id="query" type="search" placeholder="{{jam-page-search-hint}}" autocomplete="off" />
+          <button type="submit">{{jam-page-search-go}}</button>
+        </form>
+        <div class="hits" id="hits"></div>
+        <div class="said" id="said"></div>
+      </div>
 
       <div class="card">
         <label for="offset">{{jam-page-offset}}</label>
         <input id="offset" type="range" min="-500" max="500" step="5" value="0" />
         <div class="row"><span id="offsetValue">0 ms</span><span id="buffer">{{jam-page-buffer}}</span></div>
+        <div class="row"><span id="stream"></span><span id="ping"></span></div>
+        <div class="fault" id="fault" hidden></div>
       </div>
-
-      <div class="state"><span class="dot" id="dot"></span><span id="status">{{jam-page-waiting}}</span></div>
     </main>
 
     <script>
@@ -87,12 +159,43 @@
         lost: "{{jam-page-lost}}",
         nothing: "{{jam-page-nothing}}",
         buffer: "{{jam-page-buffer}}",
+        playing: "{{jam-page-playing}}",
+        paused: "{{jam-page-paused}}",
+        tap: "{{jam-page-tap}}",
+        silent: "{{jam-page-silent}}",
+        local: "{{jam-page-local}}",
+        chunks: "{{jam-page-chunks}}",
+        added: "{{jam-page-added}}",
+        nothing_found: "{{jam-page-no-hits}}",
+        searching: "{{jam-page-searching}}",
+        denied: {
+          Closed: "{{jam-page-denied-closed}}",
+          Unknown: "{{jam-page-denied-unknown}}",
+          Busy: "{{jam-page-denied-busy}}",
+        },
+        refused: {
+          Protocol: "{{jam-refused-protocol}}",
+          Code: "{{jam-refused-code}}",
+          Codec: "{{jam-refused-codec}}",
+          Full: "{{jam-refused-full}}",
+          Closed: "{{jam-refused-closed}}",
+        },
+      };
+      const LABELS = {
+        spotify: "Spotify",
+        soundcloud: "SoundCloud",
+        youtube: "YouTube Music",
+        local: TEXT.local,
       };
       const MAGIC = 0x314a4e53;
       const OFFSET_KEY = "sonora.jam.offset";
 
       const el = (id) => document.getElementById(id);
       const code = location.pathname.split("/").filter(Boolean).pop();
+      const clock = (ms) => {
+        const total = Math.max(0, Math.round(ms / 1000));
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+      };
 
       let socket = null;
       let ctx = null;
@@ -102,12 +205,28 @@
       let playAt = 0;
       let running = false;
 
+      let duration = 0;
+      let position = 0;
+      let positionAt = 0;
+      let hostPlaying = false;
+      let chunks = 0;
+      let heard = 0;
       let offset = 0;
+      let refused = false;
+
       try {
         offset = Number(localStorage.getItem(OFFSET_KEY)) || 0;
       } catch (_) {}
       el("offset").value = String(offset);
       el("offsetValue").textContent = `${offset} ms`;
+
+      window.addEventListener("error", (event) => fault(event.message));
+
+      function fault(message) {
+        const line = el("fault");
+        line.hidden = false;
+        line.textContent = message;
+      }
 
       el("offset").addEventListener("input", (event) => {
         offset = Number(event.target.value) || 0;
@@ -117,9 +236,22 @@
         } catch (_) {}
       });
 
+      el("find").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const query = el("query").value.trim();
+        if (!query || !socket || socket.readyState !== 1) return;
+        el("said").textContent = TEXT.searching;
+        el("hits").textContent = "";
+        socket.send(JSON.stringify({ kind: "Find", query }));
+      });
+
       el("play").addEventListener("click", async () => {
-        if (running) return stop();
-        await start();
+        try {
+          if (running) return stop();
+          await start();
+        } catch (error) {
+          fault(String(error));
+        }
       });
 
       async function start() {
@@ -131,11 +263,14 @@
         playAt = 0;
         running = true;
         el("play").textContent = TEXT.stop;
+        el("hint").hidden = true;
       }
 
       function stop() {
         running = false;
         el("play").textContent = TEXT.play;
+        el("hint").hidden = false;
+        el("hint").textContent = TEXT.tap;
         if (ctx) {
           ctx.close().catch(() => {});
           ctx = null;
@@ -150,7 +285,7 @@
           socket.send(
             JSON.stringify({
               kind: "Hello",
-              protocol: 1,
+              protocol: {{protocol}},
               name: navigator.userAgent.slice(0, 40),
               native: false,
               code,
@@ -165,14 +300,21 @@
         });
 
         socket.addEventListener("message", (event) => {
-          if (typeof event.data === "string") return text(JSON.parse(event.data));
-          audio(new DataView(event.data));
+          try {
+            if (typeof event.data === "string") return text(JSON.parse(event.data));
+            audio(new DataView(event.data));
+          } catch (error) {
+            fault(String(error));
+          }
         });
 
         socket.addEventListener("close", () => {
-          el("status").textContent = TEXT.lost;
-          el("dot").classList.remove("live");
           stop();
+          el("play").disabled = true;
+          if (refused) return;
+
+          el("link").textContent = TEXT.lost;
+          el("link").className = "badge warn";
           setTimeout(connect, 2000);
         });
       }
@@ -183,32 +325,106 @@
             format = message.format;
             lead = message.lead_ms / 1000;
             el("room").textContent = message.room;
-            el("status").textContent = TEXT.connected;
-            el("dot").classList.add("live");
+            el("link").textContent = TEXT.connected;
+            el("link").className = "badge live";
             el("play").disabled = false;
+            el("stream").textContent =
+              `${format.rate} Hz · ${format.channels} ch · ${format.codec}`;
             break;
           case "Now":
             el("title").textContent = message.title || TEXT.nothing;
             el("artist").textContent = message.artist || "";
             el("album").textContent = message.album || "";
+            el("art").style.backgroundImage = message.cover ? `url("${message.cover}")` : "";
+            duration = message.duration_ms || 0;
+            el("total").textContent = clock(duration);
+            show("provider", LABELS[message.provider] || message.provider);
+            break;
+          case "Transport":
+            hostPlaying = message.playing;
+            position = message.position_ms || 0;
+            positionAt = performance.now();
+            show("state", hostPlaying ? TEXT.playing : TEXT.paused);
+            break;
+          case "Found":
+            hits(message.hits || []);
+            break;
+          case "Added":
+            el("said").textContent = `${TEXT.added} ${message.title}`;
+            break;
+          case "Denied":
+            el("said").textContent = TEXT.denied[message.reason] || String(message.reason);
             break;
           case "Mark":
             playAt = 0;
             break;
+          case "Pong":
+            el("ping").textContent = `${Date.now() - message.t0} ms`;
+            break;
           case "Refused":
-            el("status").textContent = `${message.reason}`;
+            refused = !["Closed", "Full"].includes(message.reason);
+            if (!refused) setTimeout(connect, 4000);
+            el("link").textContent = TEXT.refused[message.reason] || String(message.reason);
+            el("link").className = "badge warn";
             socket.close();
             break;
           case "Ended":
-            el("status").textContent = TEXT.lost;
+            el("link").textContent = TEXT.lost;
+            el("link").className = "badge warn";
             socket.close();
             break;
         }
       }
 
+      function hits(found) {
+        const list = el("hits");
+        list.textContent = "";
+        el("said").textContent = found.length ? "" : TEXT.nothing_found;
+
+        for (const found_track of found) {
+          const row = document.createElement("div");
+          row.className = "hit";
+
+          const thumb = document.createElement("div");
+          thumb.className = "thumb";
+          if (found_track.cover) thumb.style.backgroundImage = `url("${found_track.cover}")`;
+
+          const who = document.createElement("div");
+          who.className = "who";
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = found_track.title;
+          const by = document.createElement("div");
+          by.className = "by";
+          by.textContent = [found_track.artist, LABELS[found_track.provider] || found_track.provider]
+            .filter(Boolean)
+            .join(" · ");
+          who.append(name, by);
+
+          const add = document.createElement("button");
+          add.type = "button";
+          add.textContent = "+";
+          add.addEventListener("click", () => {
+            if (!socket || socket.readyState !== 1) return;
+            socket.send(JSON.stringify({ kind: "Add", id: found_track.id }));
+            add.disabled = true;
+          });
+
+          row.append(thumb, who, add);
+          list.append(row);
+        }
+      }
+
+      function show(id, value) {
+        const node = el(id);
+        node.hidden = !value;
+        node.textContent = value || "";
+      }
+
       function audio(view) {
-        if (!running || !ctx || !format || view.byteLength <= 16) return;
-        if (view.getUint32(0, true) !== MAGIC) return;
+        chunks += 1;
+        if (view.byteLength <= 16 || view.getUint32(0, true) !== MAGIC) return;
+        if (!running || !ctx || !format) return;
 
         const channels = format.channels;
         const samples = new Int16Array(view.buffer, 16);
@@ -233,12 +449,30 @@
         source.connect(gain);
         source.start(playAt);
         playAt += frames / format.rate;
-
-        const ahead = Math.round((playAt - ctx.currentTime) * 1000);
-        el("buffer").textContent = `${TEXT.buffer} ${ahead} ms`;
+        heard += frames;
       }
 
-      el("play").disabled = true;
+      setInterval(() => {
+        if (hostPlaying) {
+          const moved = position + (performance.now() - positionAt);
+          el("at").textContent = clock(moved);
+          el("progress").style.width =
+            duration > 0 ? `${Math.min(100, (moved / duration) * 100)}%` : "0";
+        }
+
+        const ahead = ctx && running ? Math.round((playAt - ctx.currentTime) * 1000) : 0;
+        el("buffer").textContent = `${TEXT.buffer} ${ahead} ms`;
+        el("offsetValue").textContent = `${offset} ms`;
+        el("stream").textContent = format
+          ? `${format.rate} Hz · ${format.channels} ch · ${TEXT.chunks} ${chunks}`
+          : "";
+
+        if (running && chunks > 0 && heard === 0) {
+          el("hint").hidden = false;
+          el("hint").textContent = TEXT.silent;
+        }
+      }, 500);
+
       connect();
     </script>
   </body>

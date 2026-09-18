@@ -145,7 +145,14 @@ async fn join(
                         sink.flush();
                         pushed = 0;
                     }
-                    FromHost::Now { title, artist, album, cover, duration_ms } => {
+                    FromHost::Now {
+                        title,
+                        artist,
+                        album,
+                        cover,
+                        duration_ms,
+                        provider,
+                    } => {
                         events
                             .send(ReceiverEvent::Now(Playing {
                                 title,
@@ -153,9 +160,14 @@ async fn join(
                                 album,
                                 cover,
                                 duration_ms,
+                                provider,
                             }))
                             .ok();
                     }
+                    FromHost::Transport { .. }
+                    | FromHost::Found { .. }
+                    | FromHost::Added { .. }
+                    | FromHost::Denied { .. } => continue,
                     FromHost::Pong { t0, t1, t2 } => {
                         clock.push(Sample { t0, t1, t2, t3: millis() });
                     }

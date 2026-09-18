@@ -1,7 +1,9 @@
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, MouseUpEvent, Render, SharedString, Window, div, px};
+use gpui::{
+    App, ClipboardItem, Context, Entity, MouseUpEvent, Render, SharedString, Window, div, px,
+};
 use i18n::t;
-use state::{Jam, JamRole, Listener, Sonora};
+use state::{Jam, JamRole, Listener, Outcome, Sonora, Toasts};
 use ui::{
     ActiveTheme as _, Button, Input, Scrubber, ScrubberState, Skeleton, Text, Vacancy, eyebrow,
 };
@@ -115,10 +117,28 @@ impl JamPanel {
                     .child(room.to_owned()),
             )
             .child(eyebrow(t!("jam-open-on"), cx))
-            .children(addresses.iter().map(|address| {
+            .children(addresses.iter().enumerate().map(|(index, address)| {
+                let url = format!("http://{address}/c/{code}");
                 div()
-                    .text_size(theme.text(Text::Small))
-                    .child(SharedString::from(format!("{address}/c/{code}")))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(theme.text(Text::Small))
+                            .child(SharedString::from(url.clone())),
+                    )
+                    .child(
+                        Button::new(("jam-copy", index))
+                            .ghost()
+                            .small()
+                            .icon("icons/copy.svg")
+                            .tooltip_above("jam-copy")
+                            .on_click(move |_, _, cx| copy(&url, cx)),
+                    )
             }))
             .child(
                 div()
@@ -240,6 +260,11 @@ impl Render for JamPanel {
                 JamRole::Listening { room, .. } => self.listening(&room, cx).into_any_element(),
             })
     }
+}
+
+fn copy(url: &str, cx: &mut App) {
+    cx.write_to_clipboard(ClipboardItem::new_string(url.to_owned()));
+    Toasts::show(Outcome::Done, "toast-jam-copied", cx);
 }
 
 pub(crate) fn panel(cx: &mut App) -> Entity<JamPanel> {

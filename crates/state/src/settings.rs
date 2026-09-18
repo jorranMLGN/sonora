@@ -243,6 +243,7 @@ struct Jam {
     port: u16,
     lead_ms: u32,
     name: String,
+    guests_add: bool,
 }
 
 impl Default for Jam {
@@ -251,6 +252,7 @@ impl Default for Jam {
             port: DEFAULT_JAM_PORT,
             lead_ms: DEFAULT_JAM_LEAD,
             name: String::new(),
+            guests_add: true,
         }
     }
 }
@@ -504,6 +506,18 @@ impl AppSettings {
 
     pub fn jam_name(&self) -> &str {
         &self.values.jam.name
+    }
+
+    pub fn jam_guests_add(&self) -> bool {
+        self.values.jam.guests_add
+    }
+
+    pub fn set_jam_guests_add(&mut self, allowed: bool, cx: &mut Context<Self>) {
+        if self.values.jam.guests_add == allowed {
+            return;
+        }
+        self.values.jam.guests_add = allowed;
+        self.schedule_save(cx);
     }
 
     pub fn set_jam_lead(&mut self, lead_ms: u32, cx: &mut Context<Self>) {

@@ -672,6 +672,7 @@ jam-cancel = Cancel
 jam-leave = Leave
 jam-kick = Remove this listener
 jam-open-on = Open on another device
+jam-copy = Copy the address
 jam-code = Code { $code }
 jam-lead = Lead
 jam-lead-detail = How far ahead of the sound the stream runs
@@ -690,6 +691,7 @@ jam-refused-full = This jam is full
 jam-refused-closed = This jam has nothing to send yet
 toast-jam-refused = { $reason }
 toast-jam-ended = The jam ended
+toast-jam-copied = Copied the jam address
 
 # jam receiver page
 jam-page-title = Sonora jam
@@ -701,11 +703,28 @@ jam-page-waiting = Waiting for the host
 jam-page-connected = Connected
 jam-page-lost = Lost the host
 jam-page-nothing = Nothing playing
+jam-page-playing = Playing
+jam-page-paused = Paused
+jam-page-tap = Tap play to hear this jam
+jam-page-silent = Sound is arriving but nothing is scheduled, try play again
+jam-page-local = Local files
+jam-page-chunks = chunks
+jam-page-search = Add a track to the queue
+jam-page-search-hint = Search what the host can play
+jam-page-search-go = Search
+jam-page-searching = Searching
+jam-page-no-hits = Nothing found
+jam-page-added = Added
+jam-page-denied-closed = The host does not take requests
+jam-page-denied-unknown = That track cannot be added
+jam-page-denied-busy = Too many requests, wait a moment
 
 # jam settings
 settings-group-jam = Jam
 settings-jam-name = Jam name
 settings-jam-name-detail = What listeners see when they join
+settings-jam-guests = Listeners can add tracks
+settings-jam-guests-detail = Anyone in a jam can search your providers and add to the queue
 settings-jam-lead = Jam lead
 settings-jam-lead-detail = Milliseconds of buffer a listener keeps ahead of the sound
 

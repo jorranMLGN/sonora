@@ -17,7 +17,8 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -27,7 +28,7 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 use super::Listener;
 use super::cast::Broadcast;
 use super::wire::{
-    self, Codec, Farewell, FromHost, FromReceiver, HEADER, MarkKind, PROTOCOL, Refusal,
+    self, Codec, Denial, Farewell, FromHost, FromReceiver, HEADER, Hit, MarkKind, PROTOCOL, Refusal,
 };
 
 const PAGE: &str = include_str!("page.html");
@@ -35,6 +36,9 @@ const STRIKES: usize = 5;
 const WINDOW: Duration = Duration::from_secs(60);
 const LISTENERS: usize = 8;
 const HELLO_WAIT: Duration = Duration::from_secs(5);
+const ASK_WAIT: Duration = Duration::from_secs(10);
+const ADDS: usize = 50;
+const FORMAT_WAIT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Playing {
@@ -43,12 +47,27 @@ pub struct Playing {
     pub album: String,
     pub cover: Option<String>,
     pub duration_ms: u64,
+    pub provider: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Transport {
+    pub playing: bool,
+    pub position_ms: u64,
 }
 
 #[derive(Debug)]
 pub enum ServerEvent {
     Joined(Listener),
     Left(String),
+    Find {
+        query: String,
+        reply: oneshot::Sender<Vec<Hit>>,
+    },
+    Add {
+        id: String,
+        reply: oneshot::Sender<Option<String>>,
+    },
 }
 
 pub struct Serving {
@@ -58,6 +77,7 @@ pub struct Serving {
     pub lead: u32,
     pub broadcast: Arc<Broadcast>,
     pub now: watch::Receiver<Option<Playing>>,
+    pub transport: watch::Receiver<Transport>,
     pub events: UnboundedSender<ServerEvent>,
 }
 
@@ -204,7 +224,7 @@ async fn session(
     if shared.listeners.load(Ordering::Acquire) >= LISTENERS {
         return turn_down(&mut socket, Refusal::Full).await;
     }
-    let Some(format) = shared.serving.broadcast.format() else {
+    let Some(format) = awaited(&shared).await else {
         return turn_down(&mut socket, Refusal::Closed).await;
     };
 
@@ -230,9 +250,12 @@ async fn session(
         }))
         .ok();
 
+    let (outbox, mut waiting) = mpsc::unbounded_channel::<FromHost>();
+    let mut added = 0usize;
     let mut chunks = shared.serving.broadcast.subscribe();
     let mut kicks = shared.serving.kicks.subscribe();
     let mut now = shared.serving.now.clone();
+    let mut transport = shared.serving.transport.clone();
     let mut frame: Vec<u8> = Vec::new();
 
     loop {
@@ -266,6 +289,19 @@ async fn session(
                 }
                 Err(RecvError::Closed) => break,
             },
+            moved = transport.changed() => {
+                if moved.is_err() {
+                    break;
+                }
+                let seen = *transport.borrow_and_update();
+                let told = FromHost::Transport {
+                    playing: seen.playing,
+                    position_ms: seen.position_ms,
+                };
+                if say(&mut socket, &told).await.is_err() {
+                    break;
+                }
+            },
             changed = now.changed() => {
                 if changed.is_err() {
                     break;
@@ -278,11 +314,20 @@ async fn session(
                         album: playing.album,
                         cover: playing.cover,
                         duration_ms: playing.duration_ms,
+                        provider: playing.provider,
                     };
                     if say(&mut socket, &told).await.is_err() {
                         break;
                     }
                 }
+            },
+            told = waiting.recv() => match told {
+                Some(message) => {
+                    if say(&mut socket, &message).await.is_err() {
+                        break;
+                    }
+                }
+                None => break,
             },
             kicked = kicks.recv() => match kicked {
                 Ok(target) if target == at => {
@@ -304,6 +349,19 @@ async fn session(
                                 break;
                             }
                         }
+                        Ok(FromReceiver::Find { query }) => {
+                            ask(&shared, &outbox, Asked::Find(query));
+                        }
+                        Ok(FromReceiver::Add { id }) => {
+                            added += 1;
+                            match added > ADDS {
+                                true => {
+                                    let denied = FromHost::Denied { reason: Denial::Busy };
+                                    outbox.send(denied).ok();
+                                }
+                                false => ask(&shared, &outbox, Asked::Add(id)),
+                            }
+                        }
                         Ok(FromReceiver::Bye) => break,
                         _ => continue,
                     }
@@ -317,6 +375,73 @@ async fn session(
 
     shared.listeners.fetch_sub(1, Ordering::AcqRel);
     shared.serving.events.send(ServerEvent::Left(at)).ok();
+}
+
+async fn awaited(shared: &Arc<Shared>) -> Option<super::wire::Format> {
+    if let Some(format) = shared.serving.broadcast.format() {
+        return Some(format);
+    }
+
+    let mut formats = shared.serving.broadcast.formats();
+    let waited = tokio::time::timeout(FORMAT_WAIT, async {
+        loop {
+            if formats.changed().await.is_err() {
+                return None;
+            }
+            if let Some(format) = *formats.borrow_and_update() {
+                return Some(format);
+            }
+        }
+    })
+    .await;
+
+    waited.ok().flatten()
+}
+
+enum Asked {
+    Find(String),
+    Add(String),
+}
+
+fn ask(shared: &Arc<Shared>, outbox: &UnboundedSender<FromHost>, asked: Asked) {
+    let events = shared.serving.events.clone();
+    let outbox = outbox.clone();
+
+    tokio::spawn(async move {
+        match asked {
+            Asked::Find(query) => {
+                let (reply, answer) = oneshot::channel();
+                let sent = ServerEvent::Find {
+                    query: query.clone(),
+                    reply,
+                };
+                if events.send(sent).is_err() {
+                    return;
+                }
+                let hits = match tokio::time::timeout(ASK_WAIT, answer).await {
+                    Ok(Ok(hits)) => hits,
+                    _ => Vec::new(),
+                };
+                outbox.send(FromHost::Found { query, hits }).ok();
+            }
+            Asked::Add(id) => {
+                let (reply, answer) = oneshot::channel();
+                if events.send(ServerEvent::Add { id, reply }).is_err() {
+                    return;
+                }
+                let told = match tokio::time::timeout(ASK_WAIT, answer).await {
+                    Ok(Ok(Some(title))) => FromHost::Added { title },
+                    Ok(Ok(None)) => FromHost::Denied {
+                        reason: Denial::Unknown,
+                    },
+                    _ => FromHost::Denied {
+                        reason: Denial::Busy,
+                    },
+                };
+                outbox.send(told).ok();
+            }
+        }
+    });
 }
 
 async fn greeted(
@@ -401,7 +526,12 @@ fn rendered() -> String {
             rest = after;
             continue;
         };
-        out.push_str(&i18n::lookup(after[..end].trim(), None));
+
+        let key = after[..end].trim();
+        match key {
+            "protocol" => out.push_str(&PROTOCOL.to_string()),
+            key => out.push_str(&i18n::lookup(key, None)),
+        }
         rest = &after[end + 2..];
     }
     out.push_str(rest);

@@ -231,6 +231,7 @@ impl SettingsView {
                 Row::Item(self.playback_row(cx).into_any_element()),
                 Row::Item(self.gapless_row(cx).into_any_element()),
                 self.title("settings-group-jam", cx),
+                Row::Item(self.jam_guests_row(cx).into_any_element()),
                 Row::Item(self.jam_lead_row(cx).into_any_element()),
                 self.title("settings-group-lyrics", cx),
                 Row::Item(self.panel_lyrics_size_row(cx).into_any_element()),
@@ -1212,6 +1213,26 @@ impl SettingsView {
             muted,
             small,
             actions.into_any_element(),
+        )
+    }
+
+    fn jam_guests_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).jam_guests_add();
+
+        self.row(
+            t!("settings-jam-guests"),
+            t!("settings-jam-guests-detail"),
+            muted,
+            small,
+            Switch::new("jam-guests", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_jam_guests_add(!on, cx));
+                }))
+                .into_any_element(),
         )
     }
 
