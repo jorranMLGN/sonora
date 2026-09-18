@@ -5,6 +5,7 @@ mod detail;
 mod genre;
 mod history;
 mod home;
+mod jam;
 mod library;
 mod lyrics;
 mod mosaic;

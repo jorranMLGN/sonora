@@ -1,0 +1,212 @@
+use anyhow::Context as _;
+use anyhow::{Result, bail};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+pub const PROTOCOL: u32 = 1;
+pub const MAGIC: [u8; 4] = *b"SNJ1";
+pub const HEADER: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Header {
+    pub seq: u32,
+    pub first_sample: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Codec {
+    Pcm16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Format {
+    pub rate: u32,
+    pub channels: u16,
+    pub codec: Codec,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarkKind {
+    Quiet,
+    Cut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Refusal {
+    Protocol,
+    Code,
+    Codec,
+    Full,
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Farewell {
+    HostLeft,
+    Kicked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum FromReceiver {
+    Hello {
+        protocol: u32,
+        name: String,
+        native: bool,
+        code: String,
+        accepts: Vec<Codec>,
+    },
+    Ping {
+        t0: u64,
+    },
+    Bye,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum FromHost {
+    Welcome {
+        protocol: u32,
+        room: String,
+        format: Format,
+        lead_ms: u32,
+        origin: u64,
+    },
+    Refused {
+        reason: Refusal,
+    },
+    Mark {
+        mark: MarkKind,
+        at: u64,
+    },
+    Now {
+        title: String,
+        artist: String,
+        album: String,
+        cover: Option<String>,
+        duration_ms: u64,
+    },
+    Pong {
+        t0: u64,
+        t1: u64,
+        t2: u64,
+    },
+    Ended {
+        reason: Farewell,
+    },
+}
+
+impl Header {
+    pub fn write(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&MAGIC);
+        out.extend_from_slice(&self.seq.to_le_bytes());
+        out.extend_from_slice(&self.first_sample.to_le_bytes());
+    }
+
+    pub fn read(frame: &[u8]) -> Result<Self> {
+        if frame.len() < HEADER {
+            bail!("cannot read a frame shorter than the header");
+        }
+        if frame[..MAGIC.len()] != MAGIC {
+            bail!("cannot read a frame without the jam magic");
+        }
+
+        Ok(Self {
+            seq: u32::from_le_bytes(frame[4..8].try_into()?),
+            first_sample: u64::from_le_bytes(frame[8..HEADER].try_into()?),
+        })
+    }
+}
+
+pub fn encode<T: Serialize>(value: &T) -> Result<String> {
+    serde_json::to_string(value).context("cannot encode a jam message")
+}
+
+pub fn decode<T: DeserializeOwned>(line: &str) -> Result<T> {
+    serde_json::from_str(line).context("cannot decode a jam message")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_header_round_trips() {
+        let header = Header {
+            seq: 4_294_967_000,
+            first_sample: 1 << 40,
+        };
+        let mut frame = Vec::new();
+        header.write(&mut frame);
+        assert_eq!(frame.len(), HEADER);
+        assert_eq!(Header::read(&frame).unwrap(), header);
+    }
+
+    #[test]
+    fn a_frame_without_the_magic_is_refused() {
+        let mut frame = vec![0u8; HEADER];
+        frame[0..4].copy_from_slice(b"XXXX");
+        assert!(Header::read(&frame).is_err());
+    }
+
+    #[test]
+    fn a_short_frame_is_refused_rather_than_panicking() {
+        for len in 0..HEADER {
+            assert!(Header::read(&vec![0u8; len]).is_err(), "{len}");
+        }
+    }
+
+    #[test]
+    fn a_hello_round_trips() {
+        let sent = FromReceiver::Hello {
+            protocol: PROTOCOL,
+            name: "kitchen".into(),
+            native: true,
+            code: "204813".into(),
+            accepts: vec![Codec::Pcm16],
+        };
+        assert_eq!(
+            decode::<FromReceiver>(&encode(&sent).unwrap()).unwrap(),
+            sent
+        );
+    }
+
+    #[test]
+    fn a_codec_nobody_knows_is_refused() {
+        assert!(decode::<Codec>(r#""opus""#).is_err());
+        assert_eq!(decode::<Codec>(r#""pcm16""#).unwrap(), Codec::Pcm16);
+    }
+
+    #[test]
+    fn a_frame_is_always_one_line() {
+        let sent = FromHost::Now {
+            title: "a\nname\twith\r\nbreaks".into(),
+            artist: "x".into(),
+            album: "y".into(),
+            cover: None,
+            duration_ms: 214_000,
+        };
+        let line = encode(&sent).unwrap();
+        assert!(!line.contains('\n'));
+        assert_eq!(decode::<FromHost>(&line).unwrap(), sent);
+    }
+
+    #[test]
+    fn every_mark_round_trips() {
+        for mark in [MarkKind::Quiet, MarkKind::Cut] {
+            let sent = FromHost::Mark {
+                mark,
+                at: 7_000_000,
+            };
+            assert_eq!(decode::<FromHost>(&encode(&sent).unwrap()).unwrap(), sent);
+        }
+    }
+
+    #[test]
+    fn an_unknown_variant_is_refused() {
+        assert!(decode::<FromHost>(r#"{"kind":"Nonsense"}"#).is_err());
+        assert!(decode::<FromReceiver>("not json").is_err());
+        assert!(decode::<FromReceiver>("").is_err());
+    }
+}
