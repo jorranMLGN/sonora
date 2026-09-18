@@ -3145,6 +3145,7 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "smallvec",
@@ -7151,6 +7152,9 @@ dependencies = [
  "fastrand",
  "futures",
  "gpui",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "i18n",
  "icons",
  "image",
@@ -7164,6 +7168,7 @@ dependencies = [
  "sha2",
  "souvlaki",
  "tokio",
+ "tokio-tungstenite",
  "ui",
 ]
 
