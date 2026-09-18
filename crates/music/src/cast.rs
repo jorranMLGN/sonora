@@ -1,9 +1,16 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::num::NonZero;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
+use anyhow::{Context as _, Result};
+use rodio::Source;
 use rtrb::RingBuffer;
 
+use crate::audio::{Output, Volume};
+use crate::spectrum::Spectrum;
+
 const RING_MILLIS: u32 = 1_000;
+const JITTER_MILLIS: u32 = 2_000;
 const SCALE: f32 = i16::MAX as f32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +74,139 @@ pub fn to_i16(samples: &[f32], out: &mut Vec<u8>) {
         // saturating cast clips
         let scaled = (sample * SCALE) as i16;
         out.extend_from_slice(&scaled.to_le_bytes());
+    }
+}
+
+pub struct Sink {
+    output: Output,
+    producer: Mutex<rtrb::Producer<f32>>,
+    played: Arc<AtomicU64>,
+    skip: Arc<AtomicI64>,
+}
+
+struct Jitter {
+    samples: rtrb::Consumer<f32>,
+    channels: NonZero<u16>,
+    rate: NonZero<u32>,
+    played: Arc<AtomicU64>,
+    skip: Arc<AtomicI64>,
+    lane: u16,
+}
+
+impl Sink {
+    pub fn open(format: Format) -> Result<Self> {
+        let channels = NonZero::new(format.channels.max(1)).context("cannot use zero channels")?;
+        let rate = NonZero::new(format.rate.max(1)).context("cannot use a zero sample rate")?;
+
+        let (producer, samples) = RingBuffer::<f32>::new(format.samples(JITTER_MILLIS).max(1));
+        let played = Arc::new(AtomicU64::new(0));
+        let skip = Arc::new(AtomicI64::new(0));
+
+        let output = Output::open(Volume::new(1.0), Spectrum::new(), "jam", None)?;
+        output.sink().append(Jitter {
+            samples,
+            channels,
+            rate,
+            played: played.clone(),
+            skip: skip.clone(),
+            lane: 0,
+        });
+        output.sink().play();
+
+        Ok(Self {
+            output,
+            producer: Mutex::new(producer),
+            played,
+            skip,
+        })
+    }
+
+    pub fn push(&self, samples: &[i16]) {
+        let mut producer = match self.producer.lock() {
+            Ok(producer) => producer,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for sample in samples {
+            if producer.push(*sample as f32 / SCALE).is_err() {
+                return;
+            }
+        }
+    }
+
+    pub fn flush(&self) {
+        self.output.sink().clear();
+        self.output.sink().play();
+    }
+
+    pub fn played(&self) -> u64 {
+        self.played.load(Ordering::Relaxed)
+    }
+
+    pub fn nudge(&self, frames: i32) {
+        self.skip.fetch_add(frames as i64, Ordering::Relaxed);
+    }
+
+    pub fn set_volume(&self, gain: f32) {
+        self.output.set_volume(gain);
+    }
+}
+
+impl Iterator for Jitter {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.lane == 0 {
+            self.correct();
+            self.played.fetch_add(1, Ordering::Relaxed);
+        }
+
+        self.lane += 1;
+        if self.lane >= self.channels.get() {
+            self.lane = 0;
+        }
+
+        Some(self.samples.pop().unwrap_or(0.0))
+    }
+}
+
+impl Jitter {
+    fn correct(&mut self) {
+        let owed = self.skip.load(Ordering::Relaxed);
+        if owed == 0 {
+            return;
+        }
+
+        match owed > 0 {
+            true => {
+                for _ in 0..self.channels.get() {
+                    if self.samples.pop().is_err() {
+                        return;
+                    }
+                }
+                self.skip.fetch_sub(1, Ordering::Relaxed);
+            }
+            false => {
+                self.skip.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+impl Source for Jitter {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> NonZero<u16> {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> NonZero<u32> {
+        self.rate
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
     }
 }
 
