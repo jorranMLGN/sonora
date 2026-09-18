@@ -15,6 +15,7 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
@@ -25,7 +26,9 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 
 use super::Listener;
 use super::cast::Broadcast;
-use super::wire::{self, Codec, FromHost, FromReceiver, HEADER, MarkKind, PROTOCOL, Refusal};
+use super::wire::{
+    self, Codec, Farewell, FromHost, FromReceiver, HEADER, MarkKind, PROTOCOL, Refusal,
+};
 
 const PAGE: &str = include_str!("page.html");
 const STRIKES: usize = 5;
@@ -49,6 +52,7 @@ pub enum ServerEvent {
 }
 
 pub struct Serving {
+    pub kicks: broadcast::Sender<String>,
     pub code: String,
     pub room: String,
     pub lead: u32,
@@ -227,6 +231,7 @@ async fn session(
         .ok();
 
     let mut chunks = shared.serving.broadcast.subscribe();
+    let mut kicks = shared.serving.kicks.subscribe();
     let mut now = shared.serving.now.clone();
     let mut frame: Vec<u8> = Vec::new();
 
@@ -278,6 +283,16 @@ async fn session(
                         break;
                     }
                 }
+            },
+            kicked = kicks.recv() => match kicked {
+                Ok(target) if target == at => {
+                    let ended = FromHost::Ended { reason: Farewell::Kicked };
+                    say(&mut socket, &ended).await.ok();
+                    socket.close(None).await.ok();
+                    break;
+                }
+                Err(RecvError::Closed) => break,
+                _ => continue,
             },
             message = socket.next() => match message {
                 Some(Ok(Message::Text(line))) => {

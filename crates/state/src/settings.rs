@@ -53,6 +53,7 @@ pub enum SideTab {
     #[default]
     Queue,
     Lyrics,
+    Jam,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

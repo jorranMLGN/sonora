@@ -1,4 +1,5 @@
 mod aside;
+mod jam;
 mod player_bar;
 mod sidebar_left;
 mod sidebar_right;

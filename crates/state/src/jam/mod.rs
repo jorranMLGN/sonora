@@ -10,7 +10,7 @@ use std::net::UdpSocket;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{Context, Entity, EventEmitter, Task};
+use gpui::{App, Context, Entity, EventEmitter, Task};
 use music::cast::{CastSink, Feed};
 use tokio::sync::{mpsc, watch};
 
@@ -75,6 +75,7 @@ pub struct Jam {
     settings: Entity<AppSettings>,
     io: Io,
     now: watch::Sender<Option<Playing>>,
+    kicks: tokio::sync::broadcast::Sender<String>,
     serve: Option<Task<()>>,
     follow: Option<Task<()>>,
 }
@@ -113,6 +114,7 @@ impl Jam {
             settings,
             io,
             now: watch::channel(None).0,
+            kicks: tokio::sync::broadcast::channel(8).0,
             serve: None,
             follow: None,
         }
@@ -274,6 +276,7 @@ impl Jam {
 
         let (events, mut arriving) = mpsc::unbounded_channel();
         let serving = Serving {
+            kicks: self.kicks.clone(),
             code: code.clone(),
             room: room.clone(),
             lead: self.settings.read(cx).jam_lead(),
@@ -331,6 +334,19 @@ impl Jam {
                 cx.emit(JamEvent::Left);
             }
         }
+        cx.notify();
+    }
+
+    pub fn lead(&self, cx: &App) -> u32 {
+        self.settings.read(cx).jam_lead()
+    }
+
+    pub fn kick(&mut self, at: &str, cx: &mut Context<Self>) {
+        self.kicks.send(at.to_owned()).ok();
+        let JamRole::Hosting { listeners, .. } = &mut self.role else {
+            return;
+        };
+        listeners.retain(|held| held.at != at);
         cx.notify();
     }
 

@@ -5,7 +5,7 @@ use gpui::{App, Font, FontFallbacks, SharedString, font, prelude::*};
 use gpui::{Window, div};
 use input::{
     NavigateBack, NavigateForward, OpenFilter, OpenSearch, OpenSettings, ToggleFullscreen,
-    ToggleLyrics, ToggleQueue,
+    ToggleJam, ToggleLyrics, ToggleQueue,
 };
 use router::{Destination, NavigationEvent, SettingsTab, back, forward, navigate};
 use state::{
@@ -604,6 +604,7 @@ impl Render for Root {
             .on_action(
                 cx.listener(|this, _: &ToggleLyrics, _, cx| this.show_side(SideTab::Lyrics, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleJam, _, cx| this.show_side(SideTab::Jam, cx)))
             .child(self.title_bar.clone())
             .when_else(
                 show_sign_in,
