@@ -2,6 +2,7 @@
 
 mod cast;
 mod clock;
+mod server;
 mod wire;
 
 use std::net::UdpSocket;
@@ -9,10 +10,11 @@ use std::sync::Arc;
 
 use gpui::{Context, Entity, EventEmitter, Task};
 use music::cast::{CastSink, Feed};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::{AppSettings, Io, Playback};
 use cast::Broadcast;
+use server::{Playing, ServerEvent, Serving};
 use wire::Refusal;
 
 const ROOM: &str = "Sonora";
@@ -59,10 +61,11 @@ pub enum JamEvent {
 
 pub struct Jam {
     role: JamRole,
-    broadcast: Broadcast,
+    broadcast: Arc<Broadcast>,
     playback: Entity<Playback>,
     settings: Entity<AppSettings>,
     io: Io,
+    now: watch::Sender<Option<Playing>>,
     serve: Option<Task<()>>,
     follow: Option<Task<()>>,
 }
@@ -83,17 +86,20 @@ impl Jam {
         playback.update(cx, |playback, _| playback.set_cast(sink));
 
         cx.observe(&playback, |this: &mut Self, playback, cx| {
-            let slug = playback.read(cx).current_slug().and_then(known);
-            this.broadcast.follow(slug);
+            let playback = playback.read(cx);
+            this.broadcast
+                .follow(playback.current_slug().and_then(known));
+            this.now.send_replace(playback.track().map(playing));
         })
         .detach();
 
         Self {
             role: JamRole::Idle,
-            broadcast: Broadcast::new(incoming),
+            broadcast: Arc::new(Broadcast::new(incoming)),
             playback,
             settings,
             io,
+            now: watch::channel(None).0,
             serve: None,
             follow: None,
         }
@@ -120,12 +126,41 @@ impl Jam {
             false => name.to_owned(),
         };
 
-        let slug = self.playback.read(cx).current_slug().and_then(known);
-        self.broadcast.follow(slug);
+        let playback = self.playback.read(cx);
+        self.broadcast
+            .follow(playback.current_slug().and_then(known));
+        self.now.send_replace(playback.track().map(playing));
+
+        let code = format!("{:06}", fastrand::u32(0..1_000_000));
+        let (listener, bound) = match server::bind(port) {
+            Ok(bound) => bound,
+            Err(error) => return log::error!("jam: cannot start hosting: {error:#}"),
+        };
+
+        let (events, mut arriving) = mpsc::unbounded_channel();
+        let serving = Serving {
+            code: code.clone(),
+            room: room.clone(),
+            lead: self.settings.read(cx).jam_lead(),
+            broadcast: self.broadcast.clone(),
+            now: self.now.subscribe(),
+            events,
+        };
+
+        let served = self.io.spawn(server::run(listener, serving));
+        self.serve = Some(cx.spawn(async move |_, _| {
+            served.await.ok();
+        }));
+        self.follow = Some(cx.spawn(async move |this, cx| {
+            while let Some(event) = arriving.recv().await {
+                this.update(cx, |this, cx| this.arrived(event, cx)).ok();
+            }
+        }));
+
         self.role = JamRole::Hosting {
             room,
-            code: format!("{:06}", fastrand::u32(0..1_000_000)),
-            addresses: addresses(port),
+            code,
+            addresses: addresses(bound),
             listeners: Vec::new(),
         };
         cx.emit(JamEvent::Started);
@@ -138,9 +173,29 @@ impl Jam {
         }
 
         self.serve = None;
+        self.follow = None;
         self.broadcast.follow(None);
         self.role = JamRole::Idle;
         cx.emit(JamEvent::Stopped);
+        cx.notify();
+    }
+
+    fn arrived(&mut self, event: ServerEvent, cx: &mut Context<Self>) {
+        let JamRole::Hosting { listeners, .. } = &mut self.role else {
+            return;
+        };
+
+        match event {
+            ServerEvent::Joined(listener) => {
+                listeners.retain(|held| held.at != listener.at);
+                listeners.push(listener);
+                cx.emit(JamEvent::Joined);
+            }
+            ServerEvent::Left(at) => {
+                listeners.retain(|held| held.at != at);
+                cx.emit(JamEvent::Left);
+            }
+        }
         cx.notify();
     }
 
@@ -148,6 +203,16 @@ impl Jam {
         self.settings
             .update(cx, |settings, cx| settings.set_jam_lead(lead_ms, cx));
         cx.notify();
+    }
+}
+
+fn playing(track: &music::Track) -> Playing {
+    Playing {
+        title: track.name.clone(),
+        artist: track.artists.clone(),
+        album: track.album.clone(),
+        cover: track.cover.clone(),
+        duration_ms: track.duration.as_millis() as u64,
     }
 }
 

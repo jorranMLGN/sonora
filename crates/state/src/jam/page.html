@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{{jam-page-title}}</title>
+    <style>
+      :root {
+        color-scheme: dark light;
+        --bg: #0e0e11;
+        --fg: #f3f3f5;
+        --dim: #9a9aa5;
+        --line: #26262d;
+        --accent: #5b8cff;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #fbfbfd;
+          --fg: #16161a;
+          --dim: #6a6a75;
+          --line: #e2e2e8;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 16px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      main { width: 100%; max-width: 420px; }
+      h1 { margin: 0 0 4px; font-size: 20px; font-weight: 650; }
+      .room { color: var(--dim); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+      .card { margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; }
+      .title { font-size: 17px; font-weight: 600; }
+      .artist, .album { color: var(--dim); font-size: 14px; }
+      button {
+        width: 100%;
+        margin-top: 18px;
+        padding: 14px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      label { display: block; margin-top: 22px; font-size: 13px; color: var(--dim); }
+      input[type="range"] { width: 100%; margin-top: 8px; accent-color: var(--accent); }
+      .row { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: var(--dim); }
+      .state { margin-top: 16px; font-size: 13px; color: var(--dim); }
+      .dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--dim); }
+      .dot.live { background: #3ecf8e; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="room" id="room">{{jam-page-title}}</div>
+      <h1 id="title">{{jam-page-nothing}}</h1>
+      <div class="artist" id="artist"></div>
+      <div class="album" id="album"></div>
+
+      <button id="play">{{jam-page-play}}</button>
+
+      <div class="card">
+        <label for="offset">{{jam-page-offset}}</label>
+        <input id="offset" type="range" min="-500" max="500" step="5" value="0" />
+        <div class="row"><span id="offsetValue">0 ms</span><span id="buffer">{{jam-page-buffer}}</span></div>
+      </div>
+
+      <div class="state"><span class="dot" id="dot"></span><span id="status">{{jam-page-waiting}}</span></div>
+    </main>
+
+    <script>
+      const TEXT = {
+        play: "{{jam-page-play}}",
+        stop: "{{jam-page-stop}}",
+        waiting: "{{jam-page-waiting}}",
+        connected: "{{jam-page-connected}}",
+        lost: "{{jam-page-lost}}",
+        nothing: "{{jam-page-nothing}}",
+        buffer: "{{jam-page-buffer}}",
+      };
+      const MAGIC = 0x314a4e53;
+      const OFFSET_KEY = "sonora.jam.offset";
+
+      const el = (id) => document.getElementById(id);
+      const code = location.pathname.split("/").filter(Boolean).pop();
+
+      let socket = null;
+      let ctx = null;
+      let gain = null;
+      let format = null;
+      let lead = 0.25;
+      let playAt = 0;
+      let running = false;
+
+      let offset = 0;
+      try {
+        offset = Number(localStorage.getItem(OFFSET_KEY)) || 0;
+      } catch (_) {}
+      el("offset").value = String(offset);
+      el("offsetValue").textContent = `${offset} ms`;
+
+      el("offset").addEventListener("input", (event) => {
+        offset = Number(event.target.value) || 0;
+        el("offsetValue").textContent = `${offset} ms`;
+        try {
+          localStorage.setItem(OFFSET_KEY, String(offset));
+        } catch (_) {}
+      });
+
+      el("play").addEventListener("click", async () => {
+        if (running) return stop();
+        await start();
+      });
+
+      async function start() {
+        if (!format) return;
+        ctx = new AudioContext({ sampleRate: format.rate, latencyHint: "playback" });
+        gain = ctx.createGain();
+        gain.connect(ctx.destination);
+        await ctx.resume();
+        playAt = 0;
+        running = true;
+        el("play").textContent = TEXT.stop;
+      }
+
+      function stop() {
+        running = false;
+        el("play").textContent = TEXT.play;
+        if (ctx) {
+          ctx.close().catch(() => {});
+          ctx = null;
+        }
+      }
+
+      function connect() {
+        socket = new WebSocket(`ws://${location.host}${location.pathname}/ws`);
+        socket.binaryType = "arraybuffer";
+
+        socket.addEventListener("open", () => {
+          socket.send(
+            JSON.stringify({
+              kind: "Hello",
+              protocol: 1,
+              name: navigator.userAgent.slice(0, 40),
+              native: false,
+              code,
+              accepts: ["pcm16"],
+            }),
+          );
+          setInterval(() => {
+            if (socket && socket.readyState === 1) {
+              socket.send(JSON.stringify({ kind: "Ping", t0: Date.now() }));
+            }
+          }, 2000);
+        });
+
+        socket.addEventListener("message", (event) => {
+          if (typeof event.data === "string") return text(JSON.parse(event.data));
+          audio(new DataView(event.data));
+        });
+
+        socket.addEventListener("close", () => {
+          el("status").textContent = TEXT.lost;
+          el("dot").classList.remove("live");
+          stop();
+          setTimeout(connect, 2000);
+        });
+      }
+
+      function text(message) {
+        switch (message.kind) {
+          case "Welcome":
+            format = message.format;
+            lead = message.lead_ms / 1000;
+            el("room").textContent = message.room;
+            el("status").textContent = TEXT.connected;
+            el("dot").classList.add("live");
+            el("play").disabled = false;
+            break;
+          case "Now":
+            el("title").textContent = message.title || TEXT.nothing;
+            el("artist").textContent = message.artist || "";
+            el("album").textContent = message.album || "";
+            break;
+          case "Mark":
+            playAt = 0;
+            break;
+          case "Refused":
+            el("status").textContent = `${message.reason}`;
+            socket.close();
+            break;
+          case "Ended":
+            el("status").textContent = TEXT.lost;
+            socket.close();
+            break;
+        }
+      }
+
+      function audio(view) {
+        if (!running || !ctx || !format || view.byteLength <= 16) return;
+        if (view.getUint32(0, true) !== MAGIC) return;
+
+        const channels = format.channels;
+        const samples = new Int16Array(view.buffer, 16);
+        const frames = Math.floor(samples.length / channels);
+        if (frames === 0) return;
+
+        const buffer = ctx.createBuffer(channels, frames, format.rate);
+        for (let channel = 0; channel < channels; channel += 1) {
+          const lane = buffer.getChannelData(channel);
+          for (let frame = 0; frame < frames; frame += 1) {
+            lane[frame] = samples[frame * channels + channel] / 32768;
+          }
+        }
+
+        const shift = offset / 1000;
+        if (playAt < ctx.currentTime + shift) {
+          playAt = ctx.currentTime + lead + shift;
+        }
+
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gain);
+        source.start(playAt);
+        playAt += frames / format.rate;
+
+        const ahead = Math.round((playAt - ctx.currentTime) * 1000);
+        el("buffer").textContent = `${TEXT.buffer} ${ahead} ms`;
+      }
+
+      el("play").disabled = true;
+      connect();
+    </script>
+  </body>
+</html>
