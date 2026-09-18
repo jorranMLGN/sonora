@@ -13,6 +13,7 @@ use super::stream;
 use super::wire::{self, Transcoding};
 use crate::audio::trim;
 use crate::audio::{Output, RAMP, SmoothGain, Trimmed, Volume};
+use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
 
@@ -75,7 +76,11 @@ impl Factory {
 }
 
 impl PlaybackFactory for Factory {
-    fn start(&self, config: PlaybackConfig) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
+    fn start(
+        &self,
+        config: PlaybackConfig,
+        cast: Option<CastSink>,
+    ) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
         let (commands, command_rx) = unbounded_channel();
         let (events, event_rx) = unbounded_channel();
         let http = self.http.clone();
@@ -83,7 +88,7 @@ impl PlaybackFactory for Factory {
         let engine_spectrum = spectrum.clone();
         let spawned = std::thread::Builder::new()
             .name("sc-playback".to_string())
-            .spawn(move || run(http, config, command_rx, events, engine_spectrum));
+            .spawn(move || run(http, config, command_rx, events, engine_spectrum, cast));
         if let Err(error) = spawned {
             log::error!("playback: cannot spawn engine thread: {error}");
         }
@@ -197,6 +202,7 @@ fn run(
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
     spectrum: Spectrum,
+    cast: Option<CastSink>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -208,7 +214,7 @@ fn run(
             return;
         }
     };
-    runtime.block_on(engine_loop(http, config, commands, events, spectrum));
+    runtime.block_on(engine_loop(http, config, commands, events, spectrum, cast));
 }
 
 async fn engine_loop(
@@ -217,8 +223,9 @@ async fn engine_loop(
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
     spectrum: Spectrum,
+    cast: Option<CastSink>,
 ) {
-    let output = match Output::open(Volume::new(config.gain), spectrum) {
+    let output = match Output::open(Volume::new(config.gain), spectrum, "soundcloud", cast) {
         Ok(output) => output,
         Err(error) => {
             log::error!("playback: cannot open audio output: {error:#}");

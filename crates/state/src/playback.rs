@@ -1429,7 +1429,7 @@ impl Playback {
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
         };
-        let (engine, events) = playback.start(config);
+        let (engine, events) = playback.start(config, None);
 
         self.listen(events, slug, cx);
         self.engines.insert(slug, engine);

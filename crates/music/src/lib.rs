@@ -211,7 +211,11 @@ pub trait PlaybackEvents: Send {
 }
 
 pub trait PlaybackFactory: Send + Sync {
-    fn start(&self, config: PlaybackConfig) -> (Box<dyn Player>, Box<dyn PlaybackEvents>);
+    fn start(
+        &self,
+        config: PlaybackConfig,
+        cast: Option<cast::CastSink>,
+    ) -> (Box<dyn Player>, Box<dyn PlaybackEvents>);
 }
 
 pub struct ProviderSession {

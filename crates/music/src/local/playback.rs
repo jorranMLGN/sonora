@@ -7,6 +7,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::wire;
 use crate::audio::{Output, Volume};
+use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
 
@@ -31,14 +32,18 @@ enum Command {
 pub struct Factory;
 
 impl PlaybackFactory for Factory {
-    fn start(&self, config: PlaybackConfig) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
+    fn start(
+        &self,
+        config: PlaybackConfig,
+        cast: Option<CastSink>,
+    ) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
         let (commands, command_rx) = unbounded_channel();
         let (events, event_rx) = unbounded_channel();
         let spectrum = Spectrum::new();
         let engine_spectrum = spectrum.clone();
         let spawned = std::thread::Builder::new()
             .name("local-playback".to_owned())
-            .spawn(move || run(config, command_rx, events, engine_spectrum));
+            .spawn(move || run(config, command_rx, events, engine_spectrum, cast));
         if let Err(error) = spawned {
             log::error!("playback: cannot spawn local engine thread: {error}");
         }
@@ -123,6 +128,7 @@ fn run(
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
     spectrum: Spectrum,
+    cast: Option<CastSink>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -134,7 +140,7 @@ fn run(
             return;
         }
     };
-    runtime.block_on(engine_loop(config, commands, events, spectrum));
+    runtime.block_on(engine_loop(config, commands, events, spectrum, cast));
 }
 
 async fn engine_loop(
@@ -142,8 +148,9 @@ async fn engine_loop(
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
     spectrum: Spectrum,
+    cast: Option<CastSink>,
 ) {
-    let output = match Output::open(Volume::new(config.gain), spectrum) {
+    let output = match Output::open(Volume::new(config.gain), spectrum, "local", cast) {
         Ok(output) => output,
         Err(error) => {
             log::error!("playback: cannot open audio output: {error:#}");
