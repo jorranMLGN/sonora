@@ -28,6 +28,7 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 
 use super::Listener;
 use super::cast::{Broadcast, Chunk};
+use super::lead::Lead;
 use super::wire::{
     self, Codec, Denial, Farewell, FromHost, FromReceiver, HEADER, Hit, MarkKind, PROTOCOL, Refusal,
 };
@@ -72,6 +73,10 @@ pub enum ServerEvent {
         id: String,
         reply: oneshot::Sender<Option<String>>,
     },
+    Lead {
+        lead_ms: u32,
+        needs: Vec<(String, u32)>,
+    },
 }
 
 pub struct Serving {
@@ -89,6 +94,8 @@ struct Shared {
     serving: Serving,
     limits: Mutex<HashMap<IpAddr, (usize, Instant)>>,
     listeners: AtomicUsize,
+    lead: Mutex<Lead>,
+    leads: watch::Sender<u32>,
     page: String,
 }
 
@@ -113,8 +120,11 @@ pub async fn run(listener: StdListener, serving: Serving) {
         Err(error) => return log::error!("jam: cannot take over the listener: {error}"),
     };
 
+    let lead = Lead::new(serving.lead);
     let shared = Arc::new(Shared {
         page: rendered(),
+        leads: watch::channel(lead.lead()).0,
+        lead: Mutex::new(lead),
         serving,
         limits: Mutex::new(HashMap::new()),
         listeners: AtomicUsize::new(0),
@@ -261,11 +271,12 @@ async fn session(
         return turn_down(&mut socket, Refusal::Closed).await;
     };
 
+    let mut leads = shared.leads.subscribe();
     let welcome = FromHost::Welcome {
         protocol: PROTOCOL,
         room: shared.serving.room.clone(),
         format,
-        lead_ms: shared.serving.lead,
+        lead_ms: *leads.borrow_and_update(),
         origin: shared.serving.broadcast.origin(),
     };
     if say(&mut socket, &welcome).await.is_err() {
@@ -280,6 +291,7 @@ async fn session(
             name: name.clone(),
             at: at.clone(),
             native,
+            need: 0,
         }))
         .ok();
 
@@ -370,6 +382,15 @@ async fn session(
                 }
                 None => break,
             },
+            moved = leads.changed() => {
+                if moved.is_err() {
+                    break;
+                }
+                let told = FromHost::Lead { lead_ms: *leads.borrow_and_update() };
+                if say(&mut socket, &told).await.is_err() {
+                    break;
+                }
+            },
             kicked = kicks.recv() => match kicked {
                 Ok(target) if target == at => {
                     let ended = FromHost::Ended { reason: Farewell::Kicked };
@@ -384,7 +405,8 @@ async fn session(
                 Some(Ok(Message::Text(line))) => {
                     let t1 = millis();
                     match wire::decode::<FromReceiver>(&line) {
-                        Ok(FromReceiver::Ping { t0 }) => {
+                        Ok(FromReceiver::Ping { t0, need }) => {
+                            needed(&shared, &at, need);
                             let pong = FromHost::Pong { t0, t1, t2: millis() };
                             if say(&mut socket, &pong).await.is_err() {
                                 break;
@@ -415,7 +437,52 @@ async fn session(
     }
 
     shared.listeners.fetch_sub(1, Ordering::AcqRel);
+    forgotten(&shared, &at);
     shared.serving.events.send(ServerEvent::Left(at)).ok();
+}
+
+fn needed(shared: &Arc<Shared>, at: &str, need: u32) {
+    let mut lead = match shared.lead.lock() {
+        Ok(lead) => lead,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let noted = lead.note(at, need);
+    let settled = lead.settle(millis());
+    told(shared, &lead, noted || settled.is_some());
+    if let Some(settled) = settled {
+        shared.leads.send_replace(settled);
+    }
+}
+
+fn forgotten(shared: &Arc<Shared>, at: &str) {
+    let mut lead = match shared.lead.lock() {
+        Ok(lead) => lead,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    lead.forget(at);
+    let settled = lead.settle(millis());
+    told(shared, &lead, true);
+    if let Some(settled) = settled {
+        shared.leads.send_replace(settled);
+    }
+}
+
+fn told(shared: &Arc<Shared>, lead: &Lead, moved: bool) {
+    if !moved {
+        return;
+    }
+    let needs = lead
+        .needs()
+        .map(|(at, need)| (at.to_owned(), need))
+        .collect();
+    shared
+        .serving
+        .events
+        .send(ServerEvent::Lead {
+            lead_ms: lead.lead(),
+            needs,
+        })
+        .ok();
 }
 
 async fn awaited(shared: &Arc<Shared>) -> Option<super::wire::Format> {

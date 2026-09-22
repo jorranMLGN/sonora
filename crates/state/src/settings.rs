@@ -165,7 +165,7 @@ fn yes() -> bool {
 const SAVE_DELAY: Duration = Duration::from_millis(300);
 const DEFAULT_VOLUME: f32 = 0.7;
 const DEFAULT_JAM_PORT: u16 = 8990;
-const DEFAULT_JAM_LEAD: u32 = 250;
+const DEFAULT_JAM_LEAD: u32 = 80;
 const JAM_PORT_ENV: &str = "SONORA_JAM_PORT";
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
 const DEFAULT_SIDEBAR_RIGHT_WIDTH: f32 = 254.;

@@ -77,6 +77,7 @@ pub enum FromReceiver {
     },
     Ping {
         t0: u64,
+        need: u32,
     },
     Find {
         query: String,
@@ -104,6 +105,9 @@ pub enum FromHost {
         mark: MarkKind,
         at: u64,
         origin: u64,
+    },
+    Lead {
+        lead_ms: u32,
     },
     Now {
         title: String,

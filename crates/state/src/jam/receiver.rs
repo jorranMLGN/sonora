@@ -16,6 +16,8 @@ use super::wire::{
 const PROBE: Duration = Duration::from_secs(5);
 const WELCOME_WAIT: Duration = Duration::from_secs(5);
 const SLEW_GAP: Duration = Duration::from_millis(50);
+const SINK_LATENCY: u32 = 60;
+const MARGIN: u32 = 40;
 
 #[derive(Debug)]
 pub enum ReceiverEvent {
@@ -70,7 +72,7 @@ async fn join(
         bail!("the host closed before welcoming");
     };
 
-    let (room, format, lead, mut origin) = match wire::decode::<FromHost>(&line)? {
+    let (room, format, mut lead, mut origin) = match wire::decode::<FromHost>(&line)? {
         FromHost::Welcome {
             room,
             format,
@@ -101,7 +103,8 @@ async fn join(
     loop {
         tokio::select! {
             _ = probe.tick() => {
-                let ping = FromReceiver::Ping { t0: millis() };
+                let need = SINK_LATENCY + (clock.rtt() / 2) as u32 + MARGIN;
+                let ping = FromReceiver::Ping { t0: millis(), need };
                 if socket.send(Message::Text(wire::encode(&ping)?.into())).await.is_err() {
                     break;
                 }
@@ -168,6 +171,7 @@ async fn join(
                             }))
                             .ok();
                     }
+                    FromHost::Lead { lead_ms } => lead = lead_ms,
                     FromHost::Transport { .. }
                     | FromHost::Found { .. }
                     | FromHost::Added { .. }

@@ -1,5 +1,6 @@
 mod cast;
 mod clock;
+mod lead;
 mod receiver;
 mod server;
 mod wire;
@@ -8,7 +9,7 @@ use std::net::UdpSocket;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{App, Context, Entity, EventEmitter, Task};
+use gpui::{Context, Entity, EventEmitter, Task};
 use music::cast::{CastSink, Feed};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -36,6 +37,7 @@ pub struct Listener {
     pub name: String,
     pub at: String,
     pub native: bool,
+    pub need: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,6 +49,7 @@ pub enum JamRole {
         code: String,
         addresses: Vec<String>,
         listeners: Vec<Listener>,
+        lead: u32,
     },
     Joining {
         at: String,
@@ -339,6 +342,7 @@ impl Jam {
             code,
             addresses: addresses(bound),
             listeners: Vec::new(),
+            lead: self.settings.read(cx).jam_lead(),
         };
         cx.emit(JamEvent::Started);
         cx.notify();
@@ -364,7 +368,10 @@ impl Jam {
             event => event,
         };
 
-        let JamRole::Hosting { listeners, .. } = &mut self.role else {
+        let JamRole::Hosting {
+            listeners, lead, ..
+        } = &mut self.role
+        else {
             return;
         };
 
@@ -378,6 +385,16 @@ impl Jam {
             ServerEvent::Left(at) => {
                 listeners.retain(|held| held.at != at);
                 cx.emit(JamEvent::Left);
+            }
+            ServerEvent::Lead { lead_ms, needs } => {
+                *lead = lead_ms;
+                for listener in listeners.iter_mut() {
+                    listener.need = needs
+                        .iter()
+                        .find(|(at, _)| *at == listener.at)
+                        .map(|(_, need)| *need)
+                        .unwrap_or(0);
+                }
             }
         }
         cx.notify();
@@ -453,8 +470,11 @@ impl Jam {
         self.asks.push(task);
     }
 
-    pub fn lead(&self, cx: &App) -> u32 {
-        self.settings.read(cx).jam_lead()
+    pub fn lead(&self) -> u32 {
+        match &self.role {
+            JamRole::Hosting { lead, .. } => *lead,
+            _ => 0,
+        }
     }
 
     pub fn kick(&mut self, at: &str, cx: &mut Context<Self>) {
@@ -463,12 +483,6 @@ impl Jam {
             return;
         };
         listeners.retain(|held| held.at != at);
-        cx.notify();
-    }
-
-    pub fn set_lead(&mut self, lead_ms: u32, cx: &mut Context<Self>) {
-        self.settings
-            .update(cx, |settings, cx| settings.set_jam_lead(lead_ms, cx));
         cx.notify();
     }
 }

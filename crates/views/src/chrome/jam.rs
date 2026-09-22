@@ -1,23 +1,15 @@
 use gpui::prelude::*;
-use gpui::{
-    App, ClipboardItem, Context, Entity, MouseUpEvent, Render, SharedString, Window, div, px,
-};
+use gpui::{App, ClipboardItem, Context, Entity, Render, SharedString, Window, div, px};
 use i18n::t;
 use state::{Jam, JamRole, Listener, Outcome, Sonora, Toasts};
-use ui::{
-    ActiveTheme as _, Button, Input, Scrubber, ScrubberState, Skeleton, Text, Vacancy, eyebrow,
-};
+use ui::{ActiveTheme as _, Button, Input, Skeleton, Text, Vacancy, eyebrow};
 
-const LEAD_LEAST: u32 = 50;
-const LEAD_MOST: u32 = 1_000;
 const ROW: f32 = 34.;
 
 pub(crate) struct JamPanel {
     jam: Entity<Jam>,
     address: Entity<Input>,
     code: Entity<Input>,
-    lead: ScrubberState,
-    sliding: Option<f32>,
 }
 
 impl JamPanel {
@@ -29,8 +21,6 @@ impl JamPanel {
             jam,
             address: cx.new(|cx| Input::new("jam-join-hint", cx).compact()),
             code: cx.new(|cx| Input::new("jam-code-hint", cx).compact()),
-            lead: ScrubberState::new("jam-lead"),
-            sliding: None,
         }
     }
 
@@ -54,16 +44,6 @@ impl JamPanel {
 
     fn leave(&mut self, cx: &mut Context<Self>) {
         self.jam.update(cx, |jam, cx| jam.leave(cx));
-    }
-
-    fn commit_lead(&mut self, cx: &mut Context<Self>) {
-        let Some(fraction) = self.sliding.take() else {
-            return;
-        };
-
-        let span = (LEAD_MOST - LEAD_LEAST) as f32;
-        let lead = LEAD_LEAST + (fraction.clamp(0., 1.) * span).round() as u32;
-        self.jam.update(cx, |jam, cx| jam.set_lead(lead, cx));
     }
 
     fn idle(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -101,10 +81,7 @@ impl JamPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = *cx.theme();
-        let lead = self.jam.read(cx).lead(cx);
-        let fraction = self.sliding.unwrap_or_else(|| {
-            (lead.saturating_sub(LEAD_LEAST) as f32 / (LEAD_MOST - LEAD_LEAST) as f32).clamp(0., 1.)
-        });
+        let lead = self.jam.read(cx).lead();
 
         div()
             .flex()
@@ -162,8 +139,16 @@ impl JamPanel {
                     .h(px(ROW))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .text_size(theme.text(Text::Small))
                             .child(SharedString::from(listener.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .text_size(theme.text(Text::Small))
+                            .child(t!("jam-need", need = listener.need as i64)),
                     )
                     .child(
                         Button::new(("jam-kick", index))
@@ -178,13 +163,10 @@ impl JamPanel {
             }))
             .child(eyebrow(t!("jam-lead"), cx))
             .child(
-                Scrubber::new(&self.lead, fraction)
-                    .colors(theme.progress_bar, theme.secondary, theme.foreground)
-                    .on_move(cx.listener(|this, fraction: &f32, _, cx| {
-                        this.sliding = Some(*fraction);
-                        cx.notify();
-                    }))
-                    .on_release(cx.listener(|this, _: &MouseUpEvent, _, cx| this.commit_lead(cx))),
+                div()
+                    .text_color(theme.muted_foreground)
+                    .text_size(theme.text(Text::Small))
+                    .child(t!("jam-lead-auto", lead = lead as i64)),
             )
             .child(
                 Button::new("jam-stop")
@@ -250,6 +232,7 @@ impl Render for JamPanel {
                     code,
                     addresses,
                     listeners,
+                    ..
                 } => self
                     .hosting(&room, &code, &addresses, &listeners, cx)
                     .into_any_element(),

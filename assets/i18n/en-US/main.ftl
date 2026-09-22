@@ -676,6 +676,8 @@ jam-copy = Copy the address
 jam-code = Code { $code }
 jam-lead = Lead
 jam-lead-detail = How far ahead of the sound the stream runs
+jam-lead-auto = automatic · { $lead } ms
+jam-need = { $need } ms
 jam-joining = Connecting to { $at }
 jam-lost = Lost the host, trying again
 jam-listening = Listening to { $room }
@@ -728,7 +730,4 @@ settings-jam-name = Jam name
 settings-jam-name-detail = What listeners see when they join
 settings-jam-guests = Listeners can add tracks
 settings-jam-guests-detail = Anyone in a jam can search your providers and add to the queue
-settings-jam-lead = Jam lead
-settings-jam-lead-detail = Milliseconds of buffer a listener keeps ahead of the sound
 
-settings-jam-lead-value = { $lead } ms

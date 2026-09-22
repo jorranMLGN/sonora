@@ -61,6 +61,10 @@ impl Clock {
         self.best().map(|sample| sample.offset()).unwrap_or(0)
     }
 
+    pub fn rtt(&self) -> u64 {
+        self.best().map(|sample| sample.rtt()).unwrap_or(0)
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.samples.len()

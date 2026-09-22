@@ -34,9 +34,6 @@ const PACKS: &str = "packs";
 const CORNERS: &str = "corners";
 const LANGUAGES: &str = "languages";
 const TYPEFACES: &str = "typefaces";
-const JAM_LEAD_LEAST: u32 = 50;
-const JAM_LEAD_MOST: u32 = 1_000;
-const JAM_LEAD_STEP: i64 = 50;
 const TYPEFACE_LIMIT: usize = 200;
 const TYPEFACE_LEAD: usize = 2;
 // faces previewed before a measurement
@@ -232,7 +229,6 @@ impl SettingsView {
                 Row::Item(self.gapless_row(cx).into_any_element()),
                 self.title("settings-group-jam", cx),
                 Row::Item(self.jam_guests_row(cx).into_any_element()),
-                Row::Item(self.jam_lead_row(cx).into_any_element()),
                 self.title("settings-group-lyrics", cx),
                 Row::Item(self.panel_lyrics_size_row(cx).into_any_element()),
                 Row::Item(self.fullscreen_lyrics_size_row(cx).into_any_element()),
@@ -1233,45 +1229,6 @@ impl SettingsView {
                         .update(cx, |settings, cx| settings.set_jam_guests_add(!on, cx));
                 }))
                 .into_any_element(),
-        )
-    }
-
-    fn jam_lead_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-        let lead = self.settings.read(cx).jam_lead();
-
-        let step = move |suffix: &'static str, label: &'static str, delta: i64| {
-            let wanted =
-                (lead as i64 + delta).clamp(JAM_LEAD_LEAST as i64, JAM_LEAD_MOST as i64) as u32;
-
-            Button::new(SharedString::from(format!("jam-lead-{suffix}")))
-                .label(label)
-                .small()
-                .outline()
-                .disabled(wanted == lead)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings
-                        .update(cx, |settings, cx| settings.set_jam_lead(wanted, cx));
-                    cx.notify();
-                }))
-        };
-
-        let actions = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(step("shorter", "\u{2212}", -JAM_LEAD_STEP))
-            .child(div().child(t!("settings-jam-lead-value", lead = lead as i64)))
-            .child(step("longer", "+", JAM_LEAD_STEP));
-
-        self.row(
-            t!("settings-jam-lead"),
-            t!("settings-jam-lead-detail"),
-            muted,
-            small,
-            actions.into_any_element(),
         )
     }
 
