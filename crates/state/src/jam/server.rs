@@ -281,7 +281,11 @@ async fn session(
             chunk = chunks.recv() => match chunk {
                 Ok(chunk) => {
                     if let Some(mark) = chunk.mark {
-                        let mark = FromHost::Mark { mark, at: chunk.header.first_sample };
+                        let mark = FromHost::Mark {
+                            mark,
+                            at: chunk.header.first_sample,
+                            origin: chunk.origin,
+                        };
                         if say(&mut socket, &mark).await.is_err() {
                             break;
                         }
@@ -300,7 +304,11 @@ async fn session(
                 }
                 Err(RecvError::Lagged(missed)) => {
                     log::debug!("jam: a receiver fell {missed} chunks behind");
-                    let cut = FromHost::Mark { mark: MarkKind::Cut, at: 0 };
+                    let cut = FromHost::Mark {
+                        mark: MarkKind::Cut,
+                        at: 0,
+                        origin: shared.serving.broadcast.origin(),
+                    };
                     if say(&mut socket, &cut).await.is_err() {
                         break;
                     }

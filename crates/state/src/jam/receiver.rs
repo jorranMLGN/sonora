@@ -70,7 +70,7 @@ async fn join(
         bail!("the host closed before welcoming");
     };
 
-    let (room, format, lead, origin) = match wire::decode::<FromHost>(&line)? {
+    let (room, format, lead, mut origin) = match wire::decode::<FromHost>(&line)? {
         FromHost::Welcome {
             room,
             format,
@@ -134,16 +134,20 @@ async fn join(
                         }
                         Nudge::Anchor => {
                             sink.flush();
-                            pushed = 0;
+                            pushed = sink.played();
                         }
                     }
                 }
                 Some(Ok(Message::Text(line))) => match wire::decode::<FromHost>(&line)? {
-                    FromHost::Mark { mark: MarkKind::Quiet, at } => quiet_at = Some(at),
-                    FromHost::Mark { mark: MarkKind::Cut, .. } => {
+                    FromHost::Mark { mark: MarkKind::Quiet, at, origin: anchor } => {
+                        origin = anchor;
+                        quiet_at = Some(at);
+                    }
+                    FromHost::Mark { mark: MarkKind::Cut, origin: anchor, .. } => {
+                        origin = anchor;
                         quiet_at = None;
                         sink.flush();
-                        pushed = 0;
+                        pushed = sink.played();
                     }
                     FromHost::Now {
                         title,

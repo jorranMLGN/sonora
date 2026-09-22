@@ -20,6 +20,7 @@ pub struct Chunk {
     pub header: Header,
     pub bytes: Vec<u8>,
     pub mark: Option<MarkKind>,
+    pub origin: u64,
 }
 
 pub struct Broadcast {
@@ -219,6 +220,7 @@ impl Chunker {
                 header,
                 bytes: bytes.to_vec(),
                 mark,
+                origin: self.origin.load(Ordering::Acquire),
             }))
             .ok();
     }

@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 pub const MAGIC: [u8; 4] = *b"SNJ1";
 pub const HEADER: usize = 16;
 
@@ -103,6 +103,7 @@ pub enum FromHost {
     Mark {
         mark: MarkKind,
         at: u64,
+        origin: u64,
     },
     Now {
         title: String,
@@ -238,6 +239,7 @@ mod tests {
             let sent = FromHost::Mark {
                 mark,
                 at: 7_000_000,
+                origin: 1_764_000_000_000,
             };
             assert_eq!(decode::<FromHost>(&encode(&sent).unwrap()).unwrap(), sent);
         }

@@ -1,5 +1,5 @@
 use std::num::NonZero;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
@@ -82,6 +82,7 @@ pub struct Sink {
     producer: Mutex<rtrb::Producer<f32>>,
     played: Arc<AtomicU64>,
     skip: Arc<AtomicI64>,
+    cut: Arc<AtomicBool>,
 }
 
 struct Jitter {
@@ -90,6 +91,7 @@ struct Jitter {
     rate: NonZero<u32>,
     played: Arc<AtomicU64>,
     skip: Arc<AtomicI64>,
+    cut: Arc<AtomicBool>,
     lane: u16,
 }
 
@@ -101,6 +103,7 @@ impl Sink {
         let (producer, samples) = RingBuffer::<f32>::new(format.samples(JITTER_MILLIS).max(1));
         let played = Arc::new(AtomicU64::new(0));
         let skip = Arc::new(AtomicI64::new(0));
+        let cut = Arc::new(AtomicBool::new(false));
 
         let output = Output::open(Volume::new(1.0), Spectrum::new(), "jam", None)?;
         output.sink().append(Jitter {
@@ -109,6 +112,7 @@ impl Sink {
             rate,
             played: played.clone(),
             skip: skip.clone(),
+            cut: cut.clone(),
             lane: 0,
         });
         output.sink().play();
@@ -118,6 +122,7 @@ impl Sink {
             producer: Mutex::new(producer),
             played,
             skip,
+            cut,
         })
     }
 
@@ -134,8 +139,7 @@ impl Sink {
     }
 
     pub fn flush(&self) {
-        self.output.sink().clear();
-        self.output.sink().play();
+        self.cut.store(true, Ordering::Release);
     }
 
     pub fn played(&self) -> u64 {
@@ -171,6 +175,12 @@ impl Iterator for Jitter {
 
 impl Jitter {
     fn correct(&mut self) {
+        if self.cut.swap(false, Ordering::AcqRel) {
+            while self.samples.pop().is_ok() {}
+            self.skip.store(0, Ordering::Relaxed);
+            return;
+        }
+
         let owed = self.skip.load(Ordering::Relaxed);
         if owed == 0 {
             return;
