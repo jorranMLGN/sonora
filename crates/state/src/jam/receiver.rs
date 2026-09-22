@@ -58,6 +58,7 @@ async fn join(
         name: name.to_owned(),
         native: true,
         code: code.to_owned(),
+        device: format!("{:032x}", fastrand::u128(..)),
         accepts: vec![Codec::Pcm16],
     };
     socket
@@ -175,7 +176,11 @@ async fn join(
                     FromHost::Transport { .. }
                     | FromHost::Found { .. }
                     | FromHost::Added { .. }
-                    | FromHost::Denied { .. } => continue,
+                    | FromHost::Denied { .. }
+                    | FromHost::Grant { .. }
+                    | FromHost::Controls { .. }
+                    | FromHost::Lineup { .. }
+                    | FromHost::Room { .. } => continue,
                     FromHost::Pong { t0, t1, t2 } => {
                         clock.push(Sample { t0, t1, t2, t3: millis() });
                     }

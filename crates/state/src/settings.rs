@@ -12,6 +12,7 @@ use ui::{
     Layout, Look, Mode, Pace, Pin, Rounding, Saver, Sorting, Stillness, ThemeKind, ThemeOverrides,
 };
 
+use crate::jam::{Cap, Caps};
 use crate::queue::{Resume, gap_target};
 use crate::{Repeat, Sonora, Whence};
 
@@ -244,6 +245,9 @@ struct Jam {
     lead_ms: u32,
     name: String,
     guests_add: bool,
+    guests_control: bool,
+    guests_browse: bool,
+    guests_favorite: bool,
 }
 
 impl Default for Jam {
@@ -253,6 +257,9 @@ impl Default for Jam {
             lead_ms: DEFAULT_JAM_LEAD,
             name: String::new(),
             guests_add: true,
+            guests_control: false,
+            guests_browse: false,
+            guests_favorite: false,
         }
     }
 }
@@ -517,6 +524,29 @@ impl AppSettings {
             return;
         }
         self.values.jam.guests_add = allowed;
+        self.schedule_save(cx);
+    }
+
+    pub fn jam_guests(&self) -> Caps {
+        Caps {
+            add: self.values.jam.guests_add,
+            control: self.values.jam.guests_control,
+            browse: self.values.jam.guests_browse,
+            favorite: self.values.jam.guests_favorite,
+        }
+    }
+
+    pub fn set_jam_guest(&mut self, cap: Cap, on: bool, cx: &mut Context<Self>) {
+        let mut caps = self.jam_guests();
+        if cap.of(&caps) == on {
+            return;
+        }
+
+        cap.set(&mut caps, on);
+        self.values.jam.guests_add = caps.add;
+        self.values.jam.guests_control = caps.control;
+        self.values.jam.guests_browse = caps.browse;
+        self.values.jam.guests_favorite = caps.favorite;
         self.schedule_save(cx);
     }
 

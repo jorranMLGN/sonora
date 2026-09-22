@@ -106,7 +106,22 @@
       .hit .name { font-size: 14px; }
       .hit .by { font-size: 12px; color: var(--dim); }
       .hit button { width: 38px; margin: 0; padding: 8px 0; border-radius: 9px; flex: none; }
+      .hit.on .name { color: var(--live); }
       .said { margin-top: 10px; font-size: 13px; color: var(--dim); }
+      .deck { display: flex; gap: 8px; margin-top: 10px; }
+      .deck .tap { flex: 1; margin: 0; padding: 11px 8px; font-size: 14px; }
+      .tap.on { background: var(--live); }
+      .seek { cursor: pointer; }
+      input[type="text"] {
+        width: 100%;
+        margin-top: 10px;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
       .fault { margin-top: 10px; font-size: 12px; color: var(--warn); word-break: break-word; }
     </style>
   </head>
@@ -125,11 +140,31 @@
         <span class="badge" id="state" hidden></span>
       </div>
 
-      <div class="track"><div id="progress"></div></div>
+      <div class="track seek" id="seek"><div id="progress"></div></div>
       <div class="times"><span id="at">0:00</span><span id="total">0:00</span></div>
 
       <button id="play" disabled>{{jam-page-play}}</button>
       <div class="hint" id="hint">{{jam-page-tap}}</div>
+
+      <div class="card" id="deck" hidden>
+        <label>{{jam-page-transport}}</label>
+        <div class="deck">
+          <button type="button" id="prev" class="tap">{{jam-page-prev}}</button>
+          <button type="button" id="toggle" class="tap">{{jam-page-resume}}</button>
+          <button type="button" id="skip" class="tap">{{jam-page-next}}</button>
+        </div>
+        <div class="deck">
+          <button type="button" id="shuffle" class="tap">{{jam-page-shuffle}}</button>
+          <button type="button" id="repeat" class="tap">{{jam-page-repeat}}</button>
+        </div>
+        <label for="loud">{{jam-page-everyone}}</label>
+        <input id="loud" type="range" min="0" max="100" step="1" value="100" />
+      </div>
+
+      <div class="card">
+        <label for="here">{{jam-page-here}}</label>
+        <input id="here" type="range" min="0" max="100" step="1" value="100" />
+      </div>
 
       <div class="card">
         <label for="query">{{jam-page-search}}</label>
@@ -139,6 +174,19 @@
         </form>
         <div class="hits" id="hits"></div>
         <div class="said" id="said"></div>
+      </div>
+
+      <div class="card">
+        <label>{{jam-page-queue}}</label>
+        <div class="hits" id="lineup"></div>
+        <div class="said" id="queued">{{jam-page-queue-empty}}</div>
+      </div>
+
+      <div class="card">
+        <label for="me">{{jam-page-you}}</label>
+        <input id="me" type="text" placeholder="{{jam-page-you-hint}}" autocomplete="off" />
+        <div class="row"><span>{{jam-page-room}}</span></div>
+        <div class="hits" id="seats"></div>
       </div>
 
       <div class="card">
@@ -172,10 +220,19 @@
         added: "{{jam-page-added}}",
         nothing_found: "{{jam-page-no-hits}}",
         searching: "{{jam-page-searching}}",
+        resume: "{{jam-page-resume}}",
+        pause: "{{jam-page-pause}}",
+        queue_empty: "{{jam-page-queue-empty}}",
+        now: "{{jam-page-now}}",
+        played: "{{jam-page-played}}",
+        drop: "{{jam-page-drop}}",
+        more: "{{jam-page-more}}",
+        alone: "{{jam-page-alone}}",
         denied: {
           Closed: "{{jam-page-denied-closed}}",
           Unknown: "{{jam-page-denied-unknown}}",
           Busy: "{{jam-page-denied-busy}}",
+          Forbidden: "{{jam-page-denied-forbidden}}",
         },
         refused: {
           Protocol: "{{jam-refused-protocol}}",
@@ -183,6 +240,7 @@
           Codec: "{{jam-refused-codec}}",
           Full: "{{jam-refused-full}}",
           Closed: "{{jam-refused-closed}}",
+          Kicked: "{{jam-refused-kicked}}",
         },
       };
       const LABELS = {
@@ -194,6 +252,10 @@
       const MAGIC = 0x314a4e53;
       const HEADER = 16;
       const TRIM_KEY = "sonora.jam.offset";
+      const HERE_KEY = "sonora.jam.here";
+      const NAME_KEY = "sonora.jam.name";
+      const DEVICE_KEY = "sonora.jam.device";
+      const HELD_DRAG = 600;
       const SAMPLES = 8;
       const BURST = 8;
       const BURST_GAP = 150;
@@ -241,11 +303,37 @@
       let probe = 0;
       let refused = false;
 
+      let can = { add: false, control: false, browse: false, favorite: false };
+      let here = 100;
+      let me = "";
+      let device = "";
+      let shuffling = false;
+      let repeating = "Off";
+      let dragging = 0;
+      let order = null;
+      let crowd = null;
+
       try {
         trim = Number(localStorage.getItem(TRIM_KEY)) || 0;
+        const stored = Number(localStorage.getItem(HERE_KEY));
+        here = Number.isFinite(stored) && stored >= 0 ? stored : 100;
+        me = localStorage.getItem(NAME_KEY) || "";
+        device = localStorage.getItem(DEVICE_KEY) || "";
       } catch (_) {}
+
+      if (!device) {
+        device = [...crypto.getRandomValues(new Uint8Array(16))]
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join("");
+        try {
+          localStorage.setItem(DEVICE_KEY, device);
+        } catch (_) {}
+      }
+
       el("offset").value = String(trim);
       el("offsetValue").textContent = `${trim} ms`;
+      el("here").value = String(here);
+      el("me").value = me;
 
       window.addEventListener("error", (event) => fault(event.message));
 
@@ -261,6 +349,47 @@
         try {
           localStorage.setItem(TRIM_KEY, String(trim));
         } catch (_) {}
+      });
+
+      el("here").addEventListener("input", (event) => {
+        here = Number(event.target.value) || 0;
+        if (gain) gain.gain.value = here / 100;
+        try {
+          localStorage.setItem(HERE_KEY, String(here));
+        } catch (_) {}
+      });
+
+      el("me").addEventListener("change", (event) => {
+        me = event.target.value.trim().slice(0, 40);
+        el("me").value = me;
+        try {
+          localStorage.setItem(NAME_KEY, me);
+        } catch (_) {}
+      });
+
+      function command(act) {
+        if (!can.control || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Command", act }));
+      }
+
+      el("prev").addEventListener("click", () => command({ act: "Previous" }));
+      el("skip").addEventListener("click", () => command({ act: "Next" }));
+      el("toggle").addEventListener("click", () =>
+        command({ act: hostPlaying ? "Pause" : "Play" }),
+      );
+      el("shuffle").addEventListener("click", () =>
+        command({ act: "Shuffle", on: !shuffling }),
+      );
+      el("repeat").addEventListener("click", () => command({ act: "Repeat" }));
+      el("loud").addEventListener("input", (event) => {
+        dragging = Date.now();
+        command({ act: "Volume", level: Number(event.target.value) || 0 });
+      });
+      el("seek").addEventListener("click", (event) => {
+        if (!duration || !can.control) return;
+        const box = event.currentTarget.getBoundingClientRect();
+        const part = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+        command({ act: "Seek", ms: Math.round(part * duration) });
       });
 
       el("find").addEventListener("submit", (event) => {
@@ -323,6 +452,7 @@
         if (!format) return;
         ctx = new AudioContext({ sampleRate: format.rate, latencyHint: "interactive" });
         gain = ctx.createGain();
+        gain.gain.value = here / 100;
         gain.connect(ctx.destination);
         await ctx.resume();
         playAt = null;
@@ -359,9 +489,10 @@
             JSON.stringify({
               kind: "Hello",
               protocol: {{protocol}},
-              name: navigator.userAgent.slice(0, 40),
+              name: me || navigator.userAgent.slice(0, 40),
               native: false,
               code,
+              device,
               accepts: ["pcm16"],
             }),
           );
@@ -416,6 +547,31 @@
             position = message.position_ms || 0;
             positionAt = performance.now();
             show("state", hostPlaying ? TEXT.playing : TEXT.paused);
+            el("toggle").textContent = hostPlaying ? TEXT.pause : TEXT.resume;
+            break;
+          case "Grant":
+            can = message.can || can;
+            el("deck").hidden = !can.control;
+            if (order) lineup(order);
+            break;
+          case "Controls":
+            shuffling = message.shuffle;
+            repeating = message.repeat;
+            if (Date.now() - dragging > HELD_DRAG) {
+              el("loud").value = String(message.volume);
+            }
+            el("prev").disabled = !message.can_previous;
+            el("skip").disabled = !message.can_next;
+            el("shuffle").className = shuffling ? "tap on" : "tap";
+            el("repeat").className = repeating === "Off" ? "tap" : "tap on";
+            break;
+          case "Room":
+            crowd = message;
+            seats(crowd);
+            break;
+          case "Lineup":
+            order = message;
+            lineup(order);
             break;
           case "Found":
             hits(message.hits || []);
@@ -451,31 +607,37 @@
         }
       }
 
+      function line(track, caption) {
+        const row = document.createElement("div");
+        row.className = "hit";
+
+        const thumb = document.createElement("div");
+        thumb.className = "thumb";
+        if (track.cover) thumb.style.backgroundImage = `url("${track.cover}")`;
+
+        const who = document.createElement("div");
+        who.className = "who";
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = track.title;
+        const by = document.createElement("div");
+        by.className = "by";
+        by.textContent = [caption, track.artist, LABELS[track.provider] || track.provider]
+          .filter(Boolean)
+          .join(" · ");
+        who.append(name, by);
+
+        row.append(thumb, who);
+        return row;
+      }
+
       function hits(found) {
         const list = el("hits");
         list.textContent = "";
         el("said").textContent = found.length ? "" : TEXT.nothing_found;
 
         for (const found_track of found) {
-          const row = document.createElement("div");
-          row.className = "hit";
-
-          const thumb = document.createElement("div");
-          thumb.className = "thumb";
-          if (found_track.cover) thumb.style.backgroundImage = `url("${found_track.cover}")`;
-
-          const who = document.createElement("div");
-          who.className = "who";
-          const name = document.createElement("div");
-          name.className = "name";
-          name.textContent = found_track.title;
-          const by = document.createElement("div");
-          by.className = "by";
-          by.textContent = [found_track.artist, LABELS[found_track.provider] || found_track.provider]
-            .filter(Boolean)
-            .join(" · ");
-          who.append(name, by);
-
+          const row = line(found_track, "");
           const add = document.createElement("button");
           add.type = "button";
           add.textContent = "+";
@@ -485,8 +647,71 @@
             add.disabled = true;
           });
 
-          row.append(thumb, who, add);
+          row.append(add);
           list.append(row);
+        }
+      }
+
+      function lineup(message) {
+        const list = el("lineup");
+        const rows = message.rows || [];
+        const at = message.at;
+        list.textContent = "";
+
+        rows.forEach((track, index) => {
+          const offset = at < 0 ? index + 1 : index - at;
+          const caption = offset === 0 ? TEXT.now : offset < 0 ? TEXT.played : "";
+          const row = line(track, caption);
+          if (offset === 0) row.className = "hit on";
+
+          if (can.control && offset !== 0) {
+            row.classList.add("seek");
+            row.addEventListener("click", () => command({ act: "Jump", index: offset }));
+          }
+          if (can.control && offset > 0) {
+            const drop = document.createElement("button");
+            drop.type = "button";
+            drop.title = TEXT.drop;
+            drop.textContent = "×";
+            drop.addEventListener("click", (event) => {
+              event.stopPropagation();
+              command({ act: "Drop", index: offset - 1 });
+            });
+            row.append(drop);
+          }
+          list.append(row);
+        });
+
+        const ahead = at < 0 ? rows.length : rows.length - at - 1;
+        const truncated = message.total > rows.length;
+        el("queued").textContent = !ahead
+          ? TEXT.queue_empty
+          : truncated
+            ? TEXT.more
+            : "";
+      }
+
+      function seats(message) {
+        const list = el("seats");
+        const rows = message.listeners || [];
+        list.textContent = "";
+
+        rows.forEach((who, index) => {
+          const row = document.createElement("div");
+          row.className = "hit";
+          const name = document.createElement("div");
+          name.className = "who";
+          name.textContent = who.name;
+          if (index === message.you) row.className = "hit on";
+          row.append(name);
+          list.append(row);
+        });
+
+        if (rows.length < 2) {
+          const alone = document.createElement("div");
+          alone.className = "said";
+          alone.textContent = TEXT.alone;
+          list.append(alone);
         }
       }
 

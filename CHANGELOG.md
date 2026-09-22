@@ -16,6 +16,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   milliseconds. The slider is now only there to dial out the delay of a Bluetooth speaker, and the
   page shows the measured clock difference and how far off it is running.
 - Listen from a second Sonora, which keeps itself in step with the host on its own.
+- Give a jam listener control of playback, one device at a time, from the jam panel. Anyone who
+  joins can listen and add tracks; pausing, skipping, seeking and the volume stay with the host
+  until the host hands them to a particular device, and one control hands them all back.
+- Name yourself on the jam page and see who else is in the room.
+- See the host's queue on the jam page, with what is playing marked and what was just played above
+  it. A listener the host has given control can tap a track to jump to it or drop one that is
+  coming up.
+- Set the volume of the jam page on the device it is open on, without changing what anyone else
+  hears.
 - SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by
   pasting the OAuth token your browser shows, then play your likes, playlists and sets, search
   tracks, playlists and albums, open an artist page and start a radio from any track. Liking,
@@ -46,6 +55,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - A device listening to a jam no longer falls silent after the host switches to another provider.
+- Removing a listener from a jam now keeps that device out. It used to be identified by a port that
+  changed on every connection, so a removed device came straight back by reloading the page, and a
+  device that reconnected after its screen locked appeared in the list twice.
 - Dragging the seek bar or the volume slider no longer lets the window drag region underneath steal
   the press.
 - A track that turned out to be unplayable stays skipped when the queue is restored at startup.

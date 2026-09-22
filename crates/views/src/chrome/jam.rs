@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{App, ClipboardItem, Context, Entity, Render, SharedString, Window, div, px};
 use i18n::t;
-use state::{Jam, JamRole, Listener, Outcome, Sonora, Toasts};
+use state::{Cap, Jam, JamRole, Listener, Outcome, Sonora, Toasts};
 use ui::{ActiveTheme as _, Button, Input, Skeleton, Text, Vacancy, eyebrow};
 
 const ROW: f32 = 34.;
@@ -82,6 +82,10 @@ impl JamPanel {
     ) -> impl IntoElement {
         let theme = *cx.theme();
         let lead = self.jam.read(cx).lead();
+        let mut seats = Vec::with_capacity(listeners.len());
+        for (index, listener) in listeners.iter().enumerate() {
+            seats.push(self.seat(index, listener, cx).into_any_element());
+        }
 
         div()
             .flex()
@@ -130,8 +134,42 @@ impl JamPanel {
                 },
                 cx,
             ))
-            .children(listeners.iter().enumerate().map(|(index, listener)| {
-                let at = listener.at.clone();
+            .children(seats)
+            .when(!listeners.is_empty(), |panel| {
+                panel.child(
+                    Button::new("jam-demote-all")
+                        .ghost()
+                        .small()
+                        .label(t!("jam-demote-all"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.jam.update(cx, |jam, cx| jam.demote_all(cx));
+                        })),
+                )
+            })
+            .child(eyebrow(t!("jam-lead"), cx))
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .text_size(theme.text(Text::Small))
+                    .child(t!("jam-lead-auto", lead = lead as i64)),
+            )
+            .child(
+                Button::new("jam-stop")
+                    .outline()
+                    .label(t!("jam-stop"))
+                    .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+            )
+    }
+
+    fn seat(&self, index: usize, listener: &Listener, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let caps = self.jam.read(cx).grants(&listener.device);
+        let device = listener.device.clone();
+
+        div()
+            .flex()
+            .flex_col()
+            .child(
                 div()
                     .flex()
                     .items_center()
@@ -157,22 +195,29 @@ impl JamPanel {
                             .icon("icons/x.svg")
                             .tooltip_above("jam-kick")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.jam.update(cx, |jam, cx| jam.kick(&at, cx));
+                                this.jam.update(cx, |jam, cx| jam.kick(&device, cx));
                             })),
-                    )
-            }))
-            .child(eyebrow(t!("jam-lead"), cx))
-            .child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .text_size(theme.text(Text::Small))
-                    .child(t!("jam-lead-auto", lead = lead as i64)),
+                    ),
             )
             .child(
-                Button::new("jam-stop")
-                    .outline()
-                    .label(t!("jam-stop"))
-                    .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(Cap::ALL.into_iter().enumerate().map(|(slot, cap)| {
+                        let device = listener.device.clone();
+                        Button::new(("jam-cap", index * Cap::ALL.len() + slot))
+                            .ghost()
+                            .small()
+                            .label(i18n::lookup(cap.key(), None))
+                            .selected(cap.of(&caps))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.jam.update(cx, |jam, cx| {
+                                    let on = !jam.can(&device, cap);
+                                    jam.grant(&device, cap, on, cx);
+                                });
+                            }))
+                    })),
             )
     }
 

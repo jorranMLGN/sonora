@@ -29,7 +29,7 @@ pub use detail::{Collection, Detail, Header};
 pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
-pub use jam::{Jam, JamEvent, JamRole, Listener};
+pub use jam::{Cap, Caps, Jam, JamEvent, JamRole, Listener};
 pub use library::{Library, LibraryEvent, LibraryPart, LibraryState, Problem, Shelf};
 pub use lyrics::{Lyrics, LyricsState};
 pub use playback::{Origin, Playback, PlaybackState, Repeat, Whence};

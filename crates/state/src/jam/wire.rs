@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 pub const MAGIC: [u8; 4] = *b"SNJ1";
 pub const HEADER: usize = 16;
 
@@ -26,6 +26,77 @@ pub struct Format {
     pub codec: Codec,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Caps {
+    pub add: bool,
+    pub control: bool,
+    pub browse: bool,
+    pub favorite: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cap {
+    Add,
+    Control,
+    Browse,
+    Favorite,
+}
+
+impl Cap {
+    pub const ALL: [Cap; 2] = [Cap::Add, Cap::Control];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Cap::Add => "jam-cap-add",
+            Cap::Control => "jam-cap-control",
+            Cap::Browse => "jam-cap-browse",
+            Cap::Favorite => "jam-cap-favorite",
+        }
+    }
+
+    pub fn of(self, caps: &Caps) -> bool {
+        match self {
+            Cap::Add => caps.add,
+            Cap::Control => caps.control,
+            Cap::Browse => caps.browse,
+            Cap::Favorite => caps.favorite,
+        }
+    }
+
+    pub fn set(self, caps: &mut Caps, on: bool) {
+        match self {
+            Cap::Add => caps.add = on,
+            Cap::Control => caps.control = on,
+            Cap::Browse => caps.browse = on,
+            Cap::Favorite => caps.favorite = on,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Repeat {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "act")]
+pub enum Act {
+    Play,
+    Pause,
+    Next,
+    Previous,
+    Seek { ms: u64 },
+    Volume { level: u8 },
+    Shuffle { on: bool },
+    Repeat,
+    Jump { index: i32 },
+    Drop { index: u32 },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarkKind {
     Quiet,
@@ -39,6 +110,7 @@ pub enum Refusal {
     Codec,
     Full,
     Closed,
+    Kicked,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +129,13 @@ pub enum Denial {
     Closed,
     Unknown,
     Busy,
+    Forbidden,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Who {
+    pub name: String,
+    pub native: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +152,7 @@ pub enum FromReceiver {
         name: String,
         native: bool,
         code: String,
+        device: String,
         accepts: Vec<Codec>,
     },
     Ping {
@@ -84,6 +164,9 @@ pub enum FromReceiver {
     },
     Add {
         id: String,
+    },
+    Command {
+        act: Act,
     },
     Bye,
 }
@@ -100,6 +183,26 @@ pub enum FromHost {
     },
     Refused {
         reason: Refusal,
+    },
+    Grant {
+        can: Caps,
+    },
+    Controls {
+        volume: u8,
+        shuffle: bool,
+        repeat: Repeat,
+        can_next: bool,
+        can_previous: bool,
+    },
+    Room {
+        listeners: Vec<Who>,
+        you: i32,
+    },
+    Lineup {
+        revision: u64,
+        total: u32,
+        at: i32,
+        rows: Vec<Hit>,
     },
     Mark {
         mark: MarkKind,
@@ -208,6 +311,7 @@ mod tests {
             name: "kitchen".into(),
             native: true,
             code: "204813".into(),
+            device: "8f14e45fceea167a".into(),
             accepts: vec![Codec::Pcm16],
         };
         assert_eq!(

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr, TcpListener as StdListener};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,8 +29,10 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 use super::Listener;
 use super::cast::{Broadcast, Chunk};
 use super::lead::Lead;
+use super::snapshot::{self, Snapshot};
 use super::wire::{
-    self, Codec, Denial, Farewell, FromHost, FromReceiver, HEADER, Hit, MarkKind, PROTOCOL, Refusal,
+    self, Act, Codec, Denial, Farewell, FromHost, FromReceiver, HEADER, Hit, MarkKind, PROTOCOL,
+    Refusal,
 };
 
 const PAGE: &str = include_str!("page.html");
@@ -39,7 +41,11 @@ const WINDOW: Duration = Duration::from_secs(60);
 const LISTENERS: usize = 8;
 const HELLO_WAIT: Duration = Duration::from_secs(5);
 const ASK_WAIT: Duration = Duration::from_secs(10);
+const ACT_WAIT: Duration = Duration::from_secs(1);
 const ADDS: usize = 50;
+const TOKEN: usize = 64;
+const ACTS: f32 = 20.;
+const BURST: f32 = 40.;
 const FORMAT_WAIT: Duration = Duration::from_secs(120);
 const OPEN_WAIT: Duration = Duration::from_secs(2);
 const WAV_HEADER: usize = 44;
@@ -71,12 +77,43 @@ pub enum ServerEvent {
     },
     Add {
         id: String,
-        reply: oneshot::Sender<Option<String>>,
+        device: String,
+        reply: oneshot::Sender<Result<String, Denial>>,
     },
     Lead {
         lead_ms: u32,
         needs: Vec<(String, u32)>,
     },
+    Do {
+        act: Act,
+        device: String,
+        reply: oneshot::Sender<bool>,
+    },
+}
+
+struct Bucket {
+    left: f32,
+    at: Instant,
+}
+
+impl Bucket {
+    fn new() -> Self {
+        Self {
+            left: BURST,
+            at: Instant::now(),
+        }
+    }
+
+    fn spend(&mut self) -> bool {
+        let now = Instant::now();
+        self.left = (self.left + now.duration_since(self.at).as_secs_f32() * ACTS).min(BURST);
+        self.at = now;
+        if self.left < 1. {
+            return false;
+        }
+        self.left -= 1.;
+        true
+    }
 }
 
 pub struct Serving {
@@ -87,12 +124,14 @@ pub struct Serving {
     pub broadcast: Arc<Broadcast>,
     pub now: watch::Receiver<Option<Playing>>,
     pub transport: watch::Receiver<Transport>,
+    pub snapshot: watch::Receiver<Arc<Snapshot>>,
     pub events: UnboundedSender<ServerEvent>,
 }
 
 struct Shared {
     serving: Serving,
     limits: Mutex<HashMap<IpAddr, (usize, Instant)>>,
+    kicked: Mutex<HashSet<String>>,
     listeners: AtomicUsize,
     lead: Mutex<Lead>,
     leads: watch::Sender<u32>,
@@ -127,6 +166,7 @@ pub async fn run(listener: StdListener, serving: Serving) {
         lead: Mutex::new(lead),
         serving,
         limits: Mutex::new(HashMap::new()),
+        kicked: Mutex::new(HashSet::new()),
         listeners: AtomicUsize::new(0),
     });
 
@@ -251,8 +291,9 @@ async fn session(
         protocol,
         name,
         native,
+        code,
+        device,
         accepts,
-        ..
     } = hello
     else {
         return;
@@ -261,8 +302,16 @@ async fn session(
     if protocol != PROTOCOL {
         return turn_down(&mut socket, Refusal::Protocol).await;
     }
+    if code != shared.serving.code {
+        return turn_down(&mut socket, Refusal::Code).await;
+    }
     if !accepts.contains(&Codec::Pcm16) {
         return turn_down(&mut socket, Refusal::Codec).await;
+    }
+
+    let device = tokened(device, &at);
+    if banned(&shared, &device) {
+        return turn_down(&mut socket, Refusal::Kicked).await;
     }
     if shared.listeners.load(Ordering::Acquire) >= LISTENERS {
         return turn_down(&mut socket, Refusal::Full).await;
@@ -290,6 +339,7 @@ async fn session(
         .send(ServerEvent::Joined(Listener {
             name: name.clone(),
             at: at.clone(),
+            device: device.clone(),
             native,
             need: 0,
         }))
@@ -297,11 +347,19 @@ async fn session(
 
     let (outbox, mut waiting) = mpsc::unbounded_channel::<FromHost>();
     let mut added = 0usize;
+    let mut bucket = Bucket::new();
     let mut chunks = shared.serving.broadcast.subscribe();
     let mut kicks = shared.serving.kicks.subscribe();
     let mut now = shared.serving.now.clone();
     let mut transport = shared.serving.transport.clone();
+    let mut watching = shared.serving.snapshot.clone();
     let mut frame: Vec<u8> = Vec::new();
+
+    let opening = watching.borrow_and_update().clone();
+    let mut sent = Some(opening.clone());
+    for told in snapshot::between(None, &opening, &device) {
+        say(&mut socket, &told).await.ok();
+    }
 
     loop {
         tokio::select! {
@@ -391,8 +449,23 @@ async fn session(
                     break;
                 }
             },
+            moved = watching.changed() => {
+                if moved.is_err() {
+                    break;
+                }
+                let fresh = watching.borrow_and_update().clone();
+                let mut ok = true;
+                for told in snapshot::between(sent.as_deref(), &fresh, &device) {
+                    ok &= say(&mut socket, &told).await.is_ok();
+                }
+                sent = Some(fresh);
+                if !ok {
+                    break;
+                }
+            },
             kicked = kicks.recv() => match kicked {
-                Ok(target) if target == at => {
+                Ok(target) if target == device => {
+                    ban(&shared, &device);
                     let ended = FromHost::Ended { reason: Farewell::Kicked };
                     say(&mut socket, &ended).await.ok();
                     socket.close(None).await.ok();
@@ -422,9 +495,18 @@ async fn session(
                                     let denied = FromHost::Denied { reason: Denial::Busy };
                                     outbox.send(denied).ok();
                                 }
-                                false => ask(&shared, &outbox, Asked::Add(id)),
+                                false => {
+                                    ask(&shared, &outbox, Asked::Add(id, device.clone()))
+                                }
                             }
                         }
+                        Ok(FromReceiver::Command { act }) => match bucket.spend() {
+                            false => {
+                                let denied = FromHost::Denied { reason: Denial::Busy };
+                                outbox.send(denied).ok();
+                            }
+                            true => ask(&shared, &outbox, Asked::Do(act, device.clone())),
+                        },
                         Ok(FromReceiver::Bye) => break,
                         _ => continue,
                     }
@@ -508,7 +590,8 @@ async fn awaited(shared: &Arc<Shared>) -> Option<super::wire::Format> {
 
 enum Asked {
     Find(String),
-    Add(String),
+    Add(String, String),
+    Do(Act, String),
 }
 
 fn ask(shared: &Arc<Shared>, outbox: &UnboundedSender<FromHost>, asked: Asked) {
@@ -532,21 +615,34 @@ fn ask(shared: &Arc<Shared>, outbox: &UnboundedSender<FromHost>, asked: Asked) {
                 };
                 outbox.send(FromHost::Found { query, hits }).ok();
             }
-            Asked::Add(id) => {
+            Asked::Add(id, device) => {
                 let (reply, answer) = oneshot::channel();
-                if events.send(ServerEvent::Add { id, reply }).is_err() {
+                let sent = ServerEvent::Add { id, device, reply };
+                if events.send(sent).is_err() {
                     return;
                 }
                 let told = match tokio::time::timeout(ASK_WAIT, answer).await {
-                    Ok(Ok(Some(title))) => FromHost::Added { title },
-                    Ok(Ok(None)) => FromHost::Denied {
-                        reason: Denial::Unknown,
-                    },
+                    Ok(Ok(Ok(title))) => FromHost::Added { title },
+                    Ok(Ok(Err(reason))) => FromHost::Denied { reason },
                     _ => FromHost::Denied {
                         reason: Denial::Busy,
                     },
                 };
                 outbox.send(told).ok();
+            }
+            Asked::Do(act, device) => {
+                let (reply, answer) = oneshot::channel();
+                let sent = ServerEvent::Do { act, device, reply };
+                if events.send(sent).is_err() {
+                    return;
+                }
+                let allowed = matches!(tokio::time::timeout(ACT_WAIT, answer).await, Ok(Ok(true)));
+                if !allowed {
+                    let denied = FromHost::Denied {
+                        reason: Denial::Forbidden,
+                    };
+                    outbox.send(denied).ok();
+                }
             }
         }
     });
@@ -601,6 +697,34 @@ fn blocked(shared: &Shared, peer: IpAddr) -> bool {
         }
         _ => false,
     }
+}
+
+fn tokened(device: String, at: &str) -> String {
+    let device: String = device
+        .chars()
+        .filter(|glyph| glyph.is_ascii_alphanumeric())
+        .take(TOKEN)
+        .collect();
+    match device.is_empty() {
+        true => at.to_owned(),
+        false => device,
+    }
+}
+
+fn banned(shared: &Arc<Shared>, device: &str) -> bool {
+    let kicked = match shared.kicked.lock() {
+        Ok(kicked) => kicked,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    kicked.contains(device)
+}
+
+fn ban(shared: &Arc<Shared>, device: &str) {
+    let mut kicked = match shared.kicked.lock() {
+        Ok(kicked) => kicked,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    kicked.insert(device.to_owned());
 }
 
 fn strike(shared: &Shared, peer: IpAddr) {

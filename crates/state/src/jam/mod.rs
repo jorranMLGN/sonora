@@ -3,8 +3,11 @@ mod clock;
 mod lead;
 mod receiver;
 mod server;
+mod snapshot;
 mod wire;
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +22,13 @@ use crate::{AppSettings, Cover, Io, Playback, PlaybackState, Queue, Session, joi
 use cast::Broadcast;
 use receiver::ReceiverEvent;
 use server::{Playing, ServerEvent, Serving, Transport};
-use wire::{Hit, Refusal};
+use snapshot::{Controls, Lineup, Seat, Snapshot};
+use wire::{Act, Denial, Hit, Refusal};
+
+pub use wire::{Cap, Caps};
+
+const BEHIND: usize = 3;
+const AHEAD: usize = 50;
 
 const ROOM: &str = "Sonora";
 const AUTOSTART: &str = "SONORA_JAM_AUTOSTART";
@@ -36,6 +45,7 @@ const ASKS: usize = 8;
 pub struct Listener {
     pub name: String,
     pub at: String,
+    pub device: String,
     pub native: bool,
     pub need: u32,
 }
@@ -84,6 +94,8 @@ pub struct Jam {
     io: Io,
     now: watch::Sender<Option<Playing>>,
     transport: watch::Sender<Transport>,
+    snapshot: watch::Sender<Arc<Snapshot>>,
+    grants: HashMap<String, Caps>,
     kicks: tokio::sync::broadcast::Sender<String>,
     serve: Option<Task<()>>,
     follow: Option<Task<()>>,
@@ -123,8 +135,12 @@ impl Jam {
                 playing: matches!(playback.state(), PlaybackState::Playing),
                 position_ms: playback.live_position().as_millis() as u64,
             });
+            this.publish(cx);
         })
         .detach();
+
+        cx.observe(&queue, |this: &mut Self, _, cx| this.publish(cx))
+            .detach();
 
         cx.observe(&cover, |this: &mut Self, cover, cx| {
             let large = cover.read(cx).max().map(str::to_owned);
@@ -145,6 +161,8 @@ impl Jam {
             io,
             now: watch::channel(None).0,
             transport: watch::channel(Transport::default()).0,
+            snapshot: watch::channel(Arc::new(Snapshot::default())).0,
+            grants: HashMap::new(),
             kicks: tokio::sync::broadcast::channel(8).0,
             serve: None,
             follow: None,
@@ -324,6 +342,7 @@ impl Jam {
             lead: self.settings.read(cx).jam_lead(),
             broadcast: self.broadcast.clone(),
             now: self.now.subscribe(),
+            snapshot: self.snapshot.subscribe(),
             events,
         };
 
@@ -346,6 +365,7 @@ impl Jam {
         };
         cx.emit(JamEvent::Started);
         cx.notify();
+        self.publish(cx);
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
@@ -356,6 +376,8 @@ impl Jam {
         self.serve = None;
         self.follow = None;
         self.broadcast.follow(None);
+        self.grants.clear();
+        self.snapshot.send_replace(Arc::new(Snapshot::default()));
         self.role = JamRole::Idle;
         cx.emit(JamEvent::Stopped);
         cx.notify();
@@ -364,10 +386,12 @@ impl Jam {
     fn arrived(&mut self, event: ServerEvent, cx: &mut Context<Self>) {
         let event = match event {
             ServerEvent::Find { query, reply } => return self.find(query, reply, cx),
-            ServerEvent::Add { id, reply } => return self.add(id, reply, cx),
+            ServerEvent::Add { id, device, reply } => return self.add(id, device, reply, cx),
+            ServerEvent::Do { act, device, reply } => return self.act(act, device, reply, cx),
             event => event,
         };
 
+        let mut seeded = None;
         let JamRole::Hosting {
             listeners, lead, ..
         } = &mut self.role
@@ -376,9 +400,10 @@ impl Jam {
         };
 
         match event {
-            ServerEvent::Find { .. } | ServerEvent::Add { .. } => {}
+            ServerEvent::Find { .. } | ServerEvent::Add { .. } | ServerEvent::Do { .. } => {}
             ServerEvent::Joined(listener) => {
-                listeners.retain(|held| held.at != listener.at);
+                listeners.retain(|held| held.at != listener.at && held.device != listener.device);
+                seeded = Some(listener.device.clone());
                 listeners.push(listener);
                 cx.emit(JamEvent::Joined);
             }
@@ -398,6 +423,111 @@ impl Jam {
             }
         }
         cx.notify();
+
+        if let Some(device) = seeded {
+            let guests = self.settings.read(cx).jam_guests();
+            self.grants.entry(device).or_insert(guests);
+        }
+        self.publish(cx);
+    }
+
+    fn act(&mut self, act: Act, device: String, reply: Reply<bool>, cx: &mut Context<Self>) {
+        if !self.can(&device, Cap::Control) {
+            reply.send(false).ok();
+            return;
+        }
+
+        match act {
+            Act::Play => self.playback.update(cx, |this, cx| this.resume(cx)),
+            Act::Pause => self.playback.update(cx, |this, cx| this.pause(cx)),
+            Act::Next => self.playback.update(cx, |this, cx| this.next(cx)),
+            Act::Previous => self.playback.update(cx, |this, cx| this.previous(cx)),
+            Act::Repeat => self.playback.update(cx, |this, cx| this.cycle_repeat(cx)),
+            Act::Seek { ms } => self
+                .playback
+                .update(cx, |this, cx| this.seek(Duration::from_millis(ms), cx)),
+            Act::Volume { level } => self.playback.update(cx, |this, cx| {
+                this.set_volume(level.min(100) as f32 / 100., cx)
+            }),
+            Act::Shuffle { on } => self.queue.update(cx, |this, cx| this.set_shuffle(on, cx)),
+            Act::Drop { index } => self
+                .queue
+                .update(cx, |this, cx| this.remove_upcoming(index as usize, cx)),
+            Act::Jump { index } => {
+                let behind = self.queue.read(cx).past().len();
+                match index.cmp(&0) {
+                    Ordering::Equal => {}
+                    Ordering::Greater => self
+                        .playback
+                        .update(cx, |this, cx| this.play_upcoming(index as usize - 1, cx)),
+                    Ordering::Less => {
+                        let Some(back) = behind.checked_add_signed(index as isize) else {
+                            reply.send(false).ok();
+                            return;
+                        };
+                        self.playback
+                            .update(cx, |this, cx| this.play_past(back, cx));
+                    }
+                }
+            }
+        }
+
+        reply.send(true).ok();
+    }
+
+    fn publish(&mut self, cx: &mut Context<Self>) {
+        let JamRole::Hosting { listeners, .. } = &self.role else {
+            return;
+        };
+
+        let room = listeners
+            .iter()
+            .map(|listener| Seat {
+                name: listener.name.clone(),
+                native: listener.native,
+                device: listener.device.clone(),
+            })
+            .collect();
+
+        let queue = self.queue.read(cx);
+        let playback = self.playback.read(cx);
+        let behind = queue.past().len().min(BEHIND);
+        let mut rows: Vec<Hit> = queue
+            .past()
+            .skip(queue.past().len() - behind)
+            .map(row)
+            .collect();
+        let at = match queue.current() {
+            Some(track) => {
+                rows.push(row(track));
+                rows.len() as i32 - 1
+            }
+            None => -1,
+        };
+        rows.extend(queue.upcoming().take(AHEAD).map(row));
+
+        let fresh = Snapshot {
+            controls: Controls {
+                volume: (playback.volume().clamp(0., 1.) * 100.).round() as u8,
+                shuffle: queue.shuffle(),
+                repeat: spin(playback.repeat()),
+                can_next: queue.has_next(),
+                can_previous: playback.has_previous(cx),
+            },
+            lineup: Lineup {
+                revision: queue.revision(),
+                total: queue.len() as u32,
+                at,
+                rows,
+            },
+            room,
+            grants: self.grants.clone(),
+        };
+
+        let same = **self.snapshot.borrow() == fresh;
+        if !same {
+            self.snapshot.send_replace(Arc::new(fresh));
+        }
     }
 
     fn find(&mut self, query: String, reply: Reply<Vec<Hit>>, cx: &mut Context<Self>) {
@@ -429,9 +559,15 @@ impl Jam {
         }));
     }
 
-    fn add(&mut self, id: String, reply: Reply<Option<String>>, cx: &mut Context<Self>) {
-        if !self.settings.read(cx).jam_guests_add() {
-            reply.send(None).ok();
+    fn add(
+        &mut self,
+        id: String,
+        device: String,
+        reply: Reply<Result<String, Denial>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can(&device, Cap::Add) {
+            reply.send(Err(Denial::Forbidden)).ok();
             return;
         }
 
@@ -440,7 +576,7 @@ impl Jam {
             .slug_for(&id)
             .and_then(|slug| session.client_for_slug(slug));
         let Some(client) = client else {
-            reply.send(None).ok();
+            reply.send(Err(Denial::Unknown)).ok();
             return;
         };
 
@@ -449,7 +585,7 @@ impl Jam {
         self.remember(cx.spawn(async move |this, cx| {
             let found = join(io.spawn(async move { client.track(&id).await })).await;
             let Ok(track) = found else {
-                reply.send(None).ok();
+                reply.send(Err(Denial::Unknown)).ok();
                 return;
             };
 
@@ -459,7 +595,9 @@ impl Jam {
                     queue.update(cx, |queue, cx| queue.append(track, cx))
                 })
                 .is_ok();
-            reply.send(queued.then_some(title)).ok();
+            reply
+                .send(queued.then_some(title).ok_or(Denial::Unknown))
+                .ok();
         }));
     }
 
@@ -477,13 +615,39 @@ impl Jam {
         }
     }
 
-    pub fn kick(&mut self, at: &str, cx: &mut Context<Self>) {
-        self.kicks.send(at.to_owned()).ok();
-        let JamRole::Hosting { listeners, .. } = &mut self.role else {
-            return;
-        };
-        listeners.retain(|held| held.at != at);
+    pub fn grants(&self, device: &str) -> Caps {
+        self.grants.get(device).copied().unwrap_or_default()
+    }
+
+    pub fn can(&self, device: &str, cap: Cap) -> bool {
+        cap.of(&self.grants(device))
+    }
+
+    pub fn grant(&mut self, device: &str, cap: Cap, on: bool, cx: &mut Context<Self>) {
+        let mut caps = self.grants(device);
+        cap.set(&mut caps, on);
+        self.grants.insert(device.to_owned(), caps);
         cx.notify();
+        self.publish(cx);
+    }
+
+    pub fn demote_all(&mut self, cx: &mut Context<Self>) {
+        let guests = self.settings.read(cx).jam_guests();
+        for caps in self.grants.values_mut() {
+            *caps = guests;
+        }
+        cx.notify();
+        self.publish(cx);
+    }
+
+    pub fn kick(&mut self, device: &str, cx: &mut Context<Self>) {
+        self.kicks.send(device.to_owned()).ok();
+        self.grants.remove(device);
+        if let JamRole::Hosting { listeners, .. } = &mut self.role {
+            listeners.retain(|held| held.device != device);
+        }
+        cx.notify();
+        self.publish(cx);
     }
 }
 
@@ -519,6 +683,32 @@ fn playing(track: &music::Track, large: Option<String>) -> Playing {
         cover: large.or_else(|| track.cover.clone()),
         duration_ms: track.duration.as_millis() as u64,
         provider: provider.to_owned(),
+    }
+}
+
+fn row(track: &music::Track) -> Hit {
+    let provider = track
+        .id
+        .as_deref()
+        .and_then(music::tag::slug_of)
+        .unwrap_or_default();
+
+    Hit {
+        id: track.id.clone().unwrap_or_default(),
+        title: track.name.clone(),
+        artist: track.artists.clone(),
+        album: track.album.clone(),
+        cover: track.cover.clone(),
+        duration_ms: track.duration.as_millis() as u64,
+        provider: provider.to_owned(),
+    }
+}
+
+fn spin(repeat: crate::Repeat) -> wire::Repeat {
+    match repeat {
+        crate::Repeat::Off => wire::Repeat::Off,
+        crate::Repeat::All => wire::Repeat::All,
+        crate::Repeat::One => wire::Repeat::One,
     }
 }
 
