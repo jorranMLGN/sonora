@@ -27,7 +27,7 @@ use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
 use super::Listener;
-use super::cast::Broadcast;
+use super::cast::{Broadcast, Chunk};
 use super::wire::{
     self, Codec, Denial, Farewell, FromHost, FromReceiver, HEADER, Hit, MarkKind, PROTOCOL, Refusal,
 };
@@ -40,6 +40,7 @@ const HELLO_WAIT: Duration = Duration::from_secs(5);
 const ASK_WAIT: Duration = Duration::from_secs(10);
 const ADDS: usize = 50;
 const FORMAT_WAIT: Duration = Duration::from_secs(120);
+const OPEN_WAIT: Duration = Duration::from_secs(2);
 const WAV_HEADER: usize = 44;
 const ENDLESS: u32 = u32::MAX;
 
@@ -171,11 +172,25 @@ async fn answer(
         let Some(format) = awaited(&shared).await else {
             return Ok(refuse(StatusCode::SERVICE_UNAVAILABLE));
         };
-        return Ok(Response::builder()
+
+        let mut chunks = shared.serving.broadcast.subscribe();
+        let opening = first(&mut chunks).await;
+        let mut answer = Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "audio/wav")
             .header("cache-control", "no-store")
-            .body(wav(&shared, format))
+            .header("x-jam-rate", format.rate.to_string())
+            .header("x-jam-channels", format.channels.to_string())
+            .header(
+                "x-jam-origin",
+                shared.serving.broadcast.origin().to_string(),
+            );
+        if let Some(chunk) = &opening {
+            answer = answer.header("x-jam-first-sample", chunk.header.first_sample.to_string());
+        }
+
+        return Ok(answer
+            .body(wav(format, opening, chunks))
             .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR)));
     }
 
@@ -545,9 +560,26 @@ fn boxed(bytes: Bytes) -> Body {
     Full::new(bytes).boxed()
 }
 
-fn wav(shared: &Arc<Shared>, format: wire::Format) -> Body {
-    let head = header(format);
-    let chunks = shared.serving.broadcast.subscribe();
+async fn first(chunks: &mut broadcast::Receiver<Arc<Chunk>>) -> Option<Arc<Chunk>> {
+    let waited = tokio::time::timeout(OPEN_WAIT, async {
+        loop {
+            match chunks.recv().await {
+                Ok(chunk) if !chunk.bytes.is_empty() => return Some(chunk),
+                Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await;
+
+    waited.ok().flatten()
+}
+
+fn wav(
+    format: wire::Format,
+    opening: Option<Arc<Chunk>>,
+    chunks: broadcast::Receiver<Arc<Chunk>>,
+) -> Body {
     let sound = futures::stream::unfold(chunks, |mut chunks| async move {
         loop {
             match chunks.recv().await {
@@ -564,8 +596,14 @@ fn wav(shared: &Arc<Shared>, format: wire::Format) -> Body {
         }
     });
 
-    let opening = futures::stream::once(async move { Ok(Frame::data(Bytes::from(head))) });
-    BodyExt::boxed(StreamBody::new(opening.chain(sound)))
+    let mut ahead = vec![header(format)];
+    ahead.extend(opening.map(|chunk| chunk.bytes.clone()));
+    let head = futures::stream::iter(
+        ahead
+            .into_iter()
+            .map(|bytes| Ok(Frame::data(Bytes::from(bytes)))),
+    );
+    BodyExt::boxed(StreamBody::new(head.chain(sound)))
 }
 
 fn header(format: wire::Format) -> Vec<u8> {
