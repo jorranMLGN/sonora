@@ -145,6 +145,7 @@
         <label for="offset">{{jam-page-offset}}</label>
         <input id="offset" type="range" min="-500" max="500" step="5" value="0" />
         <div class="row"><span id="offsetValue">0 ms</span><span id="buffer">{{jam-page-buffer}}</span></div>
+        <div class="row"><span id="sync"></span><span id="drift"></span></div>
         <div class="row"><span id="stream"></span><span id="ping"></span></div>
         <div class="fault" id="fault" hidden></div>
       </div>
@@ -159,6 +160,9 @@
         lost: "{{jam-page-lost}}",
         nothing: "{{jam-page-nothing}}",
         buffer: "{{jam-page-buffer}}",
+        sync: "{{jam-page-sync}}",
+        drift: "{{jam-page-drift}}",
+        behind: "{{jam-page-behind}}",
         playing: "{{jam-page-playing}}",
         paused: "{{jam-page-paused}}",
         tap: "{{jam-page-tap}}",
@@ -188,7 +192,19 @@
         local: TEXT.local,
       };
       const MAGIC = 0x314a4e53;
-      const OFFSET_KEY = "sonora.jam.offset";
+      const HEADER = 16;
+      const TRIM_KEY = "sonora.jam.offset";
+      const SAMPLES = 8;
+      const BURST = 8;
+      const BURST_GAP = 150;
+      const PROBE_GAP = 2000;
+      const TICK = 200;
+      const HELD = 2;
+      const RESET = 100;
+      const PPM_PER_MS = 500;
+      const MAX_PPM = 3000;
+      const EASE = 0.15;
+      const GUARD = 0.005;
 
       const el = (id) => document.getElementById(id);
       const code = location.pathname.split("/").filter(Boolean).pop();
@@ -197,12 +213,17 @@
         return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
       };
 
+      const now = () => performance.timeOrigin + performance.now();
+      const taken = [];
+
       let socket = null;
       let ctx = null;
       let gain = null;
       let format = null;
-      let lead = 0.25;
-      let playAt = 0;
+      let lead = 250;
+      let origin = 0;
+      let base = null;
+      let playAt = null;
       let running = false;
 
       let duration = 0;
@@ -211,14 +232,19 @@
       let hostPlaying = false;
       let chunks = 0;
       let heard = 0;
+      let trim = 0;
       let offset = 0;
+      let rtt = 0;
+      let drift = 0;
+      let behind = false;
+      let probe = 0;
       let refused = false;
 
       try {
-        offset = Number(localStorage.getItem(OFFSET_KEY)) || 0;
+        trim = Number(localStorage.getItem(TRIM_KEY)) || 0;
       } catch (_) {}
-      el("offset").value = String(offset);
-      el("offsetValue").textContent = `${offset} ms`;
+      el("offset").value = String(trim);
+      el("offsetValue").textContent = `${trim} ms`;
 
       window.addEventListener("error", (event) => fault(event.message));
 
@@ -229,10 +255,10 @@
       }
 
       el("offset").addEventListener("input", (event) => {
-        offset = Number(event.target.value) || 0;
-        el("offsetValue").textContent = `${offset} ms`;
+        trim = Number(event.target.value) || 0;
+        el("offsetValue").textContent = `${trim} ms`;
         try {
-          localStorage.setItem(OFFSET_KEY, String(offset));
+          localStorage.setItem(TRIM_KEY, String(trim));
         } catch (_) {}
       });
 
@@ -254,13 +280,44 @@
         }
       });
 
+      function sample(t0, t1, t2, t3) {
+        taken.push({ offset: (t1 - t0 + (t2 - t3)) / 2, rtt: t3 - t0 - (t2 - t1) });
+        while (taken.length > SAMPLES) taken.shift();
+        const best = taken.reduce((a, b) => (b.rtt < a.rtt ? b : a));
+        offset = best.offset;
+        rtt = best.rtt;
+      }
+
+      function bind(seed) {
+        if (!ctx) return;
+        const stamp = ctx.getOutputTimestamp ? ctx.getOutputTimestamp() : null;
+        const heard_at = stamp && stamp.contextTime > 0 && stamp.performanceTime > 0;
+        const at = heard_at ? stamp.contextTime : ctx.currentTime - latency();
+        const local = heard_at ? performance.timeOrigin + stamp.performanceTime : now();
+        const seen = local - at * 1000;
+        base = seed || base === null ? seen : base + (seen - base) * EASE;
+      }
+
+      function latency() {
+        return ctx.outputLatency || ctx.baseLatency || 0;
+      }
+
+      function ping(token, sent) {
+        if (token !== probe || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Ping", t0: Math.round(now()) }));
+        setTimeout(() => ping(token, sent + 1), sent + 1 < BURST ? BURST_GAP : PROBE_GAP);
+      }
+
       async function start() {
         if (!format) return;
-        ctx = new AudioContext({ sampleRate: format.rate, latencyHint: "playback" });
+        ctx = new AudioContext({ sampleRate: format.rate, latencyHint: "interactive" });
         gain = ctx.createGain();
         gain.connect(ctx.destination);
         await ctx.resume();
-        playAt = 0;
+        playAt = null;
+        base = null;
+        behind = false;
+        bind(true);
         running = true;
         el("play").textContent = TEXT.stop;
         el("hint").hidden = true;
@@ -268,6 +325,9 @@
 
       function stop() {
         running = false;
+        playAt = null;
+        base = null;
+        behind = false;
         el("play").textContent = TEXT.play;
         el("hint").hidden = false;
         el("hint").textContent = TEXT.tap;
@@ -278,6 +338,8 @@
       }
 
       function connect() {
+        taken.length = 0;
+        playAt = null;
         socket = new WebSocket(`ws://${location.host}${location.pathname}/ws`);
         socket.binaryType = "arraybuffer";
 
@@ -292,11 +354,8 @@
               accepts: ["pcm16"],
             }),
           );
-          setInterval(() => {
-            if (socket && socket.readyState === 1) {
-              socket.send(JSON.stringify({ kind: "Ping", t0: Date.now() }));
-            }
-          }, 2000);
+          probe += 1;
+          ping(probe, 0);
         });
 
         socket.addEventListener("message", (event) => {
@@ -323,7 +382,8 @@
         switch (message.kind) {
           case "Welcome":
             format = message.format;
-            lead = message.lead_ms / 1000;
+            lead = message.lead_ms;
+            origin = message.origin;
             el("room").textContent = message.room;
             el("link").textContent = TEXT.connected;
             el("link").className = "badge live";
@@ -356,10 +416,11 @@
             el("said").textContent = TEXT.denied[message.reason] || String(message.reason);
             break;
           case "Mark":
-            playAt = 0;
+            origin = message.origin;
+            playAt = null;
             break;
           case "Pong":
-            el("ping").textContent = `${Date.now() - message.t0} ms`;
+            sample(message.t0, message.t1, message.t2, now());
             break;
           case "Refused":
             refused = !["Closed", "Full"].includes(message.reason);
@@ -423,11 +484,12 @@
 
       function audio(view) {
         chunks += 1;
-        if (view.byteLength <= 16 || view.getUint32(0, true) !== MAGIC) return;
-        if (!running || !ctx || !format) return;
+        if (view.byteLength <= HEADER || view.getUint32(0, true) !== MAGIC) return;
+        if (!running || !ctx || !format || base === null) return;
 
+        const first = Number(view.getBigUint64(8, true));
         const channels = format.channels;
-        const samples = new Int16Array(view.buffer, 16);
+        const samples = new Int16Array(view.buffer, HEADER);
         const frames = Math.floor(samples.length / channels);
         if (frames === 0) return;
 
@@ -439,20 +501,39 @@
           }
         }
 
-        const shift = offset / 1000;
-        if (playAt < ctx.currentTime + shift) {
-          playAt = ctx.currentTime + lead + shift;
+        const due = origin + (first * 1000) / format.rate + lead;
+        const target = (due - offset + trim - base) / 1000;
+        if (playAt === null) playAt = target;
+
+        const error = (playAt - target) * 1000;
+        let rate = 1;
+        if (Math.abs(error) >= RESET) {
+          playAt = target;
+        } else if (Math.abs(error) > HELD) {
+          rate = 1 + clamp(error * PPM_PER_MS, MAX_PPM) / 1e6;
         }
+
+        const startAt = Math.max(playAt, ctx.currentTime + GUARD);
+        behind = startAt > playAt;
+        playAt = startAt;
+        drift = Math.round((playAt - target) * 1000);
 
         const source = ctx.createBufferSource();
         source.buffer = buffer;
+        source.playbackRate.value = rate;
         source.connect(gain);
         source.start(playAt);
-        playAt += frames / format.rate;
+        playAt += frames / format.rate / rate;
         heard += frames;
       }
 
+      function clamp(value, reach) {
+        return Math.max(-reach, Math.min(reach, value));
+      }
+
       setInterval(() => {
+        bind(false);
+
         if (hostPlaying) {
           const moved = position + (performance.now() - positionAt);
           el("at").textContent = clock(moved);
@@ -460,18 +541,25 @@
             duration > 0 ? `${Math.min(100, (moved / duration) * 100)}%` : "0";
         }
 
-        const ahead = ctx && running ? Math.round((playAt - ctx.currentTime) * 1000) : 0;
+        const scheduled = ctx && running && playAt !== null;
+        const ahead = scheduled ? Math.round((playAt - ctx.currentTime) * 1000) : 0;
         el("buffer").textContent = `${TEXT.buffer} ${ahead} ms`;
-        el("offsetValue").textContent = `${offset} ms`;
+        el("offsetValue").textContent = `${trim} ms`;
+        el("sync").textContent = taken.length ? `${TEXT.sync} ${Math.round(offset)} ms` : "";
+        el("drift").textContent = scheduled ? `${TEXT.drift} ${drift} ms` : "";
+        el("ping").textContent = taken.length ? `${Math.round(rtt)} ms` : "";
         el("stream").textContent = format
           ? `${format.rate} Hz · ${format.channels} ch · ${TEXT.chunks} ${chunks}`
           : "";
 
-        if (running && chunks > 0 && heard === 0) {
+        if (running && behind) {
+          el("hint").hidden = false;
+          el("hint").textContent = TEXT.behind;
+        } else if (running && chunks > 0 && heard === 0) {
           el("hint").hidden = false;
           el("hint").textContent = TEXT.silent;
         }
-      }, 500);
+      }, TICK);
 
       connect();
     </script>

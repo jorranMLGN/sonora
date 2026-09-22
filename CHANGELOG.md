@@ -12,7 +12,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Start a jam and send whatever Sonora is playing to the other devices on your network, whichever
   provider it came from.
 - Listen from any phone, tablet or laptop by opening a page Sonora serves on your network: no
-  account, no app, and a slider to line the sound up by ear.
+  account, no app, and the sound lines itself up with the host on its own, to within a couple of
+  milliseconds. The slider is now only there to dial out the delay of a Bluetooth speaker, and the
+  page shows the measured clock difference and how far off it is running.
 - Listen from a second Sonora, which keeps itself in step with the host on its own.
 - SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by
   pasting the OAuth token your browser shows, then play your likes, playlists and sets, search
@@ -39,6 +41,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A device listening to a jam no longer falls silent after the host switches to another provider.
 - Dragging the seek bar or the volume slider no longer lets the window drag region underneath steal
   the press.
 - A track that turned out to be unplayable stays skipped when the queue is restored at startup.
