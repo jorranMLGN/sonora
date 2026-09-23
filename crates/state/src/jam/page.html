@@ -36,7 +36,27 @@
         color: var(--fg);
         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
       }
-      main { width: 100%; max-width: 440px; }
+      main {
+        width: 100%;
+        max-width: 440px;
+        display: grid;
+        align-content: start;
+        gap: 18px;
+        grid-template-areas: "rail" "words" "flow" "crowd" "meters";
+      }
+      .rail { grid-area: rail; min-width: 0; }
+      .flow { grid-area: flow; min-width: 0; }
+      #words { grid-area: words; }
+      #crowd { grid-area: crowd; }
+      .meters { grid-area: meters; }
+      .rail > :first-child, .flow > :first-child { margin-top: 0; }
+      #words, #crowd, .meters { margin-top: 0; }
+      .meters {
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--dim);
+      }
       .eyebrow {
         color: var(--dim);
         font-size: 12px;
@@ -107,34 +127,66 @@
       .hit .by { font-size: 12px; color: var(--dim); }
       .hit button { width: 38px; margin: 0; padding: 8px 0; border-radius: 9px; flex: none; }
       .hit.on .name { color: var(--live); }
+      .hits.tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+        gap: 18px 12px;
+      }
+      .tiles .hit { display: block; padding: 0; border-top: 0; }
+      .tiles .thumb { width: 100%; height: auto; aspect-ratio: 1; border-radius: 10px; }
+      .tiles .who { margin-top: 8px; }
+      .tiles .hit button {
+        width: 100%;
+        margin-top: 8px;
+        padding: 7px 0;
+        background: var(--fill);
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 500;
+      }
       .heart { background: var(--fill); color: var(--fg); }
       .heart.on { background: var(--live); color: #fff; }
-      .lyrics { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+      .head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .tally { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+      .capped {
+        max-height: 330px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+      }
+      .tiles.capped { max-height: 430px; }
+      summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+        color: var(--dim);
+        cursor: pointer;
+        list-style: none;
+      }
+      summary::-webkit-details-marker { display: none; }
+      summary::after {
+        content: "";
+        width: 7px;
+        height: 7px;
+        margin-right: 2px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        transform: translateY(-2px) rotate(45deg);
+      }
+      details[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+      .lyrics {
+        margin-top: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
       .lyrics div { font-size: 14px; color: var(--dim); }
       .lyrics div.on { color: var(--fg); font-weight: 600; }
-      main { padding-bottom: 76px; }
-      .tabs {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        display: flex;
-        gap: 4px;
-        padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-        background: var(--bg);
-        border-top: 1px solid var(--line);
-      }
-      .tabs .tab {
-        flex: 1;
-        margin: 0;
-        padding: 10px 4px;
-        border-radius: 10px;
-        background: transparent;
-        color: var(--dim);
-        font-size: 13px;
-        font-weight: 600;
-      }
-      .tabs .tab.on { background: var(--fill); color: var(--fg); }
       .said { margin-top: 10px; font-size: 13px; color: var(--dim); }
       .deck { display: flex; gap: 8px; margin-top: 10px; }
       .deck .tap { flex: 1; margin: 0; padding: 11px 8px; font-size: 14px; }
@@ -151,98 +203,148 @@
         font: inherit;
       }
       .fault { margin-top: 10px; font-size: 12px; color: var(--warn); word-break: break-word; }
+
+      @media (min-width: 640px) {
+        body { padding: 28px 24px 56px; }
+        main {
+          max-width: 980px;
+          gap: 24px 32px;
+          grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+          grid-template-rows: auto auto 1fr auto;
+          grid-template-areas:
+            "rail  words"
+            "rail  flow"
+            "crowd flow"
+            "meters meters";
+        }
+        main > * { align-self: start; }
+        .rail { border-right: 1px solid var(--line); padding-right: 32px; }
+        .art { max-width: 300px; margin-top: 16px; }
+      }
+
+      @media (min-width: 1040px) {
+        main { max-width: 1160px; }
+        .rail {
+          position: sticky;
+          top: 28px;
+          max-height: calc(100dvh - 56px);
+          overflow-y: auto;
+          scrollbar-width: thin;
+        }
+        .art { max-width: 240px; }
+      }
+
+      @media (min-width: 1440px) {
+        main {
+          max-width: 1440px;
+          grid-template-columns: minmax(260px, 320px) minmax(0, 1.5fr) minmax(280px, 1fr);
+          grid-template-rows: auto auto 1fr auto;
+          grid-template-areas:
+            "rail  flow  words"
+            "rail  flow  crowd"
+            "rail  flow  ."
+            "meters meters meters";
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+      }
     </style>
   </head>
   <body>
     <main>
-      <section class="leaf" id="leaf-now">
-      <div class="eyebrow" id="room">{{jam-page-title}}</div>
-      <div class="art" id="art"></div>
+      <div class="rail">
+        <div class="eyebrow" id="room">{{jam-page-title}}</div>
+        <div class="art" id="art"></div>
 
-      <h1 id="title">{{jam-page-nothing}}</h1>
-      <div class="artist" id="artist"></div>
-      <div class="album" id="album"></div>
+        <h1 id="title">{{jam-page-nothing}}</h1>
+        <div class="artist" id="artist"></div>
+        <div class="album" id="album"></div>
 
-      <div class="badges">
-        <span class="badge" id="link">{{jam-page-waiting}}</span>
-        <span class="badge" id="provider" hidden></span>
-        <span class="badge" id="state" hidden></span>
+        <div class="badges">
+          <span class="badge" id="link">{{jam-page-waiting}}</span>
+          <span class="badge" id="provider" hidden></span>
+          <span class="badge" id="state" hidden></span>
+        </div>
+
+        <div class="track seek" id="seek"><div id="progress"></div></div>
+        <div class="times"><span id="at">0:00</span><span id="total">0:00</span></div>
+
+        <button id="play" disabled>{{jam-page-play}}</button>
+        <div class="hint" id="hint">{{jam-page-tap}}</div>
+
+        <button type="button" id="heart" class="tap heart" hidden>{{jam-page-favorite}}</button>
+
+        <div class="card" id="deck" hidden>
+          <label>{{jam-page-transport}}</label>
+          <div class="deck">
+            <button type="button" id="prev" class="tap">{{jam-page-prev}}</button>
+            <button type="button" id="toggle" class="tap">{{jam-page-resume}}</button>
+            <button type="button" id="skip" class="tap">{{jam-page-next}}</button>
+          </div>
+          <div class="deck">
+            <button type="button" id="shuffle" class="tap">{{jam-page-shuffle}}</button>
+            <button type="button" id="repeat" class="tap">{{jam-page-repeat}}</button>
+          </div>
+          <label for="loud">{{jam-page-everyone}}</label>
+          <input id="loud" type="range" min="0" max="100" step="1" value="100" />
+        </div>
+
+        <div class="card">
+          <label for="here">{{jam-page-here}}</label>
+          <input id="here" type="range" min="0" max="100" step="1" value="100" />
+        </div>
       </div>
 
-      <div class="track seek" id="seek"><div id="progress"></div></div>
-      <div class="times"><span id="at">0:00</span><span id="total">0:00</span></div>
-
-      <button id="play" disabled>{{jam-page-play}}</button>
-      <div class="hint" id="hint">{{jam-page-tap}}</div>
-
-      <button type="button" id="heart" class="tap heart" hidden>{{jam-page-favorite}}</button>
-
-      <div class="card" id="words" hidden>
-        <label>{{jam-page-lyrics}}</label>
+      <details class="card" id="words" hidden open>
+        <summary>{{jam-page-lyrics}}</summary>
         <div class="lyrics" id="lines"></div>
-      </div>
-      </section>
+      </details>
 
-      <section class="leaf" id="leaf-queue" hidden>
-      <div class="card" id="deck" hidden>
-        <label>{{jam-page-transport}}</label>
-        <div class="deck">
-          <button type="button" id="prev" class="tap">{{jam-page-prev}}</button>
-          <button type="button" id="toggle" class="tap">{{jam-page-resume}}</button>
-          <button type="button" id="skip" class="tap">{{jam-page-next}}</button>
+      <div class="flow">
+        <div class="card">
+          <div class="head">
+            <label>{{jam-page-queue}}</label>
+            <span class="tally" id="queueTally"></span>
+          </div>
+          <div class="hits capped" id="lineup"></div>
+          <div class="said" id="queued">{{jam-page-queue-empty}}</div>
         </div>
-        <div class="deck">
-          <button type="button" id="shuffle" class="tap">{{jam-page-shuffle}}</button>
-          <button type="button" id="repeat" class="tap">{{jam-page-repeat}}</button>
+
+        <div class="card">
+          <label for="query">{{jam-page-search}}</label>
+          <form class="find" id="find">
+            <input id="query" type="search" placeholder="{{jam-page-search-hint}}" autocomplete="off" />
+            <button type="submit">{{jam-page-search-go}}</button>
+          </form>
+          <div class="hits" id="hits"></div>
+          <div class="said" id="said"></div>
         </div>
-        <label for="loud">{{jam-page-everyone}}</label>
-        <input id="loud" type="range" min="0" max="100" step="1" value="100" />
-      </div>
 
-      <div class="card">
-        <label for="here">{{jam-page-here}}</label>
-        <input id="here" type="range" min="0" max="100" step="1" value="100" />
-      </div>
-
-      <div class="card">
-        <label for="query">{{jam-page-search}}</label>
-        <form class="find" id="find">
-          <input id="query" type="search" placeholder="{{jam-page-search-hint}}" autocomplete="off" />
-          <button type="submit">{{jam-page-search-go}}</button>
-        </form>
-        <div class="hits" id="hits"></div>
-        <div class="said" id="said"></div>
-      </div>
-
-      <div class="card">
-        <label>{{jam-page-queue}}</label>
-        <div class="hits" id="lineup"></div>
-        <div class="said" id="queued">{{jam-page-queue-empty}}</div>
-      </div>
-      </section>
-
-      <section class="leaf" id="leaf-library" hidden>
-      <div class="card">
-        <label id="shelfLabel">{{jam-page-library}}</label>
-        <div class="deck" id="packBack" hidden>
-          <button type="button" class="tap" id="back">{{jam-page-back}}</button>
-          <button type="button" class="tap" id="queueAll">{{jam-page-add-all}}</button>
-          <button type="button" class="tap" id="nextAll">{{jam-page-play-next}}</button>
+        <div class="card" id="shelf" hidden>
+          <div class="head">
+            <label id="shelfLabel">{{jam-page-library}}</label>
+            <span class="tally" id="shelfTally"></span>
+          </div>
+          <div class="deck" id="packBack" hidden>
+            <button type="button" class="tap" id="back">{{jam-page-back}}</button>
+            <button type="button" class="tap" id="queueAll">{{jam-page-add-all}}</button>
+            <button type="button" class="tap" id="nextAll">{{jam-page-play-next}}</button>
+          </div>
+          <div class="hits" id="packs"></div>
+          <div class="said" id="shelfSaid">{{jam-page-library-empty}}</div>
         </div>
-        <div class="hits" id="packs"></div>
-        <div class="said" id="shelfSaid">{{jam-page-library-empty}}</div>
       </div>
-      </section>
 
-      <section class="leaf" id="leaf-room" hidden>
-      <div class="card">
+      <div class="card" id="crowd">
         <label for="me">{{jam-page-you}}</label>
         <input id="me" type="text" placeholder="{{jam-page-you-hint}}" autocomplete="off" />
         <div class="row"><span>{{jam-page-room}}</span></div>
         <div class="hits" id="seats"></div>
       </div>
 
-      <div class="card">
+      <div class="meters">
         <label for="offset">{{jam-page-offset}}</label>
         <input id="offset" type="range" min="-500" max="500" step="5" value="0" />
         <div class="row"><span id="offsetValue">0 ms</span><span id="buffer">{{jam-page-buffer}}</span></div>
@@ -250,14 +352,6 @@
         <div class="row"><span id="stream"></span><span id="ping"></span></div>
         <div class="fault" id="fault" hidden></div>
       </div>
-      </section>
-
-      <nav class="tabs">
-        <button type="button" class="tab on" data-leaf="now">{{jam-page-tab-now}}</button>
-        <button type="button" class="tab" data-leaf="queue">{{jam-page-tab-queue}}</button>
-        <button type="button" class="tab" data-leaf="library" id="tabLibrary" hidden>{{jam-page-tab-library}}</button>
-        <button type="button" class="tab" data-leaf="room">{{jam-page-tab-room}}</button>
-      </nav>
     </main>
 
     <script>
@@ -368,6 +462,7 @@
       let drift = 0;
       let behind = false;
       let probe = 0;
+      let sungAt = -1;
       let refused = false;
 
       let can = { add: false, control: false, browse: false, favorite: false };
@@ -438,19 +533,6 @@
           localStorage.setItem(NAME_KEY, me);
         } catch (_) {}
       });
-
-      function show_leaf(name) {
-        for (const tab of document.querySelectorAll(".tab")) {
-          tab.className = tab.dataset.leaf === name ? "tab on" : "tab";
-        }
-        for (const leaf of document.querySelectorAll(".leaf")) {
-          leaf.hidden = leaf.id !== `leaf-${name}`;
-        }
-      }
-
-      for (const tab of document.querySelectorAll(".tab")) {
-        tab.addEventListener("click", () => show_leaf(tab.dataset.leaf));
-      }
 
       el("heart").addEventListener("click", () => {
         if (!can.favorite || !track || !socket || socket.readyState !== 1) return;
@@ -656,12 +738,11 @@
             can = message.can || can;
             el("deck").hidden = !can.control;
             el("heart").hidden = !can.favorite || !track;
-            el("tabLibrary").hidden = !can.browse;
+            el("shelf").hidden = !can.browse;
             if (!can.browse) {
               shelf = [];
               opened = null;
               packs();
-              if (!el("leaf-library").hidden) show_leaf("now");
             }
             if (order) lineup(order);
             break;
@@ -762,6 +843,7 @@
 
       function hits(found) {
         const list = el("hits");
+        list.className = "hits tiles capped";
         list.textContent = "";
         el("said").textContent = found.length ? "" : TEXT.nothing_found;
 
@@ -815,6 +897,7 @@
 
         const ahead = at < 0 ? rows.length : rows.length - at - 1;
         const truncated = message.total > rows.length;
+        el("queueTally").textContent = ahead || "";
         el("queued").textContent = !ahead
           ? TEXT.queue_empty
           : truncated
@@ -824,9 +907,12 @@
 
       function packs() {
         const list = el("packs");
+        list.className = opened ? "hits capped" : "hits tiles capped";
         list.textContent = "";
         el("packBack").hidden = !opened;
         el("shelfLabel").textContent = opened ? opened.name : TEXT.library;
+
+        el("shelfTally").textContent = (opened ? opened.rows.length : shelf.length) || "";
 
         if (opened) {
           for (const found_track of opened.rows) list.append(line(found_track, ""));
@@ -854,6 +940,7 @@
 
       function lyrics() {
         const list = el("lines");
+        sungAt = -1;
         list.textContent = "";
         el("words").hidden = !words.lines.length;
 
@@ -874,6 +961,13 @@
         [...el("lines").children].forEach((row, index) => {
           row.className = index === current ? "on" : "";
         });
+
+        if (current === sungAt) return;
+        sungAt = current;
+        const box = el("lines");
+        const row = box.children[current];
+        if (!row || !el("words").open) return;
+        box.scrollTop = row.offsetTop - box.clientHeight / 2 + row.clientHeight / 2;
       }
 
       function seats(message) {

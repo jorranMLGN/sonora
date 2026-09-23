@@ -29,8 +29,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to.
 - Read along on the jam page: lyrics for the current track, following the music when they are
   synced.
-- The jam page is laid out in tabs — what is playing, the queue, the host's playlists and the room —
-  so it stays usable on a phone.
+- The jam page is one scrolling page that fills the width it is given: a single column on a phone,
+  two beside each other on a tablet, and three on a desktop with what is playing pinned in place
+  while you scroll the queue. Playlists and search results are shown as covers rather than rows,
+  the queue and the playlists keep to a fixed height and scroll within it, and the lyrics fold
+  away when you would rather see the rest.
 - Set the volume of the jam page on the device it is open on, without changing what anyone else
   hears.
 - SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by
