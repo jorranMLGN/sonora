@@ -44,7 +44,7 @@ pub enum Cap {
 }
 
 impl Cap {
-    pub const ALL: [Cap; 2] = [Cap::Add, Cap::Control];
+    pub const ALL: [Cap; 4] = [Cap::Add, Cap::Control, Cap::Browse, Cap::Favorite];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -138,6 +138,22 @@ pub struct Who {
     pub native: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pack {
+    pub id: String,
+    pub name: String,
+    pub owner: String,
+    pub cover: Option<String>,
+    pub tracks: u32,
+    pub provider: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Line {
+    pub at: u64,
+    pub text: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Farewell {
     HostLeft,
@@ -168,6 +184,17 @@ pub enum FromReceiver {
     Command {
         act: Act,
     },
+    Open {
+        pack: String,
+    },
+    Enqueue {
+        pack: String,
+        next: bool,
+    },
+    Favorite {
+        id: String,
+        on: bool,
+    },
     Bye,
 }
 
@@ -193,6 +220,7 @@ pub enum FromHost {
         repeat: Repeat,
         can_next: bool,
         can_previous: bool,
+        favorite: bool,
     },
     Room {
         listeners: Vec<Who>,
@@ -203,6 +231,18 @@ pub enum FromHost {
         total: u32,
         at: i32,
         rows: Vec<Hit>,
+    },
+    Packs {
+        packs: Vec<Pack>,
+    },
+    Opened {
+        pack: String,
+        total: u32,
+        rows: Vec<Hit>,
+    },
+    Words {
+        synced: bool,
+        lines: Vec<Line>,
     },
     Mark {
         mark: MarkKind,

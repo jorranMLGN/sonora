@@ -23,6 +23,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - See the host's queue on the jam page, with what is playing marked and what was just played above
   it. A listener the host has given control can tap a track to jump to it or drop one that is
   coming up.
+- Browse the host's playlists from the jam page, open one to see its tracks, and add it to the queue
+  or play it next. The host grants this per device, like the other permissions.
+- Save what is playing to the host's favorites from the jam page, when the host allows that device
+  to.
+- Read along on the jam page: lyrics for the current track, following the music when they are
+  synced.
+- The jam page is laid out in tabs — what is playing, the queue, the host's playlists and the room —
+  so it stays usable on a phone.
 - Set the volume of the jam page on the device it is open on, without changing what anyone else
   hears.
 - SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by

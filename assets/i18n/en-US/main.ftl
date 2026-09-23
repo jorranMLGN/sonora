@@ -749,6 +749,20 @@ jam-page-played = Played
 jam-page-drop = Remove
 jam-page-more = More tracks follow than fit here
 jam-page-alone = Nobody else is listening
+jam-page-tab-now = Now
+jam-page-tab-queue = Queue
+jam-page-tab-library = Library
+jam-page-tab-room = Room
+jam-page-library = The host's playlists
+jam-page-library-empty = No playlists to show
+jam-page-back = Back
+jam-page-play-next = Play next
+jam-page-add-all = Add to the queue
+jam-page-opening = Opening
+jam-page-lyrics = Lyrics
+jam-page-lyrics-none = No lyrics for this track
+jam-page-favorite = Save to favorites
+jam-page-favorited = Saved to favorites
 
 # jam settings
 settings-group-jam = Jam

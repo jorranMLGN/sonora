@@ -67,6 +67,12 @@ pub struct Transport {
     pub position_ms: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sheet {
+    pub rows: Vec<Hit>,
+    pub total: u32,
+}
+
 #[derive(Debug)]
 pub enum ServerEvent {
     Joined(Listener),
@@ -88,6 +94,23 @@ pub enum ServerEvent {
         act: Act,
         device: String,
         reply: oneshot::Sender<bool>,
+    },
+    Open {
+        pack: String,
+        device: String,
+        reply: oneshot::Sender<Option<Arc<Sheet>>>,
+    },
+    Pick {
+        pack: String,
+        next: bool,
+        device: String,
+        reply: oneshot::Sender<Result<String, Denial>>,
+    },
+    Love {
+        id: String,
+        on: bool,
+        device: String,
+        reply: oneshot::Sender<Result<String, Denial>>,
     },
 }
 
@@ -500,6 +523,32 @@ async fn session(
                                 }
                             }
                         }
+                        Ok(FromReceiver::Open { pack }) => match bucket.spend() {
+                            false => {
+                                let denied = FromHost::Denied { reason: Denial::Busy };
+                                outbox.send(denied).ok();
+                            }
+                            true => ask(&shared, &outbox, Asked::Open(pack, device.clone())),
+                        },
+                        Ok(FromReceiver::Enqueue { pack, next }) => {
+                            added += 1;
+                            match added > ADDS {
+                                true => {
+                                    let denied = FromHost::Denied { reason: Denial::Busy };
+                                    outbox.send(denied).ok();
+                                }
+                                false => {
+                                    ask(&shared, &outbox, Asked::Pick(pack, next, device.clone()))
+                                }
+                            }
+                        }
+                        Ok(FromReceiver::Favorite { id, on }) => match bucket.spend() {
+                            false => {
+                                let denied = FromHost::Denied { reason: Denial::Busy };
+                                outbox.send(denied).ok();
+                            }
+                            true => ask(&shared, &outbox, Asked::Love(id, on, device.clone())),
+                        },
                         Ok(FromReceiver::Command { act }) => match bucket.spend() {
                             false => {
                                 let denied = FromHost::Denied { reason: Denial::Busy };
@@ -592,6 +641,9 @@ enum Asked {
     Find(String),
     Add(String, String),
     Do(Act, String),
+    Open(String, String),
+    Pick(String, bool, String),
+    Love(String, bool, String),
 }
 
 fn ask(shared: &Arc<Shared>, outbox: &UnboundedSender<FromHost>, asked: Asked) {
@@ -630,6 +682,57 @@ fn ask(shared: &Arc<Shared>, outbox: &UnboundedSender<FromHost>, asked: Asked) {
                 };
                 outbox.send(told).ok();
             }
+            Asked::Open(pack, device) => {
+                let (reply, answer) = oneshot::channel();
+                let sent = ServerEvent::Open {
+                    pack: pack.clone(),
+                    device,
+                    reply,
+                };
+                if events.send(sent).is_err() {
+                    return;
+                }
+                let told = match tokio::time::timeout(ASK_WAIT, answer).await {
+                    Ok(Ok(Some(held))) => FromHost::Opened {
+                        pack,
+                        total: held.total,
+                        rows: held.rows.clone(),
+                    },
+                    Ok(Ok(None)) => FromHost::Denied {
+                        reason: Denial::Forbidden,
+                    },
+                    _ => FromHost::Denied {
+                        reason: Denial::Busy,
+                    },
+                };
+                outbox.send(told).ok();
+            }
+            Asked::Pick(pack, next, device) => {
+                let (reply, answer) = oneshot::channel();
+                let sent = ServerEvent::Pick {
+                    pack,
+                    next,
+                    device,
+                    reply,
+                };
+                if events.send(sent).is_err() {
+                    return;
+                }
+                outbox.send(answered(answer.await)).ok();
+            }
+            Asked::Love(id, on, device) => {
+                let (reply, answer) = oneshot::channel();
+                let sent = ServerEvent::Love {
+                    id,
+                    on,
+                    device,
+                    reply,
+                };
+                if events.send(sent).is_err() {
+                    return;
+                }
+                outbox.send(answered(answer.await)).ok();
+            }
             Asked::Do(act, device) => {
                 let (reply, answer) = oneshot::channel();
                 let sent = ServerEvent::Do { act, device, reply };
@@ -646,6 +749,16 @@ fn ask(shared: &Arc<Shared>, outbox: &UnboundedSender<FromHost>, asked: Asked) {
             }
         }
     });
+}
+
+fn answered(answer: Result<Result<String, Denial>, oneshot::error::RecvError>) -> FromHost {
+    match answer {
+        Ok(Ok(title)) => FromHost::Added { title },
+        Ok(Err(reason)) => FromHost::Denied { reason },
+        Err(_) => FromHost::Denied {
+            reason: Denial::Busy,
+        },
+    }
 }
 
 async fn greeted(

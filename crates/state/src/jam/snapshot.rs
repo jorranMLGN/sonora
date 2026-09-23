@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use super::wire::{Caps, FromHost, Hit, Repeat, Who};
+use super::wire::{Caps, FromHost, Hit, Line, Pack, Repeat, Who};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Controls {
@@ -9,6 +10,7 @@ pub struct Controls {
     pub repeat: Repeat,
     pub can_next: bool,
     pub can_previous: bool,
+    pub favorite: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -27,9 +29,17 @@ pub struct Lineup {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Words {
+    pub synced: bool,
+    pub lines: Vec<Line>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub controls: Controls,
     pub lineup: Lineup,
+    pub packs: Arc<Vec<Pack>>,
+    pub words: Arc<Words>,
     pub room: Vec<Seat>,
     pub grants: HashMap<String, Caps>,
 }
@@ -55,6 +65,7 @@ pub fn between(was: Option<&Snapshot>, now: &Snapshot, device: &str) -> Vec<From
             repeat: now.controls.repeat,
             can_next: now.controls.can_next,
             can_previous: now.controls.can_previous,
+            favorite: now.controls.favorite,
         });
     }
 
@@ -67,6 +78,20 @@ pub fn between(was: Option<&Snapshot>, now: &Snapshot, device: &str) -> Vec<From
         });
     }
 
+    let packs = shown(now, can);
+    if was.map_or(&[][..], |was| shown(was, was.can(device))) != packs {
+        told.push(FromHost::Packs {
+            packs: packs.to_vec(),
+        });
+    }
+
+    if was.map(|was| &was.words) != Some(&now.words) {
+        told.push(FromHost::Words {
+            synced: now.words.synced,
+            lines: now.words.lines.clone(),
+        });
+    }
+
     if was.map(|was| &was.room) != Some(&now.room) {
         told.push(FromHost::Room {
             listeners: now.room.iter().map(seen).collect(),
@@ -75,6 +100,13 @@ pub fn between(was: Option<&Snapshot>, now: &Snapshot, device: &str) -> Vec<From
     }
 
     told
+}
+
+fn shown(snapshot: &Snapshot, can: Caps) -> &[Pack] {
+    match can.browse {
+        true => snapshot.packs.as_slice(),
+        false => &[],
+    }
 }
 
 fn seen(seat: &Seat) -> Who {

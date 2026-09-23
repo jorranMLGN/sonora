@@ -17,18 +17,25 @@ use music::cast::{CastSink, Feed};
 use tokio::sync::{mpsc, oneshot, watch};
 
 type Reply<T> = oneshot::Sender<T>;
+type Waiting = Vec<Reply<Option<Arc<Sheet>>>>;
 
-use crate::{AppSettings, Cover, Io, Playback, PlaybackState, Queue, Session, join};
+use crate::{
+    AppSettings, Cover, Io, Library, LibraryState, Lyrics, Playback, PlaybackState, Queue, Session,
+    join,
+};
 use cast::Broadcast;
 use receiver::ReceiverEvent;
-use server::{Playing, ServerEvent, Serving, Transport};
-use snapshot::{Controls, Lineup, Seat, Snapshot};
-use wire::{Act, Denial, Hit, Refusal};
+use server::{Playing, ServerEvent, Serving, Sheet, Transport};
+use snapshot::{Controls, Lineup, Seat, Snapshot, Words};
+use wire::{Act, Denial, Hit, Line, Pack, Refusal};
 
 pub use wire::{Cap, Caps};
 
 const BEHIND: usize = 3;
 const AHEAD: usize = 50;
+const PACKS: usize = 100;
+const OPENED: usize = 100;
+const LINES: usize = 400;
 
 const ROOM: &str = "Sonora";
 const AUTOSTART: &str = "SONORA_JAM_AUTOSTART";
@@ -40,6 +47,16 @@ const BACKOFF: [Duration; 3] = [
 const PROBE: [&str; 2] = ["8.8.8.8:80", "192.168.1.1:9"];
 const PER_PROVIDER: usize = 6;
 const ASKS: usize = 8;
+
+pub struct Parts {
+    pub playback: Entity<Playback>,
+    pub cover: Entity<Cover>,
+    pub session: Entity<Session>,
+    pub queue: Entity<Queue>,
+    pub library: Entity<Library>,
+    pub lyrics: Entity<Lyrics>,
+    pub settings: Entity<AppSettings>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Listener {
@@ -90,8 +107,12 @@ pub struct Jam {
     cover: Entity<Cover>,
     session: Entity<Session>,
     queue: Entity<Queue>,
+    library: Entity<Library>,
+    lyrics: Entity<Lyrics>,
     settings: Entity<AppSettings>,
     io: Io,
+    opened: HashMap<String, Arc<Sheet>>,
+    opening: HashMap<String, Waiting>,
     now: watch::Sender<Option<Playing>>,
     transport: watch::Sender<Transport>,
     snapshot: watch::Sender<Arc<Snapshot>>,
@@ -105,15 +126,16 @@ pub struct Jam {
 impl EventEmitter<JamEvent> for Jam {}
 
 impl Jam {
-    pub fn new(
-        playback: Entity<Playback>,
-        cover: Entity<Cover>,
-        session: Entity<Session>,
-        queue: Entity<Queue>,
-        settings: Entity<AppSettings>,
-        io: Io,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(parts: Parts, io: Io, cx: &mut Context<Self>) -> Self {
+        let Parts {
+            playback,
+            cover,
+            session,
+            queue,
+            library,
+            lyrics,
+            settings,
+        } = parts;
         let (feeds, incoming) = mpsc::unbounded_channel();
         let sink: CastSink = Arc::new(move |feed: Feed| {
             feeds.send(feed).ok();
@@ -142,6 +164,12 @@ impl Jam {
         cx.observe(&queue, |this: &mut Self, _, cx| this.publish(cx))
             .detach();
 
+        cx.observe(&library, |this: &mut Self, _, cx| this.publish(cx))
+            .detach();
+
+        cx.observe(&lyrics, |this: &mut Self, _, cx| this.publish(cx))
+            .detach();
+
         cx.observe(&cover, |this: &mut Self, cover, cx| {
             let large = cover.read(cx).max().map(str::to_owned);
             let track = this.playback.read(cx).track().cloned();
@@ -157,8 +185,12 @@ impl Jam {
             cover,
             session,
             queue,
+            library,
+            lyrics,
             settings,
             io,
+            opened: HashMap::new(),
+            opening: HashMap::new(),
             now: watch::channel(None).0,
             transport: watch::channel(Transport::default()).0,
             snapshot: watch::channel(Arc::new(Snapshot::default())).0,
@@ -388,6 +420,23 @@ impl Jam {
             ServerEvent::Find { query, reply } => return self.find(query, reply, cx),
             ServerEvent::Add { id, device, reply } => return self.add(id, device, reply, cx),
             ServerEvent::Do { act, device, reply } => return self.act(act, device, reply, cx),
+            ServerEvent::Open {
+                pack,
+                device,
+                reply,
+            } => return self.open(pack, device, reply, cx),
+            ServerEvent::Pick {
+                pack,
+                next,
+                device,
+                reply,
+            } => return self.pick(pack, next, device, reply, cx),
+            ServerEvent::Love {
+                id,
+                on,
+                device,
+                reply,
+            } => return self.love(id, on, device, reply, cx),
             event => event,
         };
 
@@ -400,7 +449,12 @@ impl Jam {
         };
 
         match event {
-            ServerEvent::Find { .. } | ServerEvent::Add { .. } | ServerEvent::Do { .. } => {}
+            ServerEvent::Find { .. }
+            | ServerEvent::Add { .. }
+            | ServerEvent::Do { .. }
+            | ServerEvent::Open { .. }
+            | ServerEvent::Pick { .. }
+            | ServerEvent::Love { .. } => {}
             ServerEvent::Joined(listener) => {
                 listeners.retain(|held| held.at != listener.at && held.device != listener.device);
                 seeded = Some(listener.device.clone());
@@ -506,6 +560,11 @@ impl Jam {
         };
         rows.extend(queue.upcoming().take(AHEAD).map(row));
 
+        let favorite = playback
+            .track()
+            .and_then(|track| track.id.as_deref())
+            .is_some_and(|id| self.library.read(cx).saved(id));
+
         let fresh = Snapshot {
             controls: Controls {
                 volume: (playback.volume().clamp(0., 1.) * 100.).round() as u8,
@@ -513,6 +572,7 @@ impl Jam {
                 repeat: spin(playback.repeat()),
                 can_next: queue.has_next(),
                 can_previous: playback.has_previous(cx),
+                favorite,
             },
             lineup: Lineup {
                 revision: queue.revision(),
@@ -520,6 +580,8 @@ impl Jam {
                 at,
                 rows,
             },
+            packs: Arc::new(self.shelves(cx)),
+            words: Arc::new(self.words(cx)),
             room,
             grants: self.grants.clone(),
         };
@@ -613,6 +675,178 @@ impl Jam {
             JamRole::Hosting { lead, .. } => *lead,
             _ => 0,
         }
+    }
+
+    fn shelves(&self, cx: &Context<Self>) -> Vec<Pack> {
+        let library = self.library.read(cx);
+        let mut packs = Vec::new();
+        for slug in self.session.read(cx).active_slugs() {
+            let Some(shelf) = library.shelf(slug) else {
+                continue;
+            };
+            let LibraryState::Ready { playlists, .. } = &shelf.state else {
+                continue;
+            };
+            packs.extend(playlists.iter().map(|playlist| Pack {
+                id: playlist.id.clone(),
+                name: playlist.name.clone(),
+                owner: playlist.owner.clone(),
+                cover: playlist.cover.clone(),
+                tracks: playlist.track_count,
+                provider: slug.to_owned(),
+            }));
+            if packs.len() >= PACKS {
+                break;
+            }
+        }
+        packs.truncate(PACKS);
+        packs
+    }
+
+    fn words(&self, cx: &Context<Self>) -> Words {
+        let lyrics = self.lyrics.read(cx);
+        let Some(hit) = lyrics.current() else {
+            return Words::default();
+        };
+
+        match &hit.lyrics {
+            music::Lyrics::Plain { text, .. } => Words {
+                synced: false,
+                lines: text
+                    .lines()
+                    .take(LINES)
+                    .map(|text| Line {
+                        at: 0,
+                        text: text.to_owned(),
+                    })
+                    .collect(),
+            },
+            music::Lyrics::Synced { lines } => Words {
+                synced: true,
+                lines: lines
+                    .iter()
+                    .take(LINES)
+                    .map(|line| Line {
+                        at: line.start.as_millis() as u64,
+                        text: line.text.clone(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn open(
+        &mut self,
+        pack: String,
+        device: String,
+        reply: Reply<Option<Arc<Sheet>>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can(&device, Cap::Browse) {
+            reply.send(None).ok();
+            return;
+        }
+        if let Some(held) = self.opened.get(&pack) {
+            reply.send(Some(held.clone())).ok();
+            return;
+        }
+        if let Some(waiting) = self.opening.get_mut(&pack) {
+            waiting.push(reply);
+            return;
+        }
+
+        let session = self.session.read(cx);
+        let client = session
+            .slug_for(&pack)
+            .and_then(|slug| session.client_for_slug(slug));
+        let Some(client) = client else {
+            reply.send(None).ok();
+            return;
+        };
+
+        self.opening.insert(pack.clone(), vec![reply]);
+        let io = self.io.clone();
+        self.remember(cx.spawn(async move |this, cx| {
+            let asked = pack.clone();
+            let found = join(io.spawn(async move { client.playlist_tracks(&asked).await })).await;
+            this.update(cx, |this, _| {
+                let held = found.ok().map(|tracks| {
+                    Arc::new(Sheet {
+                        total: tracks.len() as u32,
+                        rows: tracks.iter().take(OPENED).map(row).collect(),
+                    })
+                });
+                if let Some(held) = &held {
+                    this.opened.insert(pack.clone(), held.clone());
+                }
+                for waiting in this.opening.remove(&pack).unwrap_or_default() {
+                    waiting.send(held.clone()).ok();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    fn pick(
+        &mut self,
+        pack: String,
+        next: bool,
+        device: String,
+        reply: Reply<Result<String, Denial>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can(&device, Cap::Browse) || !self.can(&device, Cap::Add) {
+            reply.send(Err(Denial::Forbidden)).ok();
+            return;
+        }
+        let Some(name) = self
+            .library
+            .read(cx)
+            .playlist(&pack)
+            .map(|playlist| playlist.name.clone())
+        else {
+            reply.send(Err(Denial::Unknown)).ok();
+            return;
+        };
+
+        self.playback.update(cx, |this, cx| match next {
+            true => this.play_playlist_next(&pack, cx),
+            false => this.enqueue_playlist(&pack, cx),
+        });
+        reply.send(Ok(name)).ok();
+    }
+
+    fn love(
+        &mut self,
+        id: String,
+        on: bool,
+        device: String,
+        reply: Reply<Result<String, Denial>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can(&device, Cap::Favorite) {
+            reply.send(Err(Denial::Forbidden)).ok();
+            return;
+        }
+
+        let track = self
+            .playback
+            .read(cx)
+            .track()
+            .filter(|track| track.id.as_deref() == Some(id.as_str()))
+            .cloned();
+        let Some(track) = track else {
+            reply.send(Err(Denial::Unknown)).ok();
+            return;
+        };
+
+        let title = track.name.clone();
+        let saved = self.library.read(cx).saved(&id);
+        if saved != on {
+            self.library
+                .update(cx, |library, cx| library.toggle(track, cx));
+        }
+        reply.send(Ok(title)).ok();
     }
 
     pub fn grants(&self, device: &str) -> Caps {

@@ -107,6 +107,34 @@
       .hit .by { font-size: 12px; color: var(--dim); }
       .hit button { width: 38px; margin: 0; padding: 8px 0; border-radius: 9px; flex: none; }
       .hit.on .name { color: var(--live); }
+      .heart { background: var(--fill); color: var(--fg); }
+      .heart.on { background: var(--live); color: #fff; }
+      .lyrics { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+      .lyrics div { font-size: 14px; color: var(--dim); }
+      .lyrics div.on { color: var(--fg); font-weight: 600; }
+      main { padding-bottom: 76px; }
+      .tabs {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        gap: 4px;
+        padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+        background: var(--bg);
+        border-top: 1px solid var(--line);
+      }
+      .tabs .tab {
+        flex: 1;
+        margin: 0;
+        padding: 10px 4px;
+        border-radius: 10px;
+        background: transparent;
+        color: var(--dim);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .tabs .tab.on { background: var(--fill); color: var(--fg); }
       .said { margin-top: 10px; font-size: 13px; color: var(--dim); }
       .deck { display: flex; gap: 8px; margin-top: 10px; }
       .deck .tap { flex: 1; margin: 0; padding: 11px 8px; font-size: 14px; }
@@ -127,6 +155,7 @@
   </head>
   <body>
     <main>
+      <section class="leaf" id="leaf-now">
       <div class="eyebrow" id="room">{{jam-page-title}}</div>
       <div class="art" id="art"></div>
 
@@ -146,6 +175,15 @@
       <button id="play" disabled>{{jam-page-play}}</button>
       <div class="hint" id="hint">{{jam-page-tap}}</div>
 
+      <button type="button" id="heart" class="tap heart" hidden>{{jam-page-favorite}}</button>
+
+      <div class="card" id="words" hidden>
+        <label>{{jam-page-lyrics}}</label>
+        <div class="lyrics" id="lines"></div>
+      </div>
+      </section>
+
+      <section class="leaf" id="leaf-queue" hidden>
       <div class="card" id="deck" hidden>
         <label>{{jam-page-transport}}</label>
         <div class="deck">
@@ -181,7 +219,22 @@
         <div class="hits" id="lineup"></div>
         <div class="said" id="queued">{{jam-page-queue-empty}}</div>
       </div>
+      </section>
 
+      <section class="leaf" id="leaf-library" hidden>
+      <div class="card">
+        <label id="shelfLabel">{{jam-page-library}}</label>
+        <div class="deck" id="packBack" hidden>
+          <button type="button" class="tap" id="back">{{jam-page-back}}</button>
+          <button type="button" class="tap" id="queueAll">{{jam-page-add-all}}</button>
+          <button type="button" class="tap" id="nextAll">{{jam-page-play-next}}</button>
+        </div>
+        <div class="hits" id="packs"></div>
+        <div class="said" id="shelfSaid">{{jam-page-library-empty}}</div>
+      </div>
+      </section>
+
+      <section class="leaf" id="leaf-room" hidden>
       <div class="card">
         <label for="me">{{jam-page-you}}</label>
         <input id="me" type="text" placeholder="{{jam-page-you-hint}}" autocomplete="off" />
@@ -197,6 +250,14 @@
         <div class="row"><span id="stream"></span><span id="ping"></span></div>
         <div class="fault" id="fault" hidden></div>
       </div>
+      </section>
+
+      <nav class="tabs">
+        <button type="button" class="tab on" data-leaf="now">{{jam-page-tab-now}}</button>
+        <button type="button" class="tab" data-leaf="queue">{{jam-page-tab-queue}}</button>
+        <button type="button" class="tab" data-leaf="library" id="tabLibrary" hidden>{{jam-page-tab-library}}</button>
+        <button type="button" class="tab" data-leaf="room">{{jam-page-tab-room}}</button>
+      </nav>
     </main>
 
     <script>
@@ -228,6 +289,12 @@
         drop: "{{jam-page-drop}}",
         more: "{{jam-page-more}}",
         alone: "{{jam-page-alone}}",
+        library: "{{jam-page-library}}",
+        library_empty: "{{jam-page-library-empty}}",
+        opening: "{{jam-page-opening}}",
+        lyrics_none: "{{jam-page-lyrics-none}}",
+        favorite: "{{jam-page-favorite}}",
+        favorited: "{{jam-page-favorited}}",
         denied: {
           Closed: "{{jam-page-denied-closed}}",
           Unknown: "{{jam-page-denied-unknown}}",
@@ -312,6 +379,11 @@
       let dragging = 0;
       let order = null;
       let crowd = null;
+      let shelf = [];
+      let opened = null;
+      let words = { synced: false, lines: [] };
+      let favorite = false;
+      let track = "";
 
       try {
         trim = Number(localStorage.getItem(TRIM_KEY)) || 0;
@@ -366,6 +438,37 @@
           localStorage.setItem(NAME_KEY, me);
         } catch (_) {}
       });
+
+      function show_leaf(name) {
+        for (const tab of document.querySelectorAll(".tab")) {
+          tab.className = tab.dataset.leaf === name ? "tab on" : "tab";
+        }
+        for (const leaf of document.querySelectorAll(".leaf")) {
+          leaf.hidden = leaf.id !== `leaf-${name}`;
+        }
+      }
+
+      for (const tab of document.querySelectorAll(".tab")) {
+        tab.addEventListener("click", () => show_leaf(tab.dataset.leaf));
+      }
+
+      el("heart").addEventListener("click", () => {
+        if (!can.favorite || !track || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Favorite", id: track, on: !favorite }));
+      });
+
+      el("back").addEventListener("click", () => {
+        opened = null;
+        packs();
+      });
+
+      el("queueAll").addEventListener("click", () => enqueue(false));
+      el("nextAll").addEventListener("click", () => enqueue(true));
+
+      function enqueue(next) {
+        if (!opened || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Enqueue", pack: opened.pack, next }));
+      }
 
       function command(act) {
         if (!can.control || !socket || socket.readyState !== 1) return;
@@ -552,6 +655,14 @@
           case "Grant":
             can = message.can || can;
             el("deck").hidden = !can.control;
+            el("heart").hidden = !can.favorite || !track;
+            el("tabLibrary").hidden = !can.browse;
+            if (!can.browse) {
+              shelf = [];
+              opened = null;
+              packs();
+              if (!el("leaf-library").hidden) show_leaf("now");
+            }
             if (order) lineup(order);
             break;
           case "Controls":
@@ -564,6 +675,9 @@
             el("skip").disabled = !message.can_next;
             el("shuffle").className = shuffling ? "tap on" : "tap";
             el("repeat").className = repeating === "Off" ? "tap" : "tap on";
+            favorite = message.favorite;
+            el("heart").className = favorite ? "tap heart on" : "tap heart";
+            el("heart").textContent = favorite ? TEXT.favorited : TEXT.favorite;
             break;
           case "Room":
             crowd = message;
@@ -572,6 +686,21 @@
           case "Lineup":
             order = message;
             lineup(order);
+            break;
+          case "Packs":
+            shelf = message.packs || [];
+            packs();
+            break;
+          case "Opened":
+            if (opened && opened.pack === message.pack) {
+              opened.rows = message.rows || [];
+              opened.total = message.total || 0;
+              packs();
+            }
+            break;
+          case "Words":
+            words = { synced: message.synced, lines: message.lines || [] };
+            lyrics();
             break;
           case "Found":
             hits(message.hits || []);
@@ -657,6 +786,8 @@
         const rows = message.rows || [];
         const at = message.at;
         list.textContent = "";
+        track = at >= 0 && rows[at] ? rows[at].id : "";
+        el("heart").hidden = !can.favorite || !track;
 
         rows.forEach((track, index) => {
           const offset = at < 0 ? index + 1 : index - at;
@@ -689,6 +820,60 @@
           : truncated
             ? TEXT.more
             : "";
+      }
+
+      function packs() {
+        const list = el("packs");
+        list.textContent = "";
+        el("packBack").hidden = !opened;
+        el("shelfLabel").textContent = opened ? opened.name : TEXT.library;
+
+        if (opened) {
+          for (const found_track of opened.rows) list.append(line(found_track, ""));
+          el("shelfSaid").textContent =
+            opened.total > opened.rows.length ? TEXT.more : "";
+          return;
+        }
+
+        for (const pack of shelf) {
+          const row = line(
+            { title: pack.name, artist: pack.owner, cover: pack.cover, provider: pack.provider },
+            "",
+          );
+          row.classList.add("seek");
+          row.addEventListener("click", () => {
+            if (!socket || socket.readyState !== 1) return;
+            opened = { pack: pack.id, name: pack.name, rows: [], total: 0 };
+            el("shelfSaid").textContent = TEXT.opening;
+            socket.send(JSON.stringify({ kind: "Open", pack: pack.id }));
+          });
+          list.append(row);
+        }
+        el("shelfSaid").textContent = shelf.length ? "" : TEXT.library_empty;
+      }
+
+      function lyrics() {
+        const list = el("lines");
+        list.textContent = "";
+        el("words").hidden = !words.lines.length;
+
+        for (const line of words.lines) {
+          const row = document.createElement("div");
+          row.textContent = line.text;
+          list.append(row);
+        }
+      }
+
+      function sung() {
+        if (!words.synced || !hostPlaying) return;
+        const moved = position + (performance.now() - positionAt);
+        let current = -1;
+        words.lines.forEach((line, index) => {
+          if (line.at <= moved) current = index;
+        });
+        [...el("lines").children].forEach((row, index) => {
+          row.className = index === current ? "on" : "";
+        });
       }
 
       function seats(message) {
@@ -779,6 +964,7 @@
           el("progress").style.width =
             duration > 0 ? `${Math.min(100, (moved / duration) * 100)}%` : "0";
         }
+        sung();
 
         const scheduled = ctx && running && playAt !== null;
         const ahead = scheduled ? Math.round((playAt - ctx.currentTime) * 1000) : 0;

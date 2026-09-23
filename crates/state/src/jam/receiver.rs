@@ -180,6 +180,9 @@ async fn join(
                     | FromHost::Grant { .. }
                     | FromHost::Controls { .. }
                     | FromHost::Lineup { .. }
+                    | FromHost::Packs { .. }
+                    | FromHost::Opened { .. }
+                    | FromHost::Words { .. }
                     | FromHost::Room { .. } => continue,
                     FromHost::Pong { t0, t1, t2 } => {
                         clock.push(Sample { t0, t1, t2, t3: millis() });
