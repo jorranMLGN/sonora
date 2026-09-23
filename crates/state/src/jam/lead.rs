@@ -1,24 +1,22 @@
 use std::collections::HashMap;
 
 pub const CEILING: u32 = 1_000;
+pub const FLOOR: u32 = 80;
 
 const STEP: u32 = 20;
 const HOLD: u64 = 30_000;
 
 pub struct Lead {
     needs: HashMap<String, u32>,
-    floor: u32,
     lead: u32,
     eased: Option<u64>,
 }
 
 impl Lead {
-    pub fn new(floor: u32) -> Self {
-        let floor = stepped(floor).min(CEILING);
+    pub fn new() -> Self {
         Self {
             needs: HashMap::new(),
-            floor,
-            lead: floor,
+            lead: FLOOR,
             eased: None,
         }
     }
@@ -47,7 +45,7 @@ impl Lead {
             .copied()
             .max()
             .unwrap_or(0)
-            .clamp(self.floor, CEILING);
+            .clamp(FLOOR, CEILING);
 
         if want > self.lead {
             self.lead = want;

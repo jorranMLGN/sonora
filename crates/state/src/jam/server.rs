@@ -143,7 +143,6 @@ pub struct Serving {
     pub kicks: broadcast::Sender<String>,
     pub code: String,
     pub room: String,
-    pub lead: u32,
     pub broadcast: Arc<Broadcast>,
     pub now: watch::Receiver<Option<Playing>>,
     pub transport: watch::Receiver<Transport>,
@@ -182,7 +181,7 @@ pub async fn run(listener: StdListener, serving: Serving) {
         Err(error) => return log::error!("jam: cannot take over the listener: {error}"),
     };
 
-    let lead = Lead::new(serving.lead);
+    let lead = Lead::new();
     let shared = Arc::new(Shared {
         page: rendered(),
         leads: watch::channel(lead.lead()).0,

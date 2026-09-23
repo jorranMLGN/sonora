@@ -166,7 +166,6 @@ fn yes() -> bool {
 const SAVE_DELAY: Duration = Duration::from_millis(300);
 const DEFAULT_VOLUME: f32 = 0.7;
 const DEFAULT_JAM_PORT: u16 = 8990;
-const DEFAULT_JAM_LEAD: u32 = 80;
 const JAM_PORT_ENV: &str = "SONORA_JAM_PORT";
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
 const DEFAULT_SIDEBAR_RIGHT_WIDTH: f32 = 254.;
@@ -242,7 +241,6 @@ struct Values {
 #[serde(default)]
 struct Jam {
     port: u16,
-    lead_ms: u32,
     name: String,
     guests_add: bool,
     guests_control: bool,
@@ -254,7 +252,6 @@ impl Default for Jam {
     fn default() -> Self {
         Self {
             port: DEFAULT_JAM_PORT,
-            lead_ms: DEFAULT_JAM_LEAD,
             name: String::new(),
             guests_add: true,
             guests_control: false,
@@ -507,10 +504,6 @@ impl AppSettings {
         }
     }
 
-    pub fn jam_lead(&self) -> u32 {
-        self.values.jam.lead_ms
-    }
-
     pub fn jam_name(&self) -> &str {
         &self.values.jam.name
     }
@@ -547,14 +540,6 @@ impl AppSettings {
         self.values.jam.guests_control = caps.control;
         self.values.jam.guests_browse = caps.browse;
         self.values.jam.guests_favorite = caps.favorite;
-        self.schedule_save(cx);
-    }
-
-    pub fn set_jam_lead(&mut self, lead_ms: u32, cx: &mut Context<Self>) {
-        if self.values.jam.lead_ms == lead_ms {
-            return;
-        }
-        self.values.jam.lead_ms = lead_ms;
         self.schedule_save(cx);
     }
 

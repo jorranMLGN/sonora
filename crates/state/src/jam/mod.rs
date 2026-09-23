@@ -371,7 +371,6 @@ impl Jam {
             transport: self.transport.subscribe(),
             code: code.clone(),
             room: room.clone(),
-            lead: self.settings.read(cx).jam_lead(),
             broadcast: self.broadcast.clone(),
             now: self.now.subscribe(),
             snapshot: self.snapshot.subscribe(),
@@ -393,7 +392,7 @@ impl Jam {
             code,
             addresses: addresses(bound),
             listeners: Vec::new(),
-            lead: self.settings.read(cx).jam_lead(),
+            lead: lead::FLOOR,
         };
         cx.emit(JamEvent::Started);
         cx.notify();
