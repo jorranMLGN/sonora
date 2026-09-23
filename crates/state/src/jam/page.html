@@ -1068,8 +1068,9 @@
         el("sync").textContent = taken.length ? `${TEXT.sync} ${Math.round(offset)} ms` : "";
         el("drift").textContent = scheduled ? `${TEXT.drift} ${drift} ms` : "";
         el("ping").textContent = taken.length ? `${Math.round(rtt)} ms` : "";
+        const engine = ctx ? ` · ${Math.round(ctx.sampleRate)} Hz ${ctx.state}` : "";
         el("stream").textContent = format
-          ? `${format.rate} Hz · ${format.channels} ch · ${TEXT.chunks} ${chunks}`
+          ? `${format.rate} Hz · ${format.channels} ch · ${TEXT.chunks} ${chunks}${engine}`
           : "";
 
         if (running && behind) {
