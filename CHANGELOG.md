@@ -65,6 +65,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Listening to a jam on an iPhone no longer depends on the ringer switch being off silent.
 - A device listening to a jam no longer falls silent after the host switches to another provider.
 - Removing a listener from a jam now keeps that device out. It used to be identified by a port that
   changed on every connection, so a removed device came straight back by reloading the page, and a

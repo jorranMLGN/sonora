@@ -635,6 +635,7 @@
 
       async function start() {
         if (!format) return;
+        if (navigator.audioSession) navigator.audioSession.type = "playback";
         ctx = new AudioContext({ sampleRate: format.rate, latencyHint: "interactive" });
         gain = ctx.createGain();
         gain.gain.value = here / 100;
