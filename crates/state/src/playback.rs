@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
+use music::cast::CastSink;
 use music::{
     MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents, PlaybackFactory,
     Player, Spectrum, Track,
@@ -283,6 +284,7 @@ pub struct Playback {
     clock: LiveClock,
     track: Option<Track>,
     engines: HashMap<&'static str, Box<dyn Player>>,
+    cast: Option<CastSink>,
     session: Entity<Session>,
     queue: Entity<Queue>,
     settings: Entity<AppSettings>,
@@ -355,6 +357,7 @@ impl Playback {
             clock: LiveClock::new(),
             track: None,
             engines: HashMap::new(),
+            cast: None,
             session,
             queue,
             settings,
@@ -1335,7 +1338,11 @@ impl Playback {
         self.restart_engine(cx);
     }
 
-    fn current_slug(&self) -> Option<&str> {
+    pub(crate) fn set_cast(&mut self, cast: CastSink) {
+        self.cast = Some(cast);
+    }
+
+    pub(crate) fn current_slug(&self) -> Option<&str> {
         let id = self.track.as_ref()?.id.as_deref()?;
         music::tag::slug_of(id)
     }
@@ -1429,7 +1436,7 @@ impl Playback {
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
         };
-        let (engine, events) = playback.start(config);
+        let (engine, events) = playback.start(config, self.cast.clone());
 
         self.listen(events, slug, cx);
         self.engines.insert(slug, engine);

@@ -138,6 +138,7 @@ struct PathDuration {
 struct Page {
     album: Album,
     tracks: Vec<Track>,
+    cover_max: Option<String>,
     items: usize,
     total: usize,
 }
@@ -145,6 +146,7 @@ struct Page {
 pub(crate) async fn album(session: &Session, album_id: &str) -> Result<AlbumDetail> {
     let mut album = None;
     let mut tracks = Vec::new();
+    let mut biggest = None;
     let mut offset = 0;
 
     loop {
@@ -157,12 +159,14 @@ pub(crate) async fn album(session: &Session, album_id: &str) -> Result<AlbumDeta
         let data = query::<Data>(session, "getAlbum", variables).await?;
         let page = page(data)?;
         album.get_or_insert(page.album);
+        biggest = biggest.or(page.cover_max);
         tracks.extend(page.tracks);
 
         let Some(next) = next_offset(offset, page.items, page.total) else {
             return Ok(AlbumDetail {
                 album: album.context("album Pathfinder response has no album")?,
                 tracks,
+                cover_max: biggest,
             });
         };
         offset = next;
@@ -175,6 +179,12 @@ fn page(data: Data) -> Result<Page> {
     };
     let items = album.tracks.items.len();
     let total = album.tracks.total_count;
+    let cover_max = album
+        .cover
+        .sources
+        .iter()
+        .max_by_key(|source| source.height)
+        .and_then(|source| non_empty(&source.url).map(str::to_owned));
     let header = album_from(&album);
     let tracks = album
         .tracks
@@ -185,6 +195,7 @@ fn page(data: Data) -> Result<Page> {
     Ok(Page {
         album: header,
         tracks,
+        cover_max,
         items,
         total,
     })

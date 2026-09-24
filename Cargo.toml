@@ -38,9 +38,16 @@ gpui_platform = { git = "https://github.com/nolight132/gpui", rev = "96ffcd35c2d
   "x11",
 ] }
 http = "1.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 winresource = "0.1"
 windows-sys = { version = "0.61", features = ["Win32_Graphics_Dwm"] }
 interprocess = "2.4"
+tokio-tungstenite = { version = "0.28", default-features = false, features = [
+  "connect",
+  "handshake",
+] }
 image = { version = "0.25", default-features = false, features = [
   "jpeg",
   "png",

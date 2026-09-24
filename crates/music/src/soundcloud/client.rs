@@ -73,7 +73,8 @@ impl MusicApi for SoundCloudClient {
     }
 
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()> {
-        library::set_track_liked(&self.http, track_id, saved).await
+        let user = self.user_id()?;
+        library::set_track_liked(&self.http, user, track_id, saved).await
     }
 
     async fn track(&self, track_id: &str) -> Result<Track> {
@@ -103,11 +104,13 @@ impl MusicApi for SoundCloudClient {
     }
 
     async fn remove_playlist_from_library(&self, playlist_id: &str) -> Result<()> {
-        library::set_saved(&self.http, playlist_id, false).await
+        let user = self.user_id()?;
+        library::set_saved(&self.http, user, playlist_id, false).await
     }
 
     async fn add_playlist_to_library(&self, playlist_id: &str) -> Result<()> {
-        library::set_saved(&self.http, playlist_id, true).await
+        let user = self.user_id()?;
+        library::set_saved(&self.http, user, playlist_id, true).await
     }
 
     async fn set_playlist_public(&self, playlist_id: &str, public: bool) -> Result<()> {
@@ -135,7 +138,8 @@ impl MusicApi for SoundCloudClient {
     }
 
     async fn set_album_saved(&self, album_id: &str, saved: bool) -> Result<()> {
-        library::set_saved(&self.http, album_id, saved).await
+        let user = self.user_id()?;
+        library::set_saved(&self.http, user, album_id, saved).await
     }
 
     async fn saved_artists(&self, limit: u32) -> Result<Vec<SavedArtist>> {

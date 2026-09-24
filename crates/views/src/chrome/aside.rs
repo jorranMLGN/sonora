@@ -238,6 +238,7 @@ pub(crate) struct Aside {
     playback: Entity<Playback>,
     lyrics: Entity<Lyrics>,
     settings: Entity<AppSettings>,
+    jam: Entity<crate::chrome::jam::JamPanel>,
     tab: SideTab,
     verse_bar: Entity<Scrollbar>,
     followed: Option<usize>,
@@ -332,6 +333,7 @@ impl Aside {
             playback,
             lyrics,
             settings,
+            jam: crate::chrome::jam::panel(cx),
             tab,
             verse_bar,
             followed: None,
@@ -822,6 +824,7 @@ impl Aside {
                     match self.tab {
                         SideTab::Queue => t!("queue-title"),
                         SideTab::Lyrics => t!("lyrics-title"),
+                        SideTab::Jam => t!("jam-title"),
                     },
                     cx,
                 ))
@@ -1750,6 +1753,9 @@ impl Render for Aside {
                     })
                     .when(self.tab == SideTab::Lyrics, |this| {
                         this.child(self.verses(window, cx))
+                    })
+                    .when(self.tab == SideTab::Jam, |this| {
+                        this.child(self.jam.clone())
                     })
                     .when(self.tab == SideTab::Queue && empty, |this| {
                         this.child(vacant(t!("queue-empty"), cx).flex_1())

@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use cpal::traits::{DeviceTrait, HostTrait};
-use rodio::source::SeekError;
+use rodio::source::{SeekError, UniformSourceIterator};
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
 
+use crate::cast::{self, Cast, CastSink, Format};
 use crate::spectrum::{Spectrum, Tap};
 
 pub const RAMP: Duration = Duration::from_millis(25);
@@ -40,7 +41,12 @@ pub struct Output {
 }
 
 impl Output {
-    pub fn open(volume: Volume, spectrum: Spectrum) -> Result<Self> {
+    pub fn open(
+        volume: Volume,
+        spectrum: Spectrum,
+        slug: &'static str,
+        cast: Option<CastSink>,
+    ) -> Result<Self> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -78,9 +84,25 @@ impl Output {
         let applied = volume.get();
         let tap = spectrum.attach(default.sample_rate(), default.channels());
         let (sink, source) = rodio::Player::new();
-        stream
-            .mixer()
-            .add(SmoothGain::new(source, volume.clone(), applied, RAMP).with_tap(tap));
+        let channels =
+            NonZero::new(default.channels()).context("cannot read the output channel count")?;
+        let rate =
+            NonZero::new(default.sample_rate()).context("cannot read the output sample rate")?;
+        let uniform = UniformSourceIterator::new(source, channels, rate);
+        let cast = cast.map(|sink| {
+            let format = Format {
+                rate: default.sample_rate(),
+                channels: default.channels(),
+            };
+            let (cast, feed) = cast::open(slug, format);
+            sink(feed);
+            cast
+        });
+        stream.mixer().add(
+            SmoothGain::new(uniform, volume.clone(), applied, RAMP)
+                .with_tap(tap)
+                .with_cast(cast),
+        );
 
         Ok(Self {
             sink: Arc::new(sink),
@@ -115,6 +137,7 @@ pub struct SmoothGain<I> {
     input: I,
     volume: Volume,
     tap: Option<Tap>,
+    cast: Option<Cast>,
 
     current: f32,
     target: f32,
@@ -135,6 +158,7 @@ impl<I: Source> SmoothGain<I> {
             input,
             volume,
             tap: None,
+            cast: None,
             current: initial,
             target: initial,
             step: 0.0,
@@ -149,6 +173,11 @@ impl<I: Source> SmoothGain<I> {
 
     pub fn with_tap(mut self, tap: Tap) -> Self {
         self.tap = Some(tap);
+        self
+    }
+
+    pub fn with_cast(mut self, cast: Option<Cast>) -> Self {
+        self.cast = cast;
         self
     }
 
@@ -195,6 +224,9 @@ impl<I: Source> Iterator for SmoothGain<I> {
         let output = sample * self.current;
         if let Some(tap) = self.tap.as_mut() {
             tap.push(output);
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.push(sample);
         }
 
         self.channel += 1;

@@ -10,6 +10,7 @@ use librespot_playback::player::{Player, PlayerEvent};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::audio::Volume;
+use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::{BlazingSink, Flush};
 use crate::{
@@ -51,8 +52,12 @@ impl Factory {
 }
 
 impl PlaybackFactory for Factory {
-    fn start(&self, config: PlaybackConfig) -> (Box<dyn MusicPlayer>, Box<dyn PlaybackEvents>) {
-        let (engine, events) = Engine::start(self.0.clone(), config);
+    fn start(
+        &self,
+        config: PlaybackConfig,
+        cast: Option<CastSink>,
+    ) -> (Box<dyn MusicPlayer>, Box<dyn PlaybackEvents>) {
+        let (engine, events) = Engine::start(self.0.clone(), config, cast);
         (Box::new(engine), Box::new(events))
     }
 }
@@ -66,7 +71,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    fn start(session: Session, config: PlaybackConfig) -> (Self, Events) {
+    fn start(session: Session, config: PlaybackConfig, cast: Option<CastSink>) -> (Self, Events) {
         let volume = Volume::new(config.gain);
         let flush = Flush::default();
         let spectrum = Spectrum::new();
@@ -84,7 +89,13 @@ impl Engine {
         let sink_spectrum = spectrum.clone();
         let (output_tx, output_rx) = unbounded_channel();
         let player = Player::new(player_config, session, Box::new(NoOpVolume), move || {
-            BlazingSink::boxed(sink_flush, sink_volume, sink_spectrum, output_tx.clone())
+            BlazingSink::boxed(
+                sink_flush,
+                sink_volume,
+                sink_spectrum,
+                output_tx.clone(),
+                cast.clone(),
+            )
         });
 
         let events = Events {

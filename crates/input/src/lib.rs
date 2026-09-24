@@ -23,6 +23,7 @@ actions!(
         ToggleFullscreen,
         ToggleQueue,
         ToggleLyrics,
+        ToggleJam,
         ToggleMiniPlayer
     ]
 );

@@ -5,6 +5,7 @@ use librespot_core::Session;
 use librespot_protocol::extension_kind::ExtensionKind;
 use librespot_protocol::metadata::Album as AlbumMessage;
 use librespot_protocol::metadata::album::Type as AlbumType;
+use librespot_protocol::metadata::image::Size as ImageSize;
 use protobuf::Message as _;
 
 use crate::spotify::{collection, collection2, pathfinder, wire};
@@ -70,7 +71,11 @@ async fn legacy_album(session: &Session, album_id: &str) -> Result<AlbumDetail> 
                 .collect()
         }
     };
-    Ok(AlbumDetail { album, tracks })
+    Ok(AlbumDetail {
+        cover_max: cover_max(&message),
+        album,
+        tracks,
+    })
 }
 
 pub async fn album_tracks(session: &Session, album_id: &str) -> Result<Vec<Track>> {
@@ -188,6 +193,27 @@ fn cover(album: &AlbumMessage) -> Option<String> {
         .min_by_key(|image| image.width())?;
 
     wire::image_url(smallest.file_id())
+}
+
+fn cover_max(album: &AlbumMessage) -> Option<String> {
+    let biggest = album
+        .cover_group
+        .as_ref()?
+        .image
+        .iter()
+        .filter(|image| image.has_file_id())
+        .max_by_key(|image| (step(image.size()), image.width()))?;
+
+    wire::image_url(biggest.file_id())
+}
+
+fn step(size: ImageSize) -> u8 {
+    match size {
+        ImageSize::SMALL => 0,
+        ImageSize::DEFAULT => 1,
+        ImageSize::LARGE => 2,
+        ImageSize::XLARGE => 3,
+    }
 }
 
 fn cover_large(album: &AlbumMessage) -> Option<String> {

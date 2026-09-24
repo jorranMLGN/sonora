@@ -4,12 +4,19 @@ use gpui::{Context, Entity, Task};
 
 use crate::{Io, Playback, Session, SessionEvent, join};
 
+#[derive(Clone)]
+struct Held {
+    large: Option<String>,
+    max: Option<String>,
+}
+
 pub struct Cover {
     session: Entity<Session>,
     playback: Entity<Playback>,
     album: Option<String>,
     large: Option<String>,
-    cache: HashMap<String, String>,
+    max: Option<String>,
+    cache: HashMap<String, Held>,
     io: Io,
     task: Option<Task<()>>,
 }
@@ -34,6 +41,7 @@ impl Cover {
             playback,
             album: None,
             large: None,
+            max: None,
             cache: HashMap::new(),
             io,
             task: None,
@@ -42,6 +50,10 @@ impl Cover {
 
     pub fn large(&self) -> Option<&str> {
         self.large.as_deref()
+    }
+
+    pub fn max(&self) -> Option<&str> {
+        self.max.as_deref().or(self.large.as_deref())
     }
 
     fn forget(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -53,6 +65,7 @@ impl Cover {
         self.task = None;
         self.album = None;
         self.large = None;
+        self.max = None;
         cx.notify();
     }
 
@@ -67,7 +80,9 @@ impl Cover {
         }
         self.task = None;
         self.album = album.clone();
-        self.large = album.as_ref().and_then(|id| self.cache.get(id)).cloned();
+        let held = album.as_ref().and_then(|id| self.cache.get(id)).cloned();
+        self.large = held.as_ref().and_then(|held| held.large.clone());
+        self.max = held.and_then(|held| held.max);
         cx.notify();
 
         let Some(id) = album else {
@@ -97,12 +112,17 @@ impl Cover {
                 this.task = None;
                 match found {
                     Ok(detail) => {
-                        let Some(large) = detail.album.cover_large else {
-                            return;
+                        let held = Held {
+                            large: detail.album.cover_large,
+                            max: detail.cover_max,
                         };
-                        this.cache.insert(id.clone(), large.clone());
+                        if held.large.is_none() && held.max.is_none() {
+                            return;
+                        }
+                        this.cache.insert(id.clone(), held.clone());
                         if this.album.as_deref() == Some(id.as_str()) {
-                            this.large = Some(large);
+                            this.large = held.large;
+                            this.max = held.max;
                             cx.notify();
                         }
                     }

@@ -12,6 +12,7 @@ use ui::{
     Layout, Look, Mode, Pace, Pin, Rounding, Saver, Sorting, Stillness, ThemeKind, ThemeOverrides,
 };
 
+use crate::jam::{Cap, Caps};
 use crate::queue::{Resume, gap_target};
 use crate::{Repeat, Sonora, Whence};
 
@@ -53,6 +54,7 @@ pub enum SideTab {
     #[default]
     Queue,
     Lyrics,
+    Jam,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +165,8 @@ fn yes() -> bool {
 
 const SAVE_DELAY: Duration = Duration::from_millis(300);
 const DEFAULT_VOLUME: f32 = 0.7;
+const DEFAULT_JAM_PORT: u16 = 8990;
+const JAM_PORT_ENV: &str = "SONORA_JAM_PORT";
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
 const DEFAULT_SIDEBAR_RIGHT_WIDTH: f32 = 254.;
 const DEFAULT_FONT_SIZE: f32 = 14.;
@@ -229,6 +233,32 @@ struct Values {
     #[serde(skip_serializing_if = "Option::is_none")]
     window: Option<Frame>,
     appearance: Appearance,
+    #[serde(default)]
+    jam: Jam,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct Jam {
+    port: u16,
+    name: String,
+    guests_add: bool,
+    guests_control: bool,
+    guests_browse: bool,
+    guests_favorite: bool,
+}
+
+impl Default for Jam {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_JAM_PORT,
+            name: String::new(),
+            guests_add: true,
+            guests_control: false,
+            guests_browse: false,
+            guests_favorite: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -291,6 +321,7 @@ impl Default for Values {
             resume: None,
             window: None,
             appearance: Appearance::default(),
+            jam: Jam::default(),
         }
     }
 }
@@ -461,6 +492,63 @@ impl AppSettings {
 
     pub fn mini_on_top(&self) -> bool {
         self.values.mini_on_top
+    }
+
+    pub fn jam_port(&self) -> u16 {
+        match std::env::var(JAM_PORT_ENV) {
+            Err(_) => self.values.jam.port,
+            Ok(value) => value.parse().unwrap_or_else(|_| {
+                log::warn!("settings: cannot read {JAM_PORT_ENV}");
+                self.values.jam.port
+            }),
+        }
+    }
+
+    pub fn jam_name(&self) -> &str {
+        &self.values.jam.name
+    }
+
+    pub fn jam_guests_add(&self) -> bool {
+        self.values.jam.guests_add
+    }
+
+    pub fn set_jam_guests_add(&mut self, allowed: bool, cx: &mut Context<Self>) {
+        if self.values.jam.guests_add == allowed {
+            return;
+        }
+        self.values.jam.guests_add = allowed;
+        self.schedule_save(cx);
+    }
+
+    pub fn jam_guests(&self) -> Caps {
+        Caps {
+            add: self.values.jam.guests_add,
+            control: self.values.jam.guests_control,
+            browse: self.values.jam.guests_browse,
+            favorite: self.values.jam.guests_favorite,
+        }
+    }
+
+    pub fn set_jam_guest(&mut self, cap: Cap, on: bool, cx: &mut Context<Self>) {
+        let mut caps = self.jam_guests();
+        if cap.of(&caps) == on {
+            return;
+        }
+
+        cap.set(&mut caps, on);
+        self.values.jam.guests_add = caps.add;
+        self.values.jam.guests_control = caps.control;
+        self.values.jam.guests_browse = caps.browse;
+        self.values.jam.guests_favorite = caps.favorite;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_jam_name(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.values.jam.name == name {
+            return;
+        }
+        self.values.jam.name = name;
+        self.schedule_save(cx);
     }
 
     pub fn sidebar_right_tab(&self) -> SideTab {

@@ -41,6 +41,8 @@ pub struct Stub {
     pub(crate) cover: Option<String>,
     pub(crate) seconds: f32,
     pub(crate) explicit: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) unplayable: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -69,6 +71,7 @@ fn stub(track: &Track) -> Option<Stub> {
         cover: track.cover.clone(),
         seconds: track.duration.as_secs_f32(),
         explicit: track.explicit,
+        unplayable: !track.playable,
     })
 }
 
@@ -76,7 +79,7 @@ fn hydrate(stub: Stub) -> Track {
     Track {
         id: Some(stub.id),
         name: stub.name,
-        playable: true,
+        playable: !stub.unplayable,
         artists: stub.artists,
         artist_refs: stub
             .credited

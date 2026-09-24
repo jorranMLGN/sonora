@@ -13,6 +13,7 @@ use super::stream;
 use super::wire::{self, Transcoding};
 use crate::audio::trim;
 use crate::audio::{Output, RAMP, SmoothGain, Trimmed, Volume};
+use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
 
@@ -24,7 +25,6 @@ const POLL: Duration = Duration::from_millis(20);
 fn rank(preset: &str) -> u8 {
     match preset {
         "aac_160k" => 4,
-        "abr_sq" => 3,
         "aac_96k" => 2,
         "mp3_0_0" => 1,
         _ => 1,
@@ -34,15 +34,20 @@ fn rank(preset: &str) -> u8 {
 /// Chooses which transcoding to play.
 ///
 /// The only `progressive` transcoding soundcloud offers is a legacy 128kbps
-/// mp3; every better encoding (`aac_160k`, `aac_96k`, `abr_sq`) is hls-only.
-/// So this prefers the best-ranked hls entry and falls back to progressive
-/// only when no hls entry is offered at all. Filtering happens on
-/// `format.protocol`, never on `preset` alone: `mp3_0_0` exists as both an
-/// hls and a progressive entry.
+/// mp3; every better encoding (`aac_160k`, `aac_96k`) is hls-only. So this
+/// prefers the best-ranked hls entry and falls back to progressive only when
+/// no hls entry is offered at all. Filtering happens on `format.protocol`,
+/// never on `preset` alone: `mp3_0_0` exists as both an hls and a progressive
+/// entry.
+///
+/// An `abr_` preset is never chosen. It names an adaptive master playlist of
+/// variants, which `stream::assemble` cannot read, and soundcloud refuses to
+/// resolve it with a 404 anyway — so ranking it would only fail a track that
+/// has a playable `aac_96k` beside it.
 pub fn pick(transcodings: &[Transcoding]) -> Option<&Transcoding> {
     transcodings
         .iter()
-        .filter(|t| t.format.protocol == "hls")
+        .filter(|t| t.format.protocol == "hls" && !t.preset.starts_with("abr_"))
         .max_by_key(|t| rank(&t.preset))
         .or_else(|| {
             transcodings
@@ -71,7 +76,11 @@ impl Factory {
 }
 
 impl PlaybackFactory for Factory {
-    fn start(&self, config: PlaybackConfig) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
+    fn start(
+        &self,
+        config: PlaybackConfig,
+        cast: Option<CastSink>,
+    ) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
         let (commands, command_rx) = unbounded_channel();
         let (events, event_rx) = unbounded_channel();
         let http = self.http.clone();
@@ -79,7 +88,7 @@ impl PlaybackFactory for Factory {
         let engine_spectrum = spectrum.clone();
         let spawned = std::thread::Builder::new()
             .name("sc-playback".to_string())
-            .spawn(move || run(http, config, command_rx, events, engine_spectrum));
+            .spawn(move || run(http, config, command_rx, events, engine_spectrum, cast));
         if let Err(error) = spawned {
             log::error!("playback: cannot spawn engine thread: {error}");
         }
@@ -193,6 +202,7 @@ fn run(
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
     spectrum: Spectrum,
+    cast: Option<CastSink>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -204,7 +214,7 @@ fn run(
             return;
         }
     };
-    runtime.block_on(engine_loop(http, config, commands, events, spectrum));
+    runtime.block_on(engine_loop(http, config, commands, events, spectrum, cast));
 }
 
 async fn engine_loop(
@@ -213,8 +223,9 @@ async fn engine_loop(
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
     spectrum: Spectrum,
+    cast: Option<CastSink>,
 ) {
-    let output = match Output::open(Volume::new(config.gain), spectrum) {
+    let output = match Output::open(Volume::new(config.gain), spectrum, "soundcloud", cast) {
         Ok(output) => output,
         Err(error) => {
             log::error!("playback: cannot open audio output: {error:#}");
@@ -662,6 +673,7 @@ mod tests {
             format: Format {
                 protocol: protocol.to_string(),
             },
+            legacy: false,
         }
     }
 

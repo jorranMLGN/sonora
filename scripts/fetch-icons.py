@@ -65,6 +65,7 @@ MAP = {
     "play-off": (None, None, None),
     "plus": ("plus", None, "add-line"),
     "radio": ("antenna-signal", "radio-linear", "radio-line"),
+    "radio-tower": ("tower", None, "signal-tower-line"),
     "refresh-cw": ("refresh", "refresh-linear", "refresh-line"),
     "repeat": ("repeat", "repeat-linear", "repeat-2-line"),
     "repeat-one": ("repeat-once", "repeat-one-linear", "repeat-one-line"),

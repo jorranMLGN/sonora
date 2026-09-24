@@ -337,7 +337,11 @@ impl MusicApi for LocalClient {
             .filter(|track| track.album_id.as_deref() == Some(album_id))
             .cloned()
             .collect();
-        Ok(AlbumDetail { album, tracks })
+        Ok(AlbumDetail {
+            cover_max: album.cover_large.clone(),
+            album,
+            tracks,
+        })
     }
 
     async fn album_tracks(&self, album_id: &str) -> Result<Vec<Track>> {

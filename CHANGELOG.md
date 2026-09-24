@@ -7,6 +7,73 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Start a jam and send whatever Sonora is playing to the other devices on your network, whichever
+  provider it came from.
+- Listen from any phone, tablet or laptop by opening a page Sonora serves on your network: no
+  account, no app, and the sound lines itself up with the host on its own, to within a couple of
+  milliseconds. The slider is now only there to dial out the delay of a Bluetooth speaker, and the
+  page shows the measured clock difference and how far off it is running.
+- Listen from a second Sonora, which keeps itself in step with the host on its own.
+- Give a jam listener control of playback, one device at a time, from the jam panel. Anyone who
+  joins can listen and add tracks; pausing, skipping, seeking and the volume stay with the host
+  until the host hands them to a particular device, and one control hands them all back.
+- Name yourself on the jam page and see who else is in the room.
+- See the host's queue on the jam page, with what is playing marked and what was just played above
+  it. A listener the host has given control can tap a track to jump to it or drop one that is
+  coming up.
+- Browse the host's playlists from the jam page, open one to see its tracks, and add it to the queue
+  or play it next. The host grants this per device, like the other permissions.
+- Save what is playing to the host's favorites from the jam page, when the host allows that device
+  to.
+- Read along on the jam page: lyrics for the current track, following the music when they are
+  synced.
+- The jam page is one scrolling page that fills the width it is given: a single column on a phone,
+  two beside each other on a tablet, and three on a desktop with what is playing pinned in place
+  while you scroll the queue. Playlists and search results are shown as covers rather than rows,
+  the queue and the playlists keep to a fixed height and scroll within it, and the lyrics fold
+  away when you would rather see the rest.
+- Set the volume of the jam page on the device it is open on, without changing what anyone else
+  hears.
+- SoundCloud is a provider in its own right. Connect it under Settings > General > Accounts by
+  pasting the OAuth token your browser shows, then play your likes, playlists and sets, search
+  tracks, playlists and albums, open an artist page and start a radio from any track. Liking,
+  following and saving a set write back to your SoundCloud account.
+- Spotify, YouTube Music and SoundCloud can be connected at the same time. Each connected provider
+  keeps its own group in the sidebar and its own library, so signing in to one no longer signs you
+  out of another, and signing out of one leaves the rest playing.
+- Search asks every connected provider at once and gives each one its own column. Local files keep
+  their own filter on the Local Music screen.
+- Home weaves its feed from every connected provider instead of only the one you last signed in to.
+- Tracks, search results and quick pick cards show which provider they came from, and the library
+  rows in the sidebar carry their provider's logo.
+- A mini player: press M, or the button in the player bar, for a small window with artwork and
+  transport. Settings > General > Window chooses whether it stays above other windows and which
+  corner it opens in.
+
+### Changed
+
+- A jam works out for itself how far ahead of the sound it has to run. Every listener reports what
+  its own network and speaker need and the host takes the highest, so a phone on a Bluetooth
+  speaker joining is enough to move the whole room. The Jam lead setting is gone: the jam panel
+  shows the figure it settled on and what each listener asked for.
+- Sign-in problems name the provider you are connecting to instead of always naming Spotify, and
+  the paste-a-credential flow is labelled by the credential it asks for.
+- A provider connected without an account reads as a guest in Settings.
+- A session that expires says so in a toast instead of leaving the library quietly empty.
+
+### Fixed
+
+- Listening to a jam on an iPhone no longer depends on the ringer switch being off silent.
+- A device listening to a jam no longer falls silent after the host switches to another provider.
+- Removing a listener from a jam now keeps that device out. It used to be identified by a port that
+  changed on every connection, so a removed device came straight back by reloading the page, and a
+  device that reconnected after its screen locked appeared in the list twice.
+- Dragging the seek bar or the volume slider no longer lets the window drag region underneath steal
+  the press.
+- A track that turned out to be unplayable stays skipped when the queue is restored at startup.
+
 ## [0.30.0] - 2026-09-04
 
 ### Added

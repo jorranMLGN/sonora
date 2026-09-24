@@ -5,6 +5,7 @@ mod detail;
 mod genre;
 mod history;
 mod home;
+mod jam;
 mod library;
 mod lyrics;
 mod mosaic;
@@ -28,6 +29,7 @@ pub use detail::{Collection, Detail, Header};
 pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
+pub use jam::{Cap, Caps, Jam, JamEvent, JamRole, Listener};
 pub use library::{Library, LibraryEvent, LibraryPart, LibraryState, Problem, Shelf};
 pub use lyrics::{Lyrics, LyricsState};
 pub use playback::{Origin, Playback, PlaybackState, Repeat, Whence};
@@ -91,6 +93,7 @@ pub struct Sonora {
     pub cover: Entity<Cover>,
     pub library: Entity<Library>,
     pub history: Entity<History>,
+    pub jam: Entity<Jam>,
     pub lyrics: Entity<Lyrics>,
     pub playback: Entity<Playback>,
     pub queue: Entity<Queue>,
@@ -136,6 +139,17 @@ pub fn init(
     });
     let cover = cx.new(|cx| Cover::new(session.clone(), playback.clone(), io.clone(), cx));
     let updates = cx.new(|cx| Updates::new(settings.clone(), io.clone(), cx));
+    let parts = jam::Parts {
+        playback: playback.clone(),
+        cover: cover.clone(),
+        session: session.clone(),
+        queue: queue.clone(),
+        library: library.clone(),
+        lyrics: lyrics.clone(),
+        settings: settings.clone(),
+    };
+    let jam = cx.new(|cx| Jam::new(parts, io.clone(), cx));
+    jam.update(cx, |jam, cx| jam.autostart(cx));
     let usage = cx.new(|cx| Usage::new(session.clone(), io, cx));
 
     cx.set_global(Sonora {
@@ -143,6 +157,7 @@ pub fn init(
         cover,
         library,
         history,
+        jam,
         lyrics,
         playback,
         queue,

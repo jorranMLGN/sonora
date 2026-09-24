@@ -10,6 +10,7 @@ use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::audio::{Output, Volume};
+use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
 
 const QUEUED_CHUNKS: usize = 26;
@@ -42,8 +43,9 @@ impl BlazingSink {
         volume: Volume,
         spectrum: Spectrum,
         changed: UnboundedSender<()>,
+        cast: Option<CastSink>,
     ) -> Result<Self, SinkError> {
-        let output = Output::open(volume, spectrum)
+        let output = Output::open(volume, spectrum, "spotify", cast)
             .map_err(|error| SinkError::ConnectionRefused(error.to_string()))?;
         output.sink().pause();
 
@@ -60,8 +62,9 @@ impl BlazingSink {
         volume: Volume,
         spectrum: Spectrum,
         changed: UnboundedSender<()>,
+        cast: Option<CastSink>,
     ) -> Box<dyn Sink> {
-        match Self::open(flush, volume, spectrum, changed) {
+        match Self::open(flush, volume, spectrum, changed, cast) {
             Ok(sink) => Box::new(sink),
             Err(error) => {
                 log::error!("sink: cannot open an output device: {error}");

@@ -1,0 +1,1088 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{{jam-page-title}}</title>
+    <style>
+      :root {
+        color-scheme: dark light;
+        --bg: #0e0e11;
+        --fg: #f3f3f5;
+        --dim: #9a9aa5;
+        --line: #26262d;
+        --fill: #1a1a20;
+        --accent: #5b8cff;
+        --live: #3ecf8e;
+        --warn: #e8734a;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #fbfbfd;
+          --fg: #16161a;
+          --dim: #6a6a75;
+          --line: #e2e2e8;
+          --fill: #f1f1f5;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        justify-content: center;
+        padding: 24px 16px 40px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      main {
+        width: 100%;
+        max-width: 440px;
+        display: grid;
+        align-content: start;
+        gap: 18px;
+        grid-template-areas: "rail" "words" "flow" "crowd" "meters";
+      }
+      .rail { grid-area: rail; min-width: 0; }
+      .flow { grid-area: flow; min-width: 0; }
+      #words { grid-area: words; }
+      #crowd { grid-area: crowd; }
+      .meters { grid-area: meters; }
+      .rail > :first-child, .flow > :first-child { margin-top: 0; }
+      #words, #crowd, .meters { margin-top: 0; }
+      .meters {
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .eyebrow {
+        color: var(--dim);
+        font-size: 12px;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+      .art {
+        width: 100%;
+        aspect-ratio: 1;
+        margin: 14px 0 18px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--fill) center/cover no-repeat;
+      }
+      h1 { margin: 0; font-size: 21px; font-weight: 650; line-height: 1.25; }
+      .artist { margin-top: 2px; font-size: 15px; }
+      .album, .meta { color: var(--dim); font-size: 13px; }
+      .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .badge {
+        padding: 3px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .badge.live { border-color: var(--live); color: var(--live); }
+      .badge.warn { border-color: var(--warn); color: var(--warn); }
+      .track { margin-top: 14px; height: 4px; border-radius: 999px; background: var(--fill); }
+      .track > div { height: 100%; width: 0; border-radius: 999px; background: var(--accent); }
+      .times { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--dim); }
+      button {
+        width: 100%;
+        margin-top: 20px;
+        padding: 15px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .card { margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; }
+      label { display: block; font-size: 13px; color: var(--dim); }
+      input[type="range"] { width: 100%; margin-top: 10px; accent-color: var(--accent); }
+      .row { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--dim); }
+      .hint { margin-top: 14px; font-size: 13px; color: var(--warn); }
+      .find { display: flex; gap: 8px; margin-top: 10px; }
+      .find input[type="search"] {
+        flex: 1;
+        min-width: 0;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      .find button { width: auto; margin: 0; padding: 11px 16px; }
+      .hits { margin-top: 12px; display: flex; flex-direction: column; gap: 2px; }
+      .hit { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+      .hit:first-child { border-top: 0; }
+      .thumb { width: 40px; height: 40px; flex: none; border-radius: 6px; background: var(--fill) center/cover no-repeat; }
+      .hit .who { flex: 1; min-width: 0; }
+      .hit .who div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hit .name { font-size: 14px; }
+      .hit .by { font-size: 12px; color: var(--dim); }
+      .hit button { width: 38px; margin: 0; padding: 8px 0; border-radius: 9px; flex: none; }
+      .hit.on .name { color: var(--live); }
+      .hits.tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+        gap: 18px 12px;
+      }
+      .tiles .hit { display: block; padding: 0; border-top: 0; }
+      .tiles .thumb { width: 100%; height: auto; aspect-ratio: 1; border-radius: 10px; }
+      .tiles .who { margin-top: 8px; }
+      .tiles .hit button {
+        width: 100%;
+        margin-top: 8px;
+        padding: 7px 0;
+        background: var(--fill);
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .heart { background: var(--fill); color: var(--fg); }
+      .heart.on { background: var(--live); color: #fff; }
+      .head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .tally { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+      .capped {
+        max-height: 330px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+      }
+      .tiles.capped { max-height: 430px; }
+      summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+        color: var(--dim);
+        cursor: pointer;
+        list-style: none;
+      }
+      summary::-webkit-details-marker { display: none; }
+      summary::after {
+        content: "";
+        width: 7px;
+        height: 7px;
+        margin-right: 2px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        transform: translateY(-2px) rotate(45deg);
+      }
+      details[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+      .lyrics {
+        margin-top: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .lyrics div { font-size: 14px; color: var(--dim); }
+      .lyrics div.on { color: var(--fg); font-weight: 600; }
+      .said { margin-top: 10px; font-size: 13px; color: var(--dim); }
+      .deck { display: flex; gap: 8px; margin-top: 10px; }
+      .deck .tap { flex: 1; margin: 0; padding: 11px 8px; font-size: 14px; }
+      .tap.on { background: var(--live); }
+      .seek { cursor: pointer; }
+      input[type="text"] {
+        width: 100%;
+        margin-top: 10px;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      .fault { margin-top: 10px; font-size: 12px; color: var(--warn); word-break: break-word; }
+
+      @media (min-width: 640px) {
+        body { padding: 28px 24px 56px; }
+        main {
+          max-width: 980px;
+          gap: 24px 32px;
+          grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+          grid-template-rows: auto auto 1fr auto;
+          grid-template-areas:
+            "rail  words"
+            "rail  flow"
+            "crowd flow"
+            "meters meters";
+        }
+        main > * { align-self: start; }
+        .rail { border-right: 1px solid var(--line); padding-right: 32px; }
+        .art { max-width: 300px; margin-top: 16px; }
+      }
+
+      @media (min-width: 1040px) {
+        main { max-width: 1160px; }
+        .rail {
+          position: sticky;
+          top: 28px;
+          max-height: calc(100dvh - 56px);
+          overflow-y: auto;
+          scrollbar-width: thin;
+        }
+        .art { max-width: 240px; }
+      }
+
+      @media (min-width: 1440px) {
+        main {
+          max-width: 1440px;
+          grid-template-columns: minmax(260px, 320px) minmax(0, 1.5fr) minmax(280px, 1fr);
+          grid-template-rows: auto auto 1fr auto;
+          grid-template-areas:
+            "rail  flow  words"
+            "rail  flow  crowd"
+            "rail  flow  ."
+            "meters meters meters";
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="rail">
+        <div class="eyebrow" id="room">{{jam-page-title}}</div>
+        <div class="art" id="art"></div>
+
+        <h1 id="title">{{jam-page-nothing}}</h1>
+        <div class="artist" id="artist"></div>
+        <div class="album" id="album"></div>
+
+        <div class="badges">
+          <span class="badge" id="link">{{jam-page-waiting}}</span>
+          <span class="badge" id="provider" hidden></span>
+          <span class="badge" id="state" hidden></span>
+        </div>
+
+        <div class="track seek" id="seek"><div id="progress"></div></div>
+        <div class="times"><span id="at">0:00</span><span id="total">0:00</span></div>
+
+        <button id="play" disabled>{{jam-page-play}}</button>
+        <div class="hint" id="hint">{{jam-page-tap}}</div>
+
+        <button type="button" id="heart" class="tap heart" hidden>{{jam-page-favorite}}</button>
+
+        <div class="card" id="deck" hidden>
+          <label>{{jam-page-transport}}</label>
+          <div class="deck">
+            <button type="button" id="prev" class="tap">{{jam-page-prev}}</button>
+            <button type="button" id="toggle" class="tap">{{jam-page-resume}}</button>
+            <button type="button" id="skip" class="tap">{{jam-page-next}}</button>
+          </div>
+          <div class="deck">
+            <button type="button" id="shuffle" class="tap">{{jam-page-shuffle}}</button>
+            <button type="button" id="repeat" class="tap">{{jam-page-repeat}}</button>
+          </div>
+          <label for="loud">{{jam-page-everyone}}</label>
+          <input id="loud" type="range" min="0" max="100" step="1" value="100" />
+        </div>
+
+        <div class="card">
+          <label for="here">{{jam-page-here}}</label>
+          <input id="here" type="range" min="0" max="100" step="1" value="100" />
+        </div>
+      </div>
+
+      <details class="card" id="words" hidden open>
+        <summary>{{jam-page-lyrics}}</summary>
+        <div class="lyrics" id="lines"></div>
+      </details>
+
+      <div class="flow">
+        <div class="card">
+          <div class="head">
+            <label>{{jam-page-queue}}</label>
+            <span class="tally" id="queueTally"></span>
+          </div>
+          <div class="hits capped" id="lineup"></div>
+          <div class="said" id="queued">{{jam-page-queue-empty}}</div>
+        </div>
+
+        <div class="card">
+          <label for="query">{{jam-page-search}}</label>
+          <form class="find" id="find">
+            <input id="query" type="search" placeholder="{{jam-page-search-hint}}" autocomplete="off" />
+            <button type="submit">{{jam-page-search-go}}</button>
+          </form>
+          <div class="hits" id="hits"></div>
+          <div class="said" id="said"></div>
+        </div>
+
+        <div class="card" id="shelf" hidden>
+          <div class="head">
+            <label id="shelfLabel">{{jam-page-library}}</label>
+            <span class="tally" id="shelfTally"></span>
+          </div>
+          <div class="deck" id="packBack" hidden>
+            <button type="button" class="tap" id="back">{{jam-page-back}}</button>
+            <button type="button" class="tap" id="queueAll">{{jam-page-add-all}}</button>
+            <button type="button" class="tap" id="nextAll">{{jam-page-play-next}}</button>
+          </div>
+          <div class="hits" id="packs"></div>
+          <div class="said" id="shelfSaid">{{jam-page-library-empty}}</div>
+        </div>
+      </div>
+
+      <div class="card" id="crowd">
+        <label for="me">{{jam-page-you}}</label>
+        <input id="me" type="text" placeholder="{{jam-page-you-hint}}" autocomplete="off" />
+        <div class="row"><span>{{jam-page-room}}</span></div>
+        <div class="hits" id="seats"></div>
+      </div>
+
+      <div class="meters">
+        <label for="offset">{{jam-page-offset}}</label>
+        <input id="offset" type="range" min="-500" max="500" step="5" value="0" />
+        <div class="row"><span id="offsetValue">0 ms</span><span id="buffer">{{jam-page-buffer}}</span></div>
+        <div class="row"><span id="sync"></span><span id="drift"></span></div>
+        <div class="row"><span id="stream"></span><span id="ping"></span></div>
+        <div class="fault" id="fault" hidden></div>
+      </div>
+    </main>
+
+    <script>
+      const TEXT = {
+        play: "{{jam-page-play}}",
+        stop: "{{jam-page-stop}}",
+        waiting: "{{jam-page-waiting}}",
+        connected: "{{jam-page-connected}}",
+        lost: "{{jam-page-lost}}",
+        nothing: "{{jam-page-nothing}}",
+        buffer: "{{jam-page-buffer}}",
+        sync: "{{jam-page-sync}}",
+        drift: "{{jam-page-drift}}",
+        behind: "{{jam-page-behind}}",
+        playing: "{{jam-page-playing}}",
+        paused: "{{jam-page-paused}}",
+        tap: "{{jam-page-tap}}",
+        silent: "{{jam-page-silent}}",
+        local: "{{jam-page-local}}",
+        chunks: "{{jam-page-chunks}}",
+        added: "{{jam-page-added}}",
+        nothing_found: "{{jam-page-no-hits}}",
+        searching: "{{jam-page-searching}}",
+        resume: "{{jam-page-resume}}",
+        pause: "{{jam-page-pause}}",
+        queue_empty: "{{jam-page-queue-empty}}",
+        now: "{{jam-page-now}}",
+        played: "{{jam-page-played}}",
+        drop: "{{jam-page-drop}}",
+        more: "{{jam-page-more}}",
+        alone: "{{jam-page-alone}}",
+        library: "{{jam-page-library}}",
+        library_empty: "{{jam-page-library-empty}}",
+        opening: "{{jam-page-opening}}",
+        lyrics_none: "{{jam-page-lyrics-none}}",
+        favorite: "{{jam-page-favorite}}",
+        favorited: "{{jam-page-favorited}}",
+        denied: {
+          Closed: "{{jam-page-denied-closed}}",
+          Unknown: "{{jam-page-denied-unknown}}",
+          Busy: "{{jam-page-denied-busy}}",
+          Forbidden: "{{jam-page-denied-forbidden}}",
+        },
+        refused: {
+          Protocol: "{{jam-refused-protocol}}",
+          Code: "{{jam-refused-code}}",
+          Codec: "{{jam-refused-codec}}",
+          Full: "{{jam-refused-full}}",
+          Closed: "{{jam-refused-closed}}",
+          Kicked: "{{jam-refused-kicked}}",
+        },
+      };
+      const LABELS = {
+        spotify: "Spotify",
+        soundcloud: "SoundCloud",
+        youtube: "YouTube Music",
+        local: TEXT.local,
+      };
+      const MAGIC = 0x314a4e53;
+      const HEADER = 16;
+      const TRIM_KEY = "sonora.jam.offset";
+      const HERE_KEY = "sonora.jam.here";
+      const NAME_KEY = "sonora.jam.name";
+      const DEVICE_KEY = "sonora.jam.device";
+      const HELD_DRAG = 600;
+      const SAMPLES = 8;
+      const BURST = 8;
+      const BURST_GAP = 150;
+      const PROBE_GAP = 2000;
+      const TICK = 200;
+      const HELD = 2;
+      const RESET = 100;
+      const PPM_PER_MS = 500;
+      const MAX_PPM = 3000;
+      const EASE = 0.15;
+      const GUARD = 0.005;
+      const MARGIN = 40;
+
+      const el = (id) => document.getElementById(id);
+      const code = location.pathname.split("/").filter(Boolean).pop();
+      const clock = (ms) => {
+        const total = Math.max(0, Math.round(ms / 1000));
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+      };
+
+      const now = () => performance.timeOrigin + performance.now();
+      const taken = [];
+
+      let socket = null;
+      let ctx = null;
+      let gain = null;
+      let format = null;
+      let lead = 250;
+      let origin = 0;
+      let base = null;
+      let playAt = null;
+      let running = false;
+
+      let duration = 0;
+      let position = 0;
+      let positionAt = 0;
+      let hostPlaying = false;
+      let chunks = 0;
+      let heard = 0;
+      let trim = 0;
+      let offset = 0;
+      let rtt = 0;
+      let drift = 0;
+      let behind = false;
+      let probe = 0;
+      let sungAt = -1;
+      let refused = false;
+
+      let can = { add: false, control: false, browse: false, favorite: false };
+      let here = 100;
+      let me = "";
+      let device = "";
+      let shuffling = false;
+      let repeating = "Off";
+      let dragging = 0;
+      let order = null;
+      let crowd = null;
+      let shelf = [];
+      let opened = null;
+      let words = { synced: false, lines: [] };
+      let favorite = false;
+      let track = "";
+
+      try {
+        trim = Number(localStorage.getItem(TRIM_KEY)) || 0;
+        const stored = localStorage.getItem(HERE_KEY);
+        here = stored === null ? 100 : Math.min(100, Math.max(0, Number(stored) || 0));
+        me = localStorage.getItem(NAME_KEY) || "";
+        device = localStorage.getItem(DEVICE_KEY) || "";
+      } catch (_) {}
+
+      if (!device) {
+        device = [...crypto.getRandomValues(new Uint8Array(16))]
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join("");
+        try {
+          localStorage.setItem(DEVICE_KEY, device);
+        } catch (_) {}
+      }
+
+      el("offset").value = String(trim);
+      el("offsetValue").textContent = `${trim} ms`;
+      el("here").value = String(here);
+      el("me").value = me;
+
+      window.addEventListener("error", (event) => fault(event.message));
+
+      function fault(message) {
+        const line = el("fault");
+        line.hidden = false;
+        line.textContent = message;
+      }
+
+      el("offset").addEventListener("input", (event) => {
+        trim = Number(event.target.value) || 0;
+        el("offsetValue").textContent = `${trim} ms`;
+        try {
+          localStorage.setItem(TRIM_KEY, String(trim));
+        } catch (_) {}
+      });
+
+      el("here").addEventListener("input", (event) => {
+        here = Number(event.target.value) || 0;
+        if (gain) gain.gain.value = here / 100;
+        try {
+          localStorage.setItem(HERE_KEY, String(here));
+        } catch (_) {}
+      });
+
+      el("me").addEventListener("change", (event) => {
+        me = event.target.value.trim().slice(0, 40);
+        el("me").value = me;
+        try {
+          localStorage.setItem(NAME_KEY, me);
+        } catch (_) {}
+      });
+
+      el("heart").addEventListener("click", () => {
+        if (!can.favorite || !track || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Favorite", id: track, on: !favorite }));
+      });
+
+      el("back").addEventListener("click", () => {
+        opened = null;
+        packs();
+      });
+
+      el("queueAll").addEventListener("click", () => enqueue(false));
+      el("nextAll").addEventListener("click", () => enqueue(true));
+
+      function enqueue(next) {
+        if (!opened || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Enqueue", pack: opened.pack, next }));
+      }
+
+      function command(act) {
+        if (!can.control || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Command", act }));
+      }
+
+      el("prev").addEventListener("click", () => command({ act: "Previous" }));
+      el("skip").addEventListener("click", () => command({ act: "Next" }));
+      el("toggle").addEventListener("click", () =>
+        command({ act: hostPlaying ? "Pause" : "Play" }),
+      );
+      el("shuffle").addEventListener("click", () =>
+        command({ act: "Shuffle", on: !shuffling }),
+      );
+      el("repeat").addEventListener("click", () => command({ act: "Repeat" }));
+      el("loud").addEventListener("input", (event) => {
+        dragging = Date.now();
+        command({ act: "Volume", level: Number(event.target.value) || 0 });
+      });
+      el("seek").addEventListener("click", (event) => {
+        if (!duration || !can.control) return;
+        const box = event.currentTarget.getBoundingClientRect();
+        const part = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+        command({ act: "Seek", ms: Math.round(part * duration) });
+      });
+
+      el("find").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const query = el("query").value.trim();
+        if (!query || !socket || socket.readyState !== 1) return;
+        el("said").textContent = TEXT.searching;
+        el("hits").textContent = "";
+        socket.send(JSON.stringify({ kind: "Find", query }));
+      });
+
+      el("play").addEventListener("click", async () => {
+        try {
+          if (running) return stop();
+          await start();
+        } catch (error) {
+          fault(String(error));
+        }
+      });
+
+      function sample(t0, t1, t2, t3) {
+        taken.push({ offset: (t1 - t0 + (t2 - t3)) / 2, rtt: t3 - t0 - (t2 - t1) });
+        while (taken.length > SAMPLES) taken.shift();
+        const best = taken.reduce((a, b) => (b.rtt < a.rtt ? b : a));
+        offset = best.offset;
+        rtt = best.rtt;
+      }
+
+      function bind(seed) {
+        if (!ctx) return;
+        const stamp = ctx.getOutputTimestamp ? ctx.getOutputTimestamp() : null;
+        const heard_at = stamp && stamp.contextTime > 0 && stamp.performanceTime > 0;
+        const at = heard_at ? stamp.contextTime : ctx.currentTime - latency();
+        const local = heard_at ? performance.timeOrigin + stamp.performanceTime : now();
+        const seen = local - at * 1000;
+        base = seed || base === null ? seen : base + (seen - base) * EASE;
+      }
+
+      function latency() {
+        return ctx.outputLatency || ctx.baseLatency || 0;
+      }
+
+      function need() {
+        if (!ctx) return 0;
+        const stamp = ctx.getOutputTimestamp ? ctx.getOutputTimestamp() : null;
+        const out =
+          stamp && stamp.contextTime > 0
+            ? (ctx.currentTime - stamp.contextTime) * 1000
+            : latency() * 1000;
+        return Math.max(0, Math.round(out + rtt / 2 + MARGIN));
+      }
+
+      function ping(token, sent) {
+        if (token !== probe || !socket || socket.readyState !== 1) return;
+        socket.send(JSON.stringify({ kind: "Ping", t0: Math.round(now()), need: need() }));
+        setTimeout(() => ping(token, sent + 1), sent + 1 < BURST ? BURST_GAP : PROBE_GAP);
+      }
+
+      async function start() {
+        if (!format) return;
+        if (navigator.audioSession) navigator.audioSession.type = "playback";
+        ctx = new AudioContext({ sampleRate: format.rate, latencyHint: "interactive" });
+        gain = ctx.createGain();
+        gain.gain.value = here / 100;
+        gain.connect(ctx.destination);
+        await ctx.resume();
+        playAt = null;
+        base = null;
+        behind = false;
+        bind(true);
+        running = true;
+        el("play").textContent = TEXT.stop;
+        el("hint").hidden = true;
+      }
+
+      function stop() {
+        running = false;
+        playAt = null;
+        base = null;
+        behind = false;
+        el("play").textContent = TEXT.play;
+        el("hint").hidden = false;
+        el("hint").textContent = TEXT.tap;
+        if (ctx) {
+          ctx.close().catch(() => {});
+          ctx = null;
+        }
+      }
+
+      function connect() {
+        taken.length = 0;
+        playAt = null;
+        socket = new WebSocket(`ws://${location.host}${location.pathname}/ws`);
+        socket.binaryType = "arraybuffer";
+
+        socket.addEventListener("open", () => {
+          socket.send(
+            JSON.stringify({
+              kind: "Hello",
+              protocol: {{protocol}},
+              name: me || navigator.userAgent.slice(0, 40),
+              native: false,
+              code,
+              device,
+              accepts: ["pcm16"],
+            }),
+          );
+          probe += 1;
+          ping(probe, 0);
+        });
+
+        socket.addEventListener("message", (event) => {
+          try {
+            if (typeof event.data === "string") return text(JSON.parse(event.data));
+            audio(new DataView(event.data));
+          } catch (error) {
+            fault(String(error));
+          }
+        });
+
+        socket.addEventListener("close", () => {
+          stop();
+          el("play").disabled = true;
+          if (refused) return;
+
+          el("link").textContent = TEXT.lost;
+          el("link").className = "badge warn";
+          setTimeout(connect, 2000);
+        });
+      }
+
+      function text(message) {
+        switch (message.kind) {
+          case "Welcome":
+            format = message.format;
+            lead = message.lead_ms;
+            origin = message.origin;
+            el("room").textContent = message.room;
+            el("link").textContent = TEXT.connected;
+            el("link").className = "badge live";
+            el("play").disabled = false;
+            el("stream").textContent =
+              `${format.rate} Hz · ${format.channels} ch · ${format.codec}`;
+            break;
+          case "Now":
+            el("title").textContent = message.title || TEXT.nothing;
+            el("artist").textContent = message.artist || "";
+            el("album").textContent = message.album || "";
+            el("art").style.backgroundImage = message.cover ? `url("${message.cover}")` : "";
+            duration = message.duration_ms || 0;
+            el("total").textContent = clock(duration);
+            show("provider", LABELS[message.provider] || message.provider);
+            break;
+          case "Transport":
+            hostPlaying = message.playing;
+            position = message.position_ms || 0;
+            positionAt = performance.now();
+            show("state", hostPlaying ? TEXT.playing : TEXT.paused);
+            el("toggle").textContent = hostPlaying ? TEXT.pause : TEXT.resume;
+            break;
+          case "Grant":
+            can = message.can || can;
+            el("deck").hidden = !can.control;
+            el("heart").hidden = !can.favorite || !track;
+            el("shelf").hidden = !can.browse;
+            if (!can.browse) {
+              shelf = [];
+              opened = null;
+              packs();
+            }
+            if (order) lineup(order);
+            break;
+          case "Controls":
+            shuffling = message.shuffle;
+            repeating = message.repeat;
+            if (Date.now() - dragging > HELD_DRAG) {
+              el("loud").value = String(message.volume);
+            }
+            el("prev").disabled = !message.can_previous;
+            el("skip").disabled = !message.can_next;
+            el("shuffle").className = shuffling ? "tap on" : "tap";
+            el("repeat").className = repeating === "Off" ? "tap" : "tap on";
+            favorite = message.favorite;
+            el("heart").className = favorite ? "tap heart on" : "tap heart";
+            el("heart").textContent = favorite ? TEXT.favorited : TEXT.favorite;
+            break;
+          case "Room":
+            crowd = message;
+            seats(crowd);
+            break;
+          case "Lineup":
+            order = message;
+            lineup(order);
+            break;
+          case "Packs":
+            shelf = message.packs || [];
+            packs();
+            break;
+          case "Opened":
+            if (opened && opened.pack === message.pack) {
+              opened.rows = message.rows || [];
+              opened.total = message.total || 0;
+              packs();
+            }
+            break;
+          case "Words":
+            words = { synced: message.synced, lines: message.lines || [] };
+            lyrics();
+            break;
+          case "Found":
+            hits(message.hits || []);
+            break;
+          case "Added":
+            el("said").textContent = `${TEXT.added} ${message.title}`;
+            break;
+          case "Denied":
+            el("said").textContent = TEXT.denied[message.reason] || String(message.reason);
+            break;
+          case "Mark":
+            origin = message.origin;
+            playAt = null;
+            break;
+          case "Lead":
+            lead = message.lead_ms;
+            break;
+          case "Pong":
+            sample(message.t0, message.t1, message.t2, now());
+            break;
+          case "Refused":
+            refused = !["Closed", "Full"].includes(message.reason);
+            if (!refused) setTimeout(connect, 4000);
+            el("link").textContent = TEXT.refused[message.reason] || String(message.reason);
+            el("link").className = "badge warn";
+            socket.close();
+            break;
+          case "Ended":
+            el("link").textContent = TEXT.lost;
+            el("link").className = "badge warn";
+            socket.close();
+            break;
+        }
+      }
+
+      function line(track, caption) {
+        const row = document.createElement("div");
+        row.className = "hit";
+
+        const thumb = document.createElement("div");
+        thumb.className = "thumb";
+        if (track.cover) thumb.style.backgroundImage = `url("${track.cover}")`;
+
+        const who = document.createElement("div");
+        who.className = "who";
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = track.title;
+        const by = document.createElement("div");
+        by.className = "by";
+        by.textContent = [caption, track.artist, LABELS[track.provider] || track.provider]
+          .filter(Boolean)
+          .join(" · ");
+        who.append(name, by);
+
+        row.append(thumb, who);
+        return row;
+      }
+
+      function hits(found) {
+        const list = el("hits");
+        list.className = "hits tiles capped";
+        list.textContent = "";
+        el("said").textContent = found.length ? "" : TEXT.nothing_found;
+
+        for (const found_track of found) {
+          const row = line(found_track, "");
+          const add = document.createElement("button");
+          add.type = "button";
+          add.textContent = "+";
+          add.addEventListener("click", () => {
+            if (!socket || socket.readyState !== 1) return;
+            socket.send(JSON.stringify({ kind: "Add", id: found_track.id }));
+            add.disabled = true;
+          });
+
+          row.append(add);
+          list.append(row);
+        }
+      }
+
+      function lineup(message) {
+        const list = el("lineup");
+        const rows = message.rows || [];
+        const at = message.at;
+        list.textContent = "";
+        track = at >= 0 && rows[at] ? rows[at].id : "";
+        el("heart").hidden = !can.favorite || !track;
+
+        rows.forEach((track, index) => {
+          const offset = at < 0 ? index + 1 : index - at;
+          const caption = offset === 0 ? TEXT.now : offset < 0 ? TEXT.played : "";
+          const row = line(track, caption);
+          if (offset === 0) row.className = "hit on";
+
+          if (can.control && offset !== 0) {
+            row.classList.add("seek");
+            row.addEventListener("click", () => command({ act: "Jump", index: offset }));
+          }
+          if (can.control && offset > 0) {
+            const drop = document.createElement("button");
+            drop.type = "button";
+            drop.title = TEXT.drop;
+            drop.textContent = "×";
+            drop.addEventListener("click", (event) => {
+              event.stopPropagation();
+              command({ act: "Drop", index: offset - 1 });
+            });
+            row.append(drop);
+          }
+          list.append(row);
+        });
+
+        const ahead = at < 0 ? rows.length : rows.length - at - 1;
+        const truncated = message.total > rows.length;
+        el("queueTally").textContent = ahead || "";
+        el("queued").textContent = !ahead
+          ? TEXT.queue_empty
+          : truncated
+            ? TEXT.more
+            : "";
+      }
+
+      function packs() {
+        const list = el("packs");
+        list.className = opened ? "hits capped" : "hits tiles capped";
+        list.textContent = "";
+        el("packBack").hidden = !opened;
+        el("shelfLabel").textContent = opened ? opened.name : TEXT.library;
+
+        el("shelfTally").textContent = (opened ? opened.rows.length : shelf.length) || "";
+
+        if (opened) {
+          for (const found_track of opened.rows) list.append(line(found_track, ""));
+          el("shelfSaid").textContent =
+            opened.total > opened.rows.length ? TEXT.more : "";
+          return;
+        }
+
+        for (const pack of shelf) {
+          const row = line(
+            { title: pack.name, artist: pack.owner, cover: pack.cover, provider: pack.provider },
+            "",
+          );
+          row.classList.add("seek");
+          row.addEventListener("click", () => {
+            if (!socket || socket.readyState !== 1) return;
+            opened = { pack: pack.id, name: pack.name, rows: [], total: 0 };
+            el("shelfSaid").textContent = TEXT.opening;
+            socket.send(JSON.stringify({ kind: "Open", pack: pack.id }));
+          });
+          list.append(row);
+        }
+        el("shelfSaid").textContent = shelf.length ? "" : TEXT.library_empty;
+      }
+
+      function lyrics() {
+        const list = el("lines");
+        sungAt = -1;
+        list.textContent = "";
+        el("words").hidden = !words.lines.length;
+
+        for (const line of words.lines) {
+          const row = document.createElement("div");
+          row.textContent = line.text;
+          list.append(row);
+        }
+      }
+
+      function sung() {
+        if (!words.synced || !hostPlaying) return;
+        const moved = position + (performance.now() - positionAt);
+        let current = -1;
+        words.lines.forEach((line, index) => {
+          if (line.at <= moved) current = index;
+        });
+        [...el("lines").children].forEach((row, index) => {
+          row.className = index === current ? "on" : "";
+        });
+
+        if (current === sungAt) return;
+        sungAt = current;
+        const box = el("lines");
+        const row = box.children[current];
+        if (!row || !el("words").open) return;
+        box.scrollTop = row.offsetTop - box.clientHeight / 2 + row.clientHeight / 2;
+      }
+
+      function seats(message) {
+        const list = el("seats");
+        const rows = message.listeners || [];
+        list.textContent = "";
+
+        rows.forEach((who, index) => {
+          const row = document.createElement("div");
+          row.className = "hit";
+          const name = document.createElement("div");
+          name.className = "who";
+          name.textContent = who.name;
+          if (index === message.you) row.className = "hit on";
+          row.append(name);
+          list.append(row);
+        });
+
+        if (rows.length < 2) {
+          const alone = document.createElement("div");
+          alone.className = "said";
+          alone.textContent = TEXT.alone;
+          list.append(alone);
+        }
+      }
+
+      function show(id, value) {
+        const node = el(id);
+        node.hidden = !value;
+        node.textContent = value || "";
+      }
+
+      function audio(view) {
+        chunks += 1;
+        if (view.byteLength <= HEADER || view.getUint32(0, true) !== MAGIC) return;
+        if (!running || !ctx || !format || base === null) return;
+
+        const first = Number(view.getBigUint64(8, true));
+        const channels = format.channels;
+        const samples = new Int16Array(view.buffer, HEADER);
+        const frames = Math.floor(samples.length / channels);
+        if (frames === 0) return;
+
+        const buffer = ctx.createBuffer(channels, frames, format.rate);
+        for (let channel = 0; channel < channels; channel += 1) {
+          const lane = buffer.getChannelData(channel);
+          for (let frame = 0; frame < frames; frame += 1) {
+            lane[frame] = samples[frame * channels + channel] / 32768;
+          }
+        }
+
+        const due = origin + (first * 1000) / format.rate + lead;
+        const target = (due - offset + trim - base) / 1000;
+        if (playAt === null) playAt = target;
+
+        const error = (playAt - target) * 1000;
+        let rate = 1;
+        if (Math.abs(error) >= RESET) {
+          playAt = target;
+        } else if (Math.abs(error) > HELD) {
+          rate = 1 + clamp(error * PPM_PER_MS, MAX_PPM) / 1e6;
+        }
+
+        const startAt = Math.max(playAt, ctx.currentTime + GUARD);
+        behind = startAt > playAt;
+        playAt = startAt;
+        drift = Math.round((playAt - target) * 1000);
+
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.playbackRate.value = rate;
+        source.connect(gain);
+        source.start(playAt);
+        playAt += frames / format.rate / rate;
+        heard += frames;
+      }
+
+      function clamp(value, reach) {
+        return Math.max(-reach, Math.min(reach, value));
+      }
+
+      setInterval(() => {
+        bind(false);
+
+        if (hostPlaying) {
+          const moved = position + (performance.now() - positionAt);
+          el("at").textContent = clock(moved);
+          el("progress").style.width =
+            duration > 0 ? `${Math.min(100, (moved / duration) * 100)}%` : "0";
+        }
+        sung();
+
+        const scheduled = ctx && running && playAt !== null;
+        const ahead = scheduled ? Math.round((playAt - ctx.currentTime) * 1000) : 0;
+        el("buffer").textContent = `${TEXT.buffer} ${ahead} ms`;
+        el("offsetValue").textContent = `${trim} ms`;
+        el("sync").textContent = taken.length ? `${TEXT.sync} ${Math.round(offset)} ms` : "";
+        el("drift").textContent = scheduled ? `${TEXT.drift} ${drift} ms` : "";
+        el("ping").textContent = taken.length ? `${Math.round(rtt)} ms` : "";
+        const engine = ctx ? ` · ${Math.round(ctx.sampleRate)} Hz ${ctx.state}` : "";
+        el("stream").textContent = format
+          ? `${format.rate} Hz · ${format.channels} ch · ${TEXT.chunks} ${chunks}${engine}`
+          : "";
+
+        if (running && behind) {
+          el("hint").hidden = false;
+          el("hint").textContent = TEXT.behind;
+        } else if (running && chunks > 0 && heard === 0) {
+          el("hint").hidden = false;
+          el("hint").textContent = TEXT.silent;
+        }
+      }, TICK);
+
+      connect();
+    </script>
+  </body>
+</html>

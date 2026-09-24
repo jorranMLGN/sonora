@@ -371,6 +371,7 @@ mod tests {
                     added_at: None,
                 },
                 tracks: Vec::new(),
+                cover_max: None,
             }
         }
 
