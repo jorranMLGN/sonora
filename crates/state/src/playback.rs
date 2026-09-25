@@ -2022,9 +2022,11 @@ impl Playback {
         if !self.current_track_belongs_to(slug) {
             return;
         }
+        // an engine answers with the id it was handed, which is the provider's own; the
+        // track carries the tagged one
         let current_id = self.track.as_ref().and_then(|track| track.id.as_deref());
         if let Some(event_id) = event.id()
-            && current_id != Some(event_id)
+            && current_id.map(music::tag::untag) != Some(event_id)
         {
             return;
         }
