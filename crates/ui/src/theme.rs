@@ -967,7 +967,19 @@ fn wash(base: Hsla, tint: Hsla, strength: f32) -> Hsla {
     }
 }
 
-fn parse_color(value: &str) -> Option<Hsla> {
+/// The colour as `#rrggbb`, which is how a hand-edited `settings.json` carries one back.
+pub(crate) fn hex(color: Hsla) -> String {
+    let rgba: gpui::Rgba = color.into();
+    let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(rgba.r),
+        byte(rgba.g),
+        byte(rgba.b)
+    )
+}
+
+pub(crate) fn parse_color(value: &str) -> Option<Hsla> {
     let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
     let parsed = u32::from_str_radix(value, 16).ok()?;
     match value.len() {

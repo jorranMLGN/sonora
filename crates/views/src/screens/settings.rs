@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -24,13 +24,14 @@ use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
     AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io, Playback,
     SYSTEM_FONT, Scan, ScrobbleState, Scrobbling, Session, SessionState, Sleep, Sonora,
+    SpectrumPlace, SpectrumProfile, SpectrumSettings,
 };
 use ui::{ActiveTheme as _, Deck, LEADING, Scrollbar, Scroller, eyebrow, snapped};
 use ui::{
     Avatar, Button, Dismiss, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE,
     MAX_TRANSPARENCY, MIN_FONT, MIN_LYRICS_SCALE, MenuItem, Modal, Pace, Picker, Popovers, Radio,
     Rounding, Saver, Scrubber, ScrubberState, Separator, Skeleton, Stillness, Switch, TabBar, Text,
-    Theme, ThemeKind, Vacancy, VisualizerStyle,
+    Theme, ThemeKind, Vacancy, VisualizerColor, VisualizerStyle,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -54,7 +55,7 @@ const CORNERS: &str = "corners";
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 const WINDOW_ROUNDING: &str = "window-rounding";
 const FULLSCREEN_CONTROLS_AUTOHIDE: &str = "fullscreen-controls-autohide";
-const VISUALIZER_STYLE: &str = "visualizer-style";
+
 const LANGUAGES: &str = "languages";
 const TYPEFACES: &str = "typefaces";
 const TYPEFACE_LIMIT: usize = 200;
@@ -132,7 +133,7 @@ enum Slot {
     Adaptive,
     Ambient,
     AmbientMotion,
-    Visualizer,
+    Spectrum(SpectrumPlace, Knob),
     Icons,
     Opacity,
     Blur,
@@ -180,6 +181,33 @@ enum Slot {
     Log,
     License,
     Source,
+}
+
+/// One control of a place's spectrum. The app's has three more, for where it stands.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Knob {
+    Style,
+    Intensity,
+    Color,
+    Gradient,
+    BarWidth,
+    Peaks,
+    Stereo,
+    Response,
+    Opacity,
+    Strip,
+    Fullscreen,
+    StripHeight,
+}
+
+impl Knob {
+    const SLIDERS: [Self; 5] = [
+        Self::Intensity,
+        Self::BarWidth,
+        Self::Response,
+        Self::Opacity,
+        Self::StripHeight,
+    ];
 }
 
 /// One setting on the page: the row that draws it, and the title and detail a search is
@@ -296,6 +324,7 @@ pub struct SettingsView {
     header_measured: bool,
     scrollbar: Entity<Scrollbar>,
     opacity: ScrubberState,
+    spectrum_sliders: HashMap<(SpectrumPlace, Knob), ScrubberState>,
     sleep: ScrubberState,
     /// One slider per equalizer band, lowest first.
     bands: Vec<ScrubberState>,
@@ -394,6 +423,14 @@ impl SettingsView {
             header_measured: false,
             scrollbar: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(me)),
             opacity: ScrubberState::new("opacity"),
+            spectrum_sliders: [SpectrumPlace::App, SpectrumPlace::Mini]
+                .into_iter()
+                .flat_map(|place| Knob::SLIDERS.map(move |knob| (place, knob)))
+                .map(|(place, knob)| {
+                    let id = format!("spectrum-{}-{}", place_id(place), knob_id(knob));
+                    ((place, knob), ScrubberState::new(id))
+                })
+                .collect(),
             sleep: ScrubberState::new("sleep"),
             bands: (0..equalizer::BANDS)
                 .map(|band| ScrubberState::new(format!("equalizer-band-{band}")))
@@ -551,8 +588,13 @@ impl SettingsView {
                     .then_some(Slot::AmbientMotion),
             )
             .chain([
-                Slot::Visualizer,
                 Slot::FullscreenControlsAutohide,
+                Slot::Title("settings-group-spectrum-app"),
+            ])
+            .chain(self.spectrum_slots(SpectrumPlace::App, cx))
+            .chain([Slot::Title("settings-group-spectrum-mini")])
+            .chain(self.spectrum_slots(SpectrumPlace::Mini, cx))
+            .chain([
                 Slot::Title("settings-group-lyrics"),
                 Slot::PanelLyricsSize,
                 Slot::FullscreenLyricsSize,
@@ -647,7 +689,18 @@ impl SettingsView {
                 t!("settings-ambient-motion"),
                 t!("settings-ambient-motion-detail"),
             ),
-            Slot::Visualizer => (t!("settings-visualizer"), t!("settings-visualizer-detail")),
+            Slot::Spectrum(place, knob) => {
+                let (title, detail) = knob_keys(knob);
+                let group = match place {
+                    SpectrumPlace::App => t!("settings-group-spectrum-app"),
+                    SpectrumPlace::Mini => t!("settings-group-spectrum-mini"),
+                };
+                let detail = i18n::lookup(detail, None);
+                (
+                    i18n::lookup(title, None),
+                    format!("{detail} {group}").into(),
+                )
+            }
             Slot::Icons => (t!("settings-icons"), t!("settings-icons-detail")),
             Slot::Opacity => (t!("settings-opacity"), t!("settings-opacity-detail")),
             Slot::Blur => (t!("settings-blur"), t!("settings-blur-detail")),
@@ -860,7 +913,7 @@ impl SettingsView {
             Slot::Adaptive => self.adaptive_row(cx).element,
             Slot::Ambient => self.ambient_row(cx).element,
             Slot::AmbientMotion => self.ambient_motion_row(cx).element,
-            Slot::Visualizer => self.visualizer_style_row(cx).element,
+            Slot::Spectrum(place, knob) => self.spectrum_row(place, knob, cx).element,
             Slot::Icons => self.icons_row(cx).element,
             Slot::Opacity => self.opacity_row(cx).element,
             Slot::Blur => self.blur_row(cx).element,
@@ -1748,31 +1801,217 @@ impl SettingsView {
     }
 
     /// How the spectrum is drawn behind the fullscreen artwork, off included.
-    fn visualizer_style_row(&self, cx: &mut Context<Self>) -> Setting {
+    /// The rows one place's spectrum shows. The style comes first and switches it off; the rest
+    /// only while it is drawn, and the bar options only for a style made of bars.
+    fn spectrum_slots(&self, place: SpectrumPlace, cx: &App) -> Vec<Slot> {
+        let spectrum = self.settings.read(cx).spectrum();
+        let style = spectrum.profile(place).style();
+        let row = |knob| Slot::Spectrum(place, knob);
+        let mut slots = vec![row(Knob::Style)];
+        if !style.shown() {
+            return slots;
+        }
+        if place == SpectrumPlace::App {
+            slots.push(row(Knob::Strip));
+            if spectrum.in_strip {
+                slots.push(row(Knob::StripHeight));
+            }
+            slots.push(row(Knob::Fullscreen));
+        }
+        slots.extend([row(Knob::Intensity), row(Knob::Color), row(Knob::Gradient)]);
+        if matches!(
+            style,
+            VisualizerStyle::Bars | VisualizerStyle::Both | VisualizerStyle::Mirror
+        ) {
+            slots.extend([row(Knob::BarWidth), row(Knob::Peaks)]);
+        }
+        slots.extend([row(Knob::Stereo), row(Knob::Response), row(Knob::Opacity)]);
+        slots
+    }
+
+    fn spectrum_row(&self, place: SpectrumPlace, knob: Knob, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
-        let chosen = self.settings.read(cx).visualizer_style();
+        let spectrum = self.settings.read(cx).spectrum();
+        let profile = spectrum.profile(place).clone();
+        let (title, detail) = knob_keys(knob);
 
-        let picker = Picker::new(VISUALIZER_STYLE, &self.popovers, chosen.label())
-            .width(Picker::NARROW)
-            .items(VisualizerStyle::ALL.map(|style| {
-                MenuItem::new(style.id(), style.label())
-                    .selected(style == chosen)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings
-                            .update(cx, |settings, cx| settings.set_visualizer_style(style, cx));
-                        cx.notify();
+        let control = match knob {
+            Knob::Style => {
+                let chosen = profile.style();
+                Picker::new(picker_key(place, knob), &self.popovers, chosen.label())
+                    .width(Picker::NARROW)
+                    .items(VisualizerStyle::ALL.map(|style| {
+                        MenuItem::new(style.id(), style.label())
+                            .selected(style == chosen)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.spectrum(place, cx, |profile| profile.set_style(style));
+                            }))
                     }))
-            }));
+                    .into_any_element()
+            }
+            Knob::Color => self.spectrum_color(place, knob, Some(profile.color()), false, cx),
+            Knob::Gradient => self.spectrum_color(place, knob, profile.gradient(), true, cx),
+            Knob::Peaks | Knob::Stereo | Knob::Strip | Knob::Fullscreen => {
+                let on = match knob {
+                    Knob::Peaks => profile.peaks,
+                    Knob::Stereo => profile.stereo,
+                    Knob::Strip => spectrum.in_strip,
+                    _ => spectrum.in_fullscreen,
+                };
+                Switch::new(picker_key(place, knob), on)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings.update(cx, |settings, cx| {
+                            settings.set_spectrum(
+                                |spectrum| match knob {
+                                    Knob::Peaks => spectrum.profile_mut(place).peaks = !on,
+                                    Knob::Stereo => spectrum.profile_mut(place).stereo = !on,
+                                    Knob::Strip => spectrum.in_strip = !on,
+                                    _ => spectrum.in_fullscreen = !on,
+                                },
+                                cx,
+                            )
+                        });
+                    }))
+                    .into_any_element()
+            }
+            Knob::Intensity
+            | Knob::BarWidth
+            | Knob::Response
+            | Knob::Opacity
+            | Knob::StripHeight => self.spectrum_slider(place, knob, &spectrum, cx),
+        };
 
         self.row(
-            t!("settings-visualizer"),
-            t!("settings-visualizer-detail"),
+            i18n::lookup(title, None),
+            i18n::lookup(detail, None),
             muted,
             small,
-            picker.into_any_element(),
+            control,
         )
+    }
+
+    /// A colour picker with a swatch of what it resolves to. The fade picker also offers none.
+    fn spectrum_color(
+        &self,
+        place: SpectrumPlace,
+        knob: Knob,
+        chosen: Option<VisualizerColor>,
+        optional: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = *cx.theme();
+        let label = chosen.map_or_else(|| t!("settings-spectrum-gradient-none"), |c| c.label());
+        let set = move |this: &mut Self, color: Option<VisualizerColor>, cx: &mut Context<Self>| {
+            this.spectrum(place, cx, |profile| match knob {
+                Knob::Gradient => profile.set_gradient(color),
+                _ => profile.set_color(color.unwrap_or_default()),
+            });
+        };
+
+        let mut picker =
+            Picker::new(picker_key(place, knob), &self.popovers, label).width(Picker::NARROW);
+        if optional {
+            picker = picker.item(
+                MenuItem::new("none", t!("settings-spectrum-gradient-none"))
+                    .selected(chosen.is_none())
+                    .on_click(cx.listener(move |this, _, _, cx| set(this, None, cx))),
+            );
+        }
+        picker = picker.items(VisualizerColor::SOURCES.map(|source| {
+            MenuItem::new(source.id(), source.label())
+                .selected(chosen == Some(source))
+                .on_click(cx.listener(move |this, _, _, cx| set(this, Some(source), cx)))
+        }));
+        // A colour typed into settings.json is not something a menu can offer, so it joins the
+        // list as the entry it already is rather than disappearing from it.
+        if let Some(custom @ VisualizerColor::Custom(_)) = chosen {
+            picker = picker.item(MenuItem::new("custom", custom.label()).selected(true));
+        }
+
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when_some(chosen, |this, color| {
+                this.child(
+                    div()
+                        .size(theme.text(Text::Body))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(color.resolve(cx)),
+                )
+            })
+            .child(picker)
+            .into_any_element()
+    }
+
+    /// A slider for one of a spectrum's numbers, with its value read out beside it.
+    fn spectrum_slider(
+        &self,
+        place: SpectrumPlace,
+        knob: Knob,
+        spectrum: &SpectrumSettings,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = *cx.theme();
+        let (low, high) = knob_range(knob);
+        let value = knob_value(knob, spectrum, place);
+        let fraction = ((value - low) / (high - low)).clamp(0., 1.);
+        let reading = match knob {
+            Knob::BarWidth => t!("settings-spectrum-pixels", value = format!("{value:.1}")),
+            Knob::Response => t!("settings-spectrum-millis", value = value.round() as i64),
+            _ => t!(
+                "settings-spectrum-percent",
+                value = (value * 100.).round() as i64
+            ),
+        };
+        let Some(state) = self.spectrum_sliders.get(&(place, knob)) else {
+            return div().into_any_element();
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div().w(theme.metrics.cover).child(
+                    Scrubber::new(state, fraction)
+                        .colors(theme.progress_bar, theme.muted, theme.foreground)
+                        .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
+                            let value = low + fraction * (high - low);
+                            this.settings.update(cx, |settings, cx| {
+                                settings.set_spectrum(
+                                    |spectrum| set_knob(knob, spectrum, place, value),
+                                    cx,
+                                )
+                            });
+                        })),
+                ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme.metrics.control * 1.5)
+                    .whitespace_nowrap()
+                    .text_right()
+                    .child(reading),
+            )
+            .into_any_element()
+    }
+
+    /// Changes one place's profile.
+    fn spectrum(
+        &mut self,
+        place: SpectrumPlace,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut SpectrumProfile),
+    ) {
+        self.settings.update(cx, |settings, cx| {
+            settings.set_spectrum(|spectrum| change(spectrum.profile_mut(place)), cx)
+        });
+        cx.notify();
     }
 
     fn fullscreen_controls_autohide_row(&self, cx: &mut Context<Self>) -> Setting {
@@ -4336,5 +4575,123 @@ fn hertz(frequency: f32) -> SharedString {
             khz = (frequency / 1_000.).round() as i64
         ),
         false => t!("settings-equalizer-hertz", hz = frequency.round() as i64),
+    }
+}
+
+fn place_id(place: SpectrumPlace) -> &'static str {
+    match place {
+        SpectrumPlace::App => "app",
+        SpectrumPlace::Mini => "mini",
+    }
+}
+
+fn knob_id(knob: Knob) -> &'static str {
+    match knob {
+        Knob::Style => "style",
+        Knob::Intensity => "intensity",
+        Knob::Color => "color",
+        Knob::Gradient => "gradient",
+        Knob::BarWidth => "bar-width",
+        Knob::Peaks => "peaks",
+        Knob::Stereo => "stereo",
+        Knob::Response => "response",
+        Knob::Opacity => "opacity",
+        Knob::Strip => "strip",
+        Knob::Fullscreen => "fullscreen",
+        Knob::StripHeight => "strip-height",
+    }
+}
+
+/// The popover and element key for one place's control. It has to be static, so the two places
+/// each spell theirs out.
+fn picker_key(place: SpectrumPlace, knob: Knob) -> &'static str {
+    match (place, knob) {
+        (SpectrumPlace::App, Knob::Style) => "spectrum-app-style",
+        (SpectrumPlace::App, Knob::Color) => "spectrum-app-color",
+        (SpectrumPlace::App, Knob::Gradient) => "spectrum-app-gradient",
+        (SpectrumPlace::App, Knob::Peaks) => "spectrum-app-peaks",
+        (SpectrumPlace::App, Knob::Stereo) => "spectrum-app-stereo",
+        (SpectrumPlace::App, Knob::Strip) => "spectrum-app-strip",
+        (SpectrumPlace::App, Knob::Fullscreen) => "spectrum-app-fullscreen",
+        (SpectrumPlace::Mini, Knob::Style) => "spectrum-mini-style",
+        (SpectrumPlace::Mini, Knob::Color) => "spectrum-mini-color",
+        (SpectrumPlace::Mini, Knob::Gradient) => "spectrum-mini-gradient",
+        (SpectrumPlace::Mini, Knob::Peaks) => "spectrum-mini-peaks",
+        (SpectrumPlace::Mini, Knob::Stereo) => "spectrum-mini-stereo",
+        _ => "spectrum-other",
+    }
+}
+
+/// The title and detail keys of a control.
+fn knob_keys(knob: Knob) -> (&'static str, &'static str) {
+    match knob {
+        Knob::Style => ("settings-visualizer", "settings-visualizer-detail"),
+        Knob::Intensity => (
+            "settings-spectrum-intensity",
+            "settings-spectrum-intensity-detail",
+        ),
+        Knob::Color => ("settings-spectrum-color", "settings-spectrum-color-detail"),
+        Knob::Gradient => (
+            "settings-spectrum-gradient",
+            "settings-spectrum-gradient-detail",
+        ),
+        Knob::BarWidth => (
+            "settings-spectrum-bar-width",
+            "settings-spectrum-bar-width-detail",
+        ),
+        Knob::Peaks => ("settings-spectrum-peaks", "settings-spectrum-peaks-detail"),
+        Knob::Stereo => (
+            "settings-spectrum-stereo",
+            "settings-spectrum-stereo-detail",
+        ),
+        Knob::Response => (
+            "settings-spectrum-response",
+            "settings-spectrum-response-detail",
+        ),
+        Knob::Opacity => (
+            "settings-spectrum-opacity",
+            "settings-spectrum-opacity-detail",
+        ),
+        Knob::Strip => ("settings-spectrum-strip", "settings-spectrum-strip-detail"),
+        Knob::Fullscreen => (
+            "settings-spectrum-fullscreen",
+            "settings-spectrum-fullscreen-detail",
+        ),
+        Knob::StripHeight => (
+            "settings-spectrum-strip-height",
+            "settings-spectrum-strip-height-detail",
+        ),
+    }
+}
+
+fn knob_range(knob: Knob) -> (f32, f32) {
+    match knob {
+        Knob::Intensity => (ui::MIN_INTENSITY, ui::MAX_INTENSITY),
+        Knob::BarWidth => SpectrumProfile::BAR_WIDTH,
+        Knob::Response => SpectrumProfile::RESPONSE,
+        Knob::Opacity => SpectrumProfile::OPACITY,
+        _ => SpectrumSettings::STRIP_HEIGHT,
+    }
+}
+
+fn knob_value(knob: Knob, spectrum: &SpectrumSettings, place: SpectrumPlace) -> f32 {
+    let profile = spectrum.profile(place);
+    match knob {
+        Knob::Intensity => profile.intensity,
+        Knob::BarWidth => profile.bar_width,
+        Knob::Response => profile.response,
+        Knob::Opacity => profile.opacity,
+        _ => spectrum.strip_height,
+    }
+}
+
+fn set_knob(knob: Knob, spectrum: &mut SpectrumSettings, place: SpectrumPlace, value: f32) {
+    let profile = spectrum.profile_mut(place);
+    match knob {
+        Knob::Intensity => profile.intensity = value,
+        Knob::BarWidth => profile.bar_width = value,
+        Knob::Response => profile.response = value,
+        Knob::Opacity => profile.opacity = value,
+        _ => spectrum.strip_height = value,
     }
 }

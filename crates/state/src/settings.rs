@@ -353,6 +353,10 @@ struct Appearance {
     ambient_motion: bool,
     visualizer: bool,
     visualizer_style: String,
+    /// Absent in a file written before the visualizer had profiles; then `visualizer` and
+    /// `visualizer_style` above seed the app's profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spectrum: Option<SpectrumSettings>,
     icons: String,
     rounding: String,
     blur: bool,
@@ -420,6 +424,183 @@ impl Default for Values {
             appearance: Appearance::default(),
             jam: Jam::default(),
         }
+    }
+}
+
+/// Where a spectrum is drawn. The app itself — the strip above the player bar and fullscreen —
+/// and the mini player each keep a look of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SpectrumPlace {
+    App,
+    Mini,
+}
+
+/// Everything about one place's spectrum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpectrumProfile {
+    /// The drawing style by id; `none` switches the spectrum off in this place.
+    pub style: String,
+    pub intensity: f32,
+    /// Where the colour comes from, by name, or a hex colour.
+    pub color: String,
+    /// A second colour the spectrum fades into towards its top, or `none` for one colour.
+    pub gradient: String,
+    /// How wide one bar is drawn, in pixels. The space between two follows it.
+    pub bar_width: f32,
+    /// Whether each bar keeps a mark at its recent peak that falls back slowly.
+    pub peaks: bool,
+    /// Whether the left channel runs out to the left edge and the right one to the right,
+    /// with the bass meeting in the middle.
+    pub stereo: bool,
+    /// How long the drawn bands take to follow the analyzer, in milliseconds.
+    pub response: f32,
+    /// How strongly it shows through what is drawn over it.
+    pub opacity: f32,
+}
+
+impl SpectrumProfile {
+    pub const BAR_WIDTH: (f32, f32) = (1.5, 10.);
+    pub const RESPONSE: (f32, f32) = (10., 400.);
+    pub const OPACITY: (f32, f32) = (0.1, 1.);
+
+    fn with_opacity(opacity: f32) -> Self {
+        Self {
+            opacity,
+            ..Self::default()
+        }
+    }
+
+    /// Every number inside its range, so a hand-edited file can never break the drawing.
+    fn clamped(mut self) -> Self {
+        self.intensity = within(self.intensity, (ui::MIN_INTENSITY, ui::MAX_INTENSITY));
+        self.bar_width = within(self.bar_width, Self::BAR_WIDTH);
+        self.response = within(self.response, Self::RESPONSE);
+        self.opacity = within(self.opacity, Self::OPACITY);
+        self
+    }
+
+    pub fn style(&self) -> ui::VisualizerStyle {
+        ui::VisualizerStyle::from_id(&self.style)
+    }
+
+    pub fn set_style(&mut self, style: ui::VisualizerStyle) {
+        self.style = style.id().to_owned();
+    }
+
+    /// An unknown value reads as the accent, so a hand-typed colour that does not parse never
+    /// leaves the spectrum invisible.
+    pub fn color(&self) -> ui::VisualizerColor {
+        ui::VisualizerColor::from_id(&self.color)
+    }
+
+    pub fn set_color(&mut self, color: ui::VisualizerColor) {
+        self.color = color.stored();
+    }
+
+    /// The second colour, if the spectrum fades into one.
+    pub fn gradient(&self) -> Option<ui::VisualizerColor> {
+        (self.gradient != NONE).then(|| ui::VisualizerColor::from_id(&self.gradient))
+    }
+
+    pub fn set_gradient(&mut self, color: Option<ui::VisualizerColor>) {
+        self.gradient = color.map_or_else(|| NONE.to_owned(), ui::VisualizerColor::stored);
+    }
+
+    /// How long the drawn bands take to follow the analyzer.
+    pub fn settle(&self) -> Duration {
+        Duration::from_secs_f32(self.response / 1000.)
+    }
+
+    /// Everything the visualizer element draws with.
+    pub fn look(&self) -> ui::VisualizerLook {
+        ui::VisualizerLook {
+            style: self.style(),
+            intensity: self.intensity,
+            bar_width: self.bar_width,
+            peaks: self.peaks,
+            stereo: self.stereo,
+            color: self.color(),
+            gradient: self.gradient(),
+        }
+    }
+}
+
+impl Default for SpectrumProfile {
+    fn default() -> Self {
+        Self {
+            style: ui::VisualizerStyle::default().id().to_owned(),
+            intensity: 1.,
+            color: ui::VisualizerColor::default().stored(),
+            gradient: NONE.to_owned(),
+            bar_width: 3.,
+            peaks: false,
+            stereo: false,
+            response: 40.,
+            opacity: 1.,
+        }
+    }
+}
+
+/// The spectrum in every place it is drawn, kept under `appearance.spectrum`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpectrumSettings {
+    pub app: SpectrumProfile,
+    pub mini: SpectrumProfile,
+    /// Whether the app's spectrum stands above the player bar.
+    pub in_strip: bool,
+    /// Whether it rises behind the fullscreen artwork.
+    pub in_fullscreen: bool,
+    /// How tall the strip above the player bar stands, as a share of the bar.
+    pub strip_height: f32,
+}
+
+impl SpectrumSettings {
+    pub const STRIP_HEIGHT: (f32, f32) = (0.25, 1.5);
+
+    pub fn profile(&self, place: SpectrumPlace) -> &SpectrumProfile {
+        match place {
+            SpectrumPlace::App => &self.app,
+            SpectrumPlace::Mini => &self.mini,
+        }
+    }
+
+    pub fn profile_mut(&mut self, place: SpectrumPlace) -> &mut SpectrumProfile {
+        match place {
+            SpectrumPlace::App => &mut self.app,
+            SpectrumPlace::Mini => &mut self.mini,
+        }
+    }
+
+    fn clamped(mut self) -> Self {
+        self.app = self.app.clamped();
+        self.mini = self.mini.clamped();
+        self.strip_height = within(self.strip_height, Self::STRIP_HEIGHT);
+        self
+    }
+}
+
+impl Default for SpectrumSettings {
+    fn default() -> Self {
+        Self {
+            app: SpectrumProfile::default(),
+            // the mini player's spectrum sits behind every control, so it starts subdued
+            mini: SpectrumProfile::with_opacity(0.55),
+            in_strip: true,
+            in_fullscreen: true,
+            strip_height: 0.5,
+        }
+    }
+}
+
+const NONE: &str = "none";
+
+/// `value` inside `low..=high`; a value that is not a number falls to `low`.
+fn within(value: f32, (low, high): (f32, f32)) -> f32 {
+    match value.is_finite() {
+        true => value.clamp(low, high),
+        false => low,
     }
 }
 
@@ -572,6 +753,7 @@ impl Default for Appearance {
             ambient_motion: true,
             visualizer: true,
             visualizer_style: ui::VisualizerStyle::default().id().to_owned(),
+            spectrum: None,
             icons: icons::BASE.to_owned(),
             rounding: Rounding::Rounded.id().to_owned(),
             blur: true,
@@ -929,13 +1111,21 @@ impl AppSettings {
         self.adaptive_theme() || (fullscreen && self.ambient())
     }
 
-    /// The visualizer's style, `None` when it is off. The old `visualizer` switch is still the
-    /// off state, so a settings file written before the two were one setting keeps its answer.
-    pub fn visualizer_style(&self) -> ui::VisualizerStyle {
-        match self.values.appearance.visualizer {
-            true => ui::VisualizerStyle::from_id(&self.values.appearance.visualizer_style),
-            false => ui::VisualizerStyle::None,
-        }
+    /// The spectrum in every place it is drawn. A file from before the visualizer had
+    /// profiles seeds the app's style from its `visualizer` switch and `visualizer_style`.
+    pub fn spectrum(&self) -> SpectrumSettings {
+        let stored = self.values.appearance.spectrum.clone().unwrap_or_else(|| {
+            let appearance = &self.values.appearance;
+            let mut seeded = SpectrumSettings::default();
+            let style = match appearance.visualizer {
+                true => ui::VisualizerStyle::from_id(&appearance.visualizer_style),
+                false => ui::VisualizerStyle::None,
+            };
+            seeded.app.set_style(style);
+            seeded.mini.set_style(style);
+            seeded
+        });
+        stored.clamped()
     }
 
     pub fn fullscreen_controls_autohide(&self) -> FullscreenControlsAutohide {
@@ -1534,13 +1724,26 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
-    /// Picking a style turns the visualizer on; picking `None` turns it off and leaves the style
-    /// behind it alone, so the old choice comes back with it.
-    pub fn set_visualizer_style(&mut self, style: ui::VisualizerStyle, cx: &mut Context<Self>) {
-        self.values.appearance.visualizer = style.shown();
-        if style.shown() {
-            self.values.appearance.visualizer_style = style.id().to_owned();
+    /// Changes the spectrum settings through `change`, saving only if anything moved.
+    pub fn set_spectrum(
+        &mut self,
+        change: impl FnOnce(&mut SpectrumSettings),
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.spectrum();
+        let mut spectrum = before.clone();
+        change(&mut spectrum);
+        let spectrum = spectrum.clamped();
+        if spectrum == before && self.values.appearance.spectrum.is_some() {
+            return;
         }
+        // upstream's two keys keep following the app, so an older build still agrees
+        let app = spectrum.app.style();
+        self.values.appearance.visualizer = app.shown();
+        if app.shown() {
+            self.values.appearance.visualizer_style = app.id().to_owned();
+        }
+        self.values.appearance.spectrum = Some(spectrum);
         self.schedule_save(cx);
     }
 

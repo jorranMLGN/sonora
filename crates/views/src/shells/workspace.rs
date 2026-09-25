@@ -11,7 +11,8 @@ use ui::{
 };
 
 use crate::chrome::{
-    Chrome, PlayerBar, SidebarLeft, SidebarRight, TitleBarOptions, ToastStack, UpdateNotice,
+    Chrome, PlayerBar, SidebarLeft, SidebarRight, SpectrumStrip, TitleBarOptions, ToastStack,
+    UpdateNotice,
 };
 use crate::shared::confirm::Confirm;
 use crate::shared::playlist_editor::PlaylistEditor;
@@ -43,6 +44,7 @@ impl ContentTransition {
 pub(crate) struct Workspace {
     sidebar: Entity<SidebarLeft>,
     player_bar: Entity<PlayerBar>,
+    spectrum: Entity<SpectrumStrip>,
     sidebar_right: Entity<SidebarRight>,
     playlist_editor: Entity<PlaylistEditor>,
     tag_editor: Entity<TagEditor>,
@@ -68,10 +70,12 @@ impl Workspace {
         let sidebar = cx.new(SidebarLeft::new);
         let sidebar_right = cx.new(|cx| SidebarRight::new(queue.clone(), playback.clone(), cx));
         let player_bar = cx.new(|cx| PlayerBar::new(playback, queue, cx));
+        let spectrum = cx.new(SpectrumStrip::new);
 
         Self {
             sidebar,
             player_bar,
+            spectrum,
             sidebar_right,
             playlist_editor: PlaylistEditor::entity(cx),
             tag_editor: TagEditor::entity(cx),
@@ -347,6 +351,16 @@ impl Render for Workspace {
             .child(
                 div()
                     .relative()
+                    // The spectrum stands on the bar's top edge and leans into the page, out
+                    // of the flow so nothing under it moves as it comes and goes.
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom(bar_height)
+                            .child(self.spectrum.clone()),
+                    )
                     .child(
                         self.player_bar
                             .clone()

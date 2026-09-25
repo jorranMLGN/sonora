@@ -1077,13 +1077,17 @@ impl Render for FullscreenView {
         let lift = (presented_side - side) / 2.;
         let staged = self.panel.is_none() || split;
 
-        let style = self.settings.read(cx).visualizer_style();
-        let visualizer_on = self.panel.is_none() && style.shown();
+        let spectrum = self.settings.read(cx).spectrum();
+        let profile = spectrum.app;
+        let look = profile.look();
+        let visualizer_on = self.panel.is_none() && spectrum.in_fullscreen && look.style.shown();
         match visualizer_on
             .then(|| self.playback.read(cx).spectrum())
             .flatten()
         {
-            Some(spectrum) => self.visualizer.show(cx.entity_id(), spectrum, window),
+            Some(bands) => self
+                .visualizer
+                .show(cx.entity_id(), bands, profile.settle(), window),
             None => self.visualizer.hide(),
         }
         let bottom = |bounds: Bounds<Pixels>| bounds.origin.y + bounds.size.height;
@@ -1118,7 +1122,8 @@ impl Render for FullscreenView {
             .when(visualizer_on, |this| {
                 this.child(
                     Visualizer::new(self.visualizer.levels(), visualizer_max)
-                        .style_kind(style)
+                        .look(look)
+                        .opacity(profile.opacity)
                         .absolute()
                         .left_0()
                         .right_0()
