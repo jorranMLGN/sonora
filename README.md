@@ -2,31 +2,31 @@
 
 # Sonora
 
-[![Build](https://img.shields.io/github/actions/workflow/status/nolight132/sonora/release.yml)](https://github.com/nolight132/sonora/actions/workflows/release.yml)
-[![License](https://img.shields.io/github/license/nolight132/sonora)](./COPYING)
-![Installs](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fsonora-stats.nolight.dev%2Fcount&query=%24.count&label=Installs&color=blue)
+[![Build](https://img.shields.io/github/actions/workflow/status/sonorahq/sonora/release.yml?style=flat-square&label=build)](https://github.com/sonorahq/sonora/actions/workflows/release.yml)
+[![License](https://img.shields.io/github/license/sonorahq/sonora?style=flat-square&label=license)](./COPYING)
+![Installs](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fsonora-stats.nolight.dev%2Fcount&query=%24.count&label=Installs&color=blue&style=flat-square)
 \
 [![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/a8N8Tx23rV)
 [![Matrix](https://img.shields.io/badge/Matrix-000000?style=for-the-badge&logo=matrix&logoColor=white)](https://matrix.to/#/#sonora:nolight.dev)
 
 ### A native music streaming client, built with Rust and GPUI
 
-Stream Spotify, YouTube Music, SoundCloud, and local files all in one **native** app
+Stream from your favorite services and play local files — all in one **native** app.
 </div>
 
 <div align="center">
     <table>
       <tr>
         <td colspan="2">
-          <img width="1602" height="992" alt="image" src="https://github.com/user-attachments/assets/d0357517-a28d-4c90-abd1-4f3e8d8cdedc" />
+          <img width="1613" height="981" alt="image" src="https://github.com/user-attachments/assets/7952a912-7fbc-4186-b467-a08dd7e71e22" />
         </td>
       </tr>
       <tr>
         <td width="50%">
-          <img width="1576" height="945" alt="image" src="https://github.com/user-attachments/assets/70979e4c-261f-4561-b671-04d28a9971a9" />
+          <img width="1623" height="987" alt="image" src="https://github.com/user-attachments/assets/580bf9d6-db85-4fde-b599-82ba2a28cc51" />
         </td>
         <td width="50%">
-          <img width="1576" height="945" alt="image" src="https://github.com/user-attachments/assets/ff3b4284-25e2-4487-bf9b-60d8f56dc44d" />
+          <img width="1623" height="987" alt="image" src="https://github.com/user-attachments/assets/64fcd709-5917-432c-a418-2e07527343d2" />
         </td>
       </tr>
     </table>
@@ -37,18 +37,29 @@ Stream Spotify, YouTube Music, SoundCloud, and local files all in one **native**
     </sub>
 </div>
 
+> [!IMPORTANT]
+> **Sonora is not a piracy tool.**
+>
+> Sonora is not a platform for obtaining or sharing copyrighted material. We will not implement any functions that can be used to export decrypted streams, DRM licenses, content keys, or to convert protected streams into media files.
+>
+> Sonora is not designed to circumvent subscriptions or other restrictions put in place by music streaming platforms. If the service demands that you have a valid subscription in order to play back their tracks, so will Sonora.
+>
+> Features aimed at ripping, downloading, distributing, or gaining access to protected streaming content are out of scope for the project.
+
 ## Features
 
-- **Spotify**, **YouTube**, **SoundCloud**, and local playback
-- Library management within supported providers
-- Gapless playback
-- Audio normalization
-- Synced/karaoke lyrics
-- Romanization
-- Cross-platform support
-- Custom themes
+* **Apple Music, Spotify, YouTube Music, SoundCloud, Deezer, Subsonic/Navidrome** and local playback
+* Several providers connected at once, each with its own library
+* A jam: send what you are playing to the phones, tablets and laptops on your network
+* A mini player that stays above other windows
+* Gapless playback, audio normalization, shuffle, sleep timer
+* Synced/karaoke lyrics, background vocals, and romanization
+* Scrobbling with LastFM, ListenBrainz, LibreFM, and Maloja
+* Themes, fonts, icons, transparency, blur, and window styling
+* Discord Rich Presence, native file opening
+* macOS, Windows, Linux, and (probably) FreeBSD support
 
-## Install
+## Installation
 
 ### macOS
 
@@ -85,34 +96,69 @@ Either `pipewire-alsa` or `pulseaudio-alsa` is required, matching your sound ser
 
 #### Flatpak
 
-Add the Sonora repository once; it pulls the runtime from Flathub and updates with `flatpak update`:
+Add the Sonora repository (updates with `flatpak update`):
 
 ```sh
-flatpak install --user https://nolight132.github.io/sonora/sonora.flatpakref
+flatpak install --user https://sonorahq.github.io/sonora/sonora.flatpakref
 ```
 
-Every release also attaches a standalone `.flatpak` bundle for x86_64 and aarch64 on
-[Releases](https://github.com/nolight132/sonora/releases/latest), for installing without a remote.
+#### AppImage
+
+Download the `x86_64` AppImage from the
+[latest release](https://github.com/sonorahq/sonora/releases/latest), make it executable and run
+it:
+
+```sh
+chmod +x sonora-*.AppImage
+./sonora-*.AppImage
+```
+
+An `aarch64` build is published beside it. The AppImage carries no Vulkan driver and no ALSA
+bridge, so both still come from your system. It does not update itself, but it carries its update
+information, so [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) or an
+AppImage manager such as [AppManager](https://github.com/kem-a/AppManager) can fetch a new release
+for you.
 
 ### Nix
 
-Just use the flake in the project root:
+The flake packages the latest tagged release binary or builds from source if unavailable for your platform.
 
-```sh
-inputs.sonora.packages.${system}.default
+```nix
+inputs.sonora.url = "github:sonorahq/sonora";
 ```
 
-The flake installs the latest tagged release binary.
+```text
+inputs.sonora.packages.${system}.default
+inputs.sonora.packages.${system}.sonora (build from source)
+inputs.sonora.packages.${system}.sonora-bin (prebuilt, if available)
+```
+
+You can set configuration options via the included Home Manager module under `programs.sonora`:
+
+```nix
+{
+  imports = [ inputs.sonora.homeManagerModules.default ];
+  programs.sonora = {
+    enable = true;
+    settings = {
+      provider = "youtube";
+      appearance.theme = "dark";
+    };
+  };
+}
+```
 
 ### Windows
 
 #### Installer
 
-Download and run the [installer](https://github.com/nolight132/sonora/releases/latest/download/Sonora-Setup.exe).
+Download and run the [installer](https://github.com/sonorahq/sonora/releases/latest/download/Sonora-Setup.exe),
+or the [ARM installer](https://github.com/sonorahq/sonora/releases/latest/download/Sonora-Setup-arm64.exe)
+on Windows on ARM.
 
 #### Portable
 
-Download the latest `windows-msvc.exe` for your architecture from [Releases](https://github.com/nolight132/sonora/releases/latest).
+Download the latest `windows-msvc.exe` for your architecture from [Releases](https://github.com/sonorahq/sonora/releases/latest).
 
 ## Community
 
@@ -130,7 +176,7 @@ us quickly locate the relevant parts of the code.
 **However**, using AI cannot act as an excuse for failing to
 understand, review, and test the changes proposed. Furthermore, we expect communication
 with a real person, not a computer. This includes but is not limited to PR/issue text
-generation, comments in discussions, etc. A short summary of minor changes can be 
+generation, comments in discussions, etc. A short summary of minor changes can be
 generated and does not need to be disclosed explicitly, but the reasoning and motivation
 behind a change must come from the contributor and reflect their own understanding.
 
@@ -144,26 +190,29 @@ AI-assisted proofreading and translation of human-written text are permitted.
 
 | Language | Translated | Coverage |
 | --- | --- | --- |
-| English (`en-US`) | 599/599 | 100% |
-| Deutsch (`de`) | 485/599 | 81% |
-| Español (`es`) | 500/599 | 83% |
-| Français (`fr`) | 479/599 | 80% |
-| Italiano (`it`) | 479/599 | 80% |
-| 日本語 (`ja`) | 500/599 | 83% |
-| Русский (`ru`) | 486/599 | 81% |
-| Українська (`uk`) | 486/599 | 81% |
-| Polski (`pl`) | 490/599 | 82% |
-| Português (Brasil) (`pt-BR`) | 500/599 | 83% |
+| English (`en-US`) | 842/842 | 100% |
+| Deutsch (`de`) | 631/842 | 75% |
+| Español (`es`) | 609/842 | 72% |
+| Français (`fr`) | 631/842 | 75% |
+| Italiano (`it`) | 609/842 | 72% |
+| Bahasa Indonesia (`id`) | 609/842 | 72% |
+| 日本語 (`ja`) | 609/842 | 72% |
+| Русский (`ru`) | 711/842 | 84% |
+| Українська (`uk`) | 711/842 | 84% |
+| Polski (`pl`) | 711/842 | 84% |
+| Português (Brasil) (`pt-BR`) | 609/842 | 72% |
+| 简体中文 (`zh-CN`) | 609/842 | 72% |
+| Türkçe (`tr`) | 609/842 | 72% |
 
 <!-- i18n:end -->
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=nolight132%2Fsonora&type=date&logscale=&legend=top-left">
+<a href="https://www.star-history.com/?repos=sonorahq%2Fsonora&type=date&logscale=&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nolight132/sonora&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nolight132/sonora&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nolight132/sonora&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sonorahq/sonora&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sonorahq/sonora&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sonorahq/sonora&type=date&legend=top-left" />
  </picture>
 </a>
 
@@ -173,7 +222,10 @@ Sonora is built with the help of some incredible open-source projects, including
 
 - [Zed](https://github.com/zed-industries/zed) — a wonderful editor (~~ab~~)used by all core team members. Conveniently provides `gpui` — their native Rust rendering stack.
 - [librespot](https://github.com/librespot-org/librespot) — Spotify playback and library integration.
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — certain YouTube ideas implemented in [ytmusic-rs](https://github.com/nolight132/ytmusic-rs) :)
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — certain YouTube ideas implemented in [ytmusic-rs](https://github.com/sonorahq/ytmusic-rs) :)
+
+## Code signing
+Sonora has applied for code signing through SignPath Foundation. Current releases are not yet signed through SignPath Foundation. If approved, signed releases will use free code signing provided by SignPath.io, with a certificate by SignPath Foundation.
 
 ## License
 

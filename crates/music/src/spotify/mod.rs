@@ -22,10 +22,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::spotify::playback::Factory;
-use crate::{MusicApi as _, MusicProvider, ProviderSession, SignInFailure, SignInProblem};
+use crate::{
+    Capabilities, MusicApi as _, MusicProvider, ProviderSession, Shape, SignInFailure,
+    SignInProblem,
+};
 
 pub use auth::AuthConfig;
 pub use client::LibrespotClient;
+pub use lyrics::SpotifyLyrics;
 
 pub struct SpotifyProvider {
     config: AuthConfig,
@@ -57,8 +61,12 @@ impl SpotifyProvider {
             profile,
             api: Arc::new(client),
             playback,
+            shape: Shape::Saved,
             authenticated: true,
-            playcounts: true,
+            capabilities: Capabilities {
+                pins: true,
+                ..Capabilities::ALL
+            },
             expired: false,
         })
     }
@@ -74,6 +82,14 @@ impl MusicProvider for SpotifyProvider {
         "spotify"
     }
 
+    fn reach(&self) -> Option<String> {
+        Some("apresolve.spotify.com".to_owned())
+    }
+
+    fn public_art(&self) -> bool {
+        true
+    }
+
     fn sign_in_options(&self) -> Vec<crate::SignIn> {
         vec![crate::SignIn::Default]
     }
@@ -83,7 +99,7 @@ impl MusicProvider for SpotifyProvider {
     }
 
     fn stored(&self) -> bool {
-        self.config.cache_dir.join("credentials.json").exists()
+        self.config.file().exists()
     }
 
     async fn restore(&self) -> Result<Option<ProviderSession>> {
@@ -99,10 +115,10 @@ impl MusicProvider for SpotifyProvider {
     async fn sign_in(
         &self,
         _method: crate::SignIn,
-        _prompt: crate::PromptSink,
+        prompt: crate::PromptSink,
         _input: crate::InputSource,
     ) -> Result<ProviderSession> {
-        let session = auth::login(&self.config)
+        let session = auth::login(&self.config, prompt)
             .await
             .map_err(|error| self.drop_free(error))?;
         self.session(LibrespotClient::new(session)).await

@@ -1,25 +1,57 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
 
 use std::sync::Arc;
 
 use gpui::{App, Context, Entity, Task};
-use music::{GenreItem, GenreSection, MusicApi, Track};
+use music::{GenreItem, GenreSection, HomeFeed, MusicApi, Track};
 
-use crate::{Io, Library, LibraryPart, LibraryState, Session, SessionEvent, join};
+use crate::{Io, Library, LibraryPart, LibraryState, Network, Session, SessionEvent, Shelf, join};
 
 const GROUP_SIZE: usize = 10;
 const LIMIT: usize = GROUP_SIZE * 3;
+/// How long to wait before asking for the feed again after nothing of it arrived, per try;
+/// a provider that answers 503 for a moment is usually back by the second one.
+const RETRIES: [Duration; 3] = [
+    Duration::from_secs(3),
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+];
+
+/// How many rows Quick picks holds at most: the provider's own recent items first, then its
+/// picks up to here.
+const PICKS_LIMIT: usize = 30;
 
 pub struct Home {
     library: Entity<Library>,
     session: Entity<Session>,
     io: Io,
-    listen_again: Rc<Vec<Track>>,
-    quick_picks: Rc<Vec<Track>>,
-    quick_picks_seed: u64,
+    /// What the provider listed as played lately, as it came.
+    recent: Rc<Vec<GenreItem>>,
+    /// The tracks that follow the recent ones: the provider's Quick picks, or a mix from the
+    /// library when the provider has none.
+    picks: Rc<Vec<Track>>,
+    /// `recent` and then `picks`, up to `PICKS_LIMIT`, which is what the page draws as Quick
+    /// picks.
+    quick_picks: Rc<Vec<GenreItem>>,
+    picks_seed: u64,
     sections: Rc<Vec<GenreSection>>,
+    /// One provider's feed so far, by slug. The page is woven from all of them.
+    feeds: HashMap<&'static str, HomeFeed>,
+    /// The slugs asked, in provider order, so weaving keeps the same lanes between lots.
+    order: Vec<&'static str>,
     feeding: bool,
+    /// Why the last fetch brought nothing, kept until a lot lands.
+    error: Option<String>,
+    /// How many fetches have ended with no feed at all since the last sign-in.
+    failures: usize,
+    /// Whether the home page is on screen. While it is, a lot may add to the page but never
+    /// change what is already drawn, so nothing jumps under the user's eyes.
+    visible: bool,
+    /// The last lot that would have changed something on screen, kept whole for the moment
+    /// the page is out of sight.
+    pending: Option<HomeFeed>,
     task: Option<Task<()>>,
     naming: Option<Task<()>>,
 }
@@ -31,46 +63,46 @@ impl Home {
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
-        let quick_picks_seed = fastrand::u64(..);
-        let quick_picks = picks(&library, quick_picks_seed, cx);
+        let picks_seed = fastrand::u64(..);
 
         cx.subscribe(&session, |this, _, event, cx| match event {
             SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
                 this.task = None;
                 this.naming = None;
-                this.listen_again = Rc::new(Vec::new());
+                this.recent = Rc::new(Vec::new());
+                this.picks = Rc::new(Vec::new());
                 this.quick_picks = Rc::new(Vec::new());
                 this.sections = Rc::new(Vec::new());
                 this.feeding = false;
+                this.error = None;
+                this.failures = 0;
+                this.pending = None;
+                this.feeds.clear();
                 this.feed(cx);
+                cx.notify();
             }
-            SessionEvent::Reconnected(_) => {}
+            SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
         .detach();
 
-        cx.observe(&library, |this, library, cx| {
-            match library.read(cx).state(cx) {
-                LibraryState::Ready { .. } if this.quick_picks.is_empty() => {
-                    this.quick_picks = picks(&library, this.quick_picks_seed, cx);
-                }
-                LibraryState::Empty | LibraryState::Failed(_) => {
-                    this.quick_picks = Rc::new(Vec::new());
-                }
-                _ => return,
-            }
-            cx.notify();
-        })
-        .detach();
+        cx.observe(&library, |this, _, cx| this.mix(cx)).detach();
 
         let mut home = Self {
             library,
             session,
             io,
-            listen_again: Rc::new(Vec::new()),
-            quick_picks,
-            quick_picks_seed,
+            recent: Rc::new(Vec::new()),
+            picks: Rc::new(Vec::new()),
+            quick_picks: Rc::new(Vec::new()),
+            picks_seed,
             sections: Rc::new(Vec::new()),
+            feeds: HashMap::new(),
+            order: Vec::new(),
             feeding: false,
+            error: None,
+            failures: 0,
+            visible: false,
+            pending: None,
             task: None,
             naming: None,
         };
@@ -86,6 +118,23 @@ impl Home {
         self.feeding
     }
 
+    /// Why the page is empty, when the feed failed rather than came back empty. Nothing while
+    /// a fetch is in flight or the page has anything to draw, Quick picks mixed from the library
+    /// included, so the failure only shows where there is nothing else.
+    pub fn error(&self) -> Option<&str> {
+        match self.feeding || !self.sections.is_empty() || !self.quick_picks.is_empty() {
+            true => None,
+            false => self.error.as_deref(),
+        }
+    }
+
+    /// Asks for the feed again after a failure, with the pauses between tries started over.
+    pub fn retry(&mut self, cx: &mut Context<Self>) {
+        self.failures = 0;
+        self.task = None;
+        self.feed(cx);
+    }
+
     pub fn feed(&mut self, cx: &mut Context<Self>) {
         if self.feeding || !self.sections.is_empty() {
             return;
@@ -95,51 +144,259 @@ impl Home {
             return;
         }
 
+        self.order = asking.iter().map(|(slug, ..)| *slug).collect();
+        self.feeds.clear();
         self.feeding = true;
+        self.error = None;
         let io = self.io.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
-            let sent: Vec<_> = asking
-                .into_iter()
-                .map(|(name, client)| (name, io.spawn(async move { client.home().await })))
-                .collect();
-
-            let mut feeds = Vec::new();
-            for (name, handle) in sent {
-                match join(handle).await {
-                    Ok(feed) => feeds.push((name, feed)),
-                    Err(error) => log::warn!("home: cannot load the {name} feed: {error:#}"),
+            let mut streams = Vec::new();
+            for (slug, name, client) in asking {
+                match join(io.spawn(async move { client.home_paged().await })).await {
+                    Ok(feed) => streams.push((slug, name, feed)),
+                    Err(error) => {
+                        log::warn!("home: cannot load the {name} feed: {error:#}");
+                        this.update(cx, |this, cx| this.stumbled(&error, cx)).ok();
+                    }
                 }
             }
+            if streams.is_empty() {
+                this.update(cx, |this, cx| this.fed(cx)).ok();
+                return;
+            }
 
-            this.update(cx, |this, cx| {
-                this.feeding = false;
-                let listen: Vec<Vec<Track>> = feeds
-                    .iter()
-                    .map(|(_, feed)| feed.listen_again.clone())
-                    .collect();
-                let picks: Vec<Vec<Track>> = feeds
-                    .iter()
-                    .filter_map(|(_, feed)| feed.quick_picks.clone())
-                    .collect();
-                let sections: Vec<Vec<GenreSection>> = feeds
-                    .iter()
-                    .map(|(name, feed)| credited(name, &feed.sections))
-                    .collect();
-
-                this.listen_again = Rc::new(woven(listen));
-                if !picks.is_empty() {
-                    this.quick_picks = Rc::new(woven(picks));
+            // Every lot is one provider's whole feed so far, so each one replaces that
+            // provider's lane and the page is rewoven from all of them.
+            let mut left = streams.len();
+            loop {
+                let mut arrived = false;
+                for (slug, name, feed) in &mut streams {
+                    let Ok(lot) = feed.try_recv() else {
+                        continue;
+                    };
+                    arrived = true;
+                    let slug = *slug;
+                    let name = *name;
+                    let landed = this.update(cx, |this, cx| {
+                        match lot {
+                            Ok(lot) => this.lane(slug, name, lot, cx),
+                            Err(error) => {
+                                log::warn!("home: cannot load the {name} feed: {error:#}");
+                                this.stumbled(&error, cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                    if landed.is_err() {
+                        return;
+                    }
                 }
-                let sections = woven(sections);
-                this.sections = Rc::new(pruned(&sections));
-                this.name_playlists(sections, cx);
-                cx.notify();
-            })
-            .ok();
+                if arrived {
+                    continue;
+                }
+                let Some((slug, name, feed)) = streams.first_mut() else {
+                    break;
+                };
+                let slug = *slug;
+                let name = *name;
+                match feed.recv().await {
+                    Some(lot) => {
+                        let landed = this.update(cx, |this, cx| {
+                            match lot {
+                                Ok(lot) => this.lane(slug, name, lot, cx),
+                                Err(error) => {
+                                    log::warn!("home: cannot load the {name} feed: {error:#}");
+                                    this.stumbled(&error, cx);
+                                }
+                            }
+                            cx.notify();
+                        });
+                        if landed.is_err() {
+                            return;
+                        }
+                    }
+                    None => {
+                        streams.remove(0);
+                        left -= 1;
+                        if left == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+            this.update(cx, |this, cx| this.fed(cx)).ok();
         }));
     }
 
-    fn providers(&self, cx: &Context<Self>) -> Vec<(&'static str, Arc<dyn MusicApi>)> {
+    /// Records one provider's feed and puts the woven result on the page.
+    fn lane(
+        &mut self,
+        slug: &'static str,
+        name: &'static str,
+        feed: HomeFeed,
+        cx: &mut Context<Self>,
+    ) {
+        self.feeds.insert(
+            slug,
+            HomeFeed {
+                sections: credited(name, &feed.sections),
+                ..feed
+            },
+        );
+        let woven = self.woven();
+        self.land(woven, cx);
+    }
+
+    /// One feed of every signed-in provider, interleaved a row at a time so no provider owns
+    /// the top of the page.
+    fn woven(&self) -> HomeFeed {
+        let lanes: Vec<&HomeFeed> = self
+            .order
+            .iter()
+            .filter_map(|slug| self.feeds.get(slug))
+            .collect();
+        let quick_picks: Vec<Vec<Track>> = lanes
+            .iter()
+            .filter_map(|feed| feed.quick_picks.clone())
+            .collect();
+
+        HomeFeed {
+            listen_again: woven(lanes.iter().map(|feed| feed.listen_again.clone()).collect()),
+            quick_picks: (!quick_picks.is_empty()).then(|| woven(quick_picks)),
+            sections: woven(lanes.iter().map(|feed| feed.sections.clone()).collect()),
+        }
+    }
+
+    /// Records why a provider brought nothing. It only reaches the page when no provider
+    /// brought anything.
+    fn stumbled(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
+        let reason = crate::blamed(error, cx);
+        if self.feeds.is_empty() {
+            self.error = Some(reason);
+        }
+    }
+
+    /// Puts a lot on the page. With the page in view only what is missing lands: a shelf
+    /// already drawn keeps its rows even when the lot has other ones for it, Quick picks may
+    /// only grow at their end, and the lot is kept whole to land once the page is out of
+    /// sight. Out of sight, the lot lands as it is.
+    fn land(&mut self, feed: HomeFeed, cx: &mut Context<Self>) {
+        self.error = None;
+        Network::reached(cx);
+        if !self.visible {
+            self.pending = None;
+            self.take(feed, cx);
+            return;
+        }
+
+        let mut held = false;
+        let mut sections = pruned(&feed.sections);
+        for section in &mut sections {
+            let shown = self
+                .sections
+                .iter()
+                .find(|shown| shown.title == section.title);
+            if let Some(shown) = shown.filter(|shown| shown.items != section.items) {
+                *section = shown.clone();
+                held = true;
+            }
+        }
+        let grown = feed.listen_again.starts_with(&self.recent);
+        let listen_again = match grown {
+            true => feed.listen_again.clone(),
+            false => self.recent.as_ref().clone(),
+        };
+        let quick_picks = feed
+            .quick_picks
+            .clone()
+            .filter(|picks| picks.starts_with(&self.picks));
+        held |= !grown || (feed.quick_picks.is_some() && quick_picks.is_none());
+
+        self.pending = held.then_some(feed.clone());
+        self.take(
+            HomeFeed {
+                listen_again,
+                quick_picks,
+                sections,
+            },
+            cx,
+        );
+    }
+
+    /// Puts a lot on the page as it is.
+    fn take(&mut self, feed: HomeFeed, cx: &mut Context<Self>) {
+        self.recent = Rc::new(feed.listen_again);
+        if let Some(quick_picks) = feed.quick_picks {
+            self.picks = Rc::new(quick_picks);
+        }
+        self.merge();
+        self.sections = Rc::new(pruned(&feed.sections));
+        self.name_playlists(feed.sections, cx);
+    }
+
+    /// Rebuilds what the page draws as Quick picks: the recent items, then the picks that are
+    /// not among them already, up to `PICKS_LIMIT`.
+    fn merge(&mut self) {
+        let mut quick_picks = self.recent.as_ref().clone();
+        let played: HashSet<&str> = self
+            .recent
+            .iter()
+            .filter_map(|item| match item {
+                GenreItem::Track(track) => track.id.as_deref(),
+                _ => None,
+            })
+            .collect();
+        let room = PICKS_LIMIT.saturating_sub(quick_picks.len());
+        let picks: Vec<GenreItem> = self
+            .picks
+            .iter()
+            .filter(|track| track.id.as_deref().is_none_or(|id| !played.contains(id)))
+            .take(room)
+            .cloned()
+            .map(GenreItem::Track)
+            .collect();
+        quick_picks.extend(picks);
+        quick_picks.truncate(PICKS_LIMIT);
+        self.quick_picks = Rc::new(quick_picks);
+    }
+
+    /// Tells the feed whether the home page is on screen. Leaving it lands whatever was held
+    /// back while it was, so the page comes back changed rather than changing in view.
+    pub fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.visible = visible;
+        if visible {
+            return;
+        }
+        if let Some(pending) = self.pending.take() {
+            self.take(pending, cx);
+            cx.notify();
+        }
+    }
+
+    /// The end of a fetch. One that brought nothing is tried again after a `RETRIES` pause,
+    /// since a provider's home is the kind of call that fails for a moment and then works.
+    fn fed(&mut self, cx: &mut Context<Self>) {
+        self.feeding = false;
+        self.mix(cx);
+        if self.sections.is_empty() && self.recent.is_empty() {
+            if let Some(&after) = RETRIES.get(self.failures) {
+                self.failures += 1;
+                self.task = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(after).await;
+                    this.update(cx, |this, cx| this.feed(cx)).ok();
+                }));
+            }
+        } else {
+            self.failures = 0;
+        }
+        cx.notify();
+    }
+
+    /// Every signed-in provider, in provider order: its slug, its display name and its client.
+    fn providers(
+        &self,
+        cx: &Context<Self>,
+    ) -> Vec<(&'static str, &'static str, Arc<dyn MusicApi>)> {
         let session = self.session.read(cx);
 
         session
@@ -147,7 +404,11 @@ impl Home {
             .into_iter()
             .filter_map(|slug| {
                 let client = session.client_for_slug(slug)?;
-                Some((session.provider_name_for(slug).unwrap_or(slug), client))
+                Some((
+                    slug,
+                    session.provider_name_for(slug).unwrap_or(slug),
+                    client,
+                ))
             })
             .collect()
     }
@@ -168,7 +429,7 @@ impl Home {
         self.naming = Some(cx.spawn(async move |this, cx| {
             let sent: Vec<_> = asking
                 .into_iter()
-                .map(|(name, client)| {
+                .map(|(_, name, client)| {
                     let mine: Vec<GenreSection> = sections
                         .iter()
                         .filter(|section| section.provider.as_deref() == Some(name))
@@ -197,16 +458,40 @@ impl Home {
         }));
     }
 
-    pub fn listen_again(&self) -> Rc<Vec<Track>> {
-        self.listen_again.clone()
-    }
-
-    pub fn quick_picks(&self) -> Rc<Vec<Track>> {
+    /// What the page draws as Quick picks: what the provider listed as played lately, mixed,
+    /// tracks beside albums, playlists and artists in the provider's own order, and after
+    /// them the provider's picks, up to `PICKS_LIMIT` rows in all.
+    pub fn quick_picks(&self) -> Rc<Vec<GenreItem>> {
         self.quick_picks.clone()
     }
 
+    /// Whether Quick picks are still on their way: the feed is in flight and nothing of it has
+    /// landed yet, or the library the picks would otherwise be mixed from is.
     pub fn is_loading(&self, cx: &App) -> bool {
-        self.library.read(cx).loading(LibraryPart::Tracks, cx)
+        (self.feeding && self.quick_picks.is_empty())
+            || self
+                .library
+                .read(cx)
+                .loading(Shelf::Streaming, LibraryPart::Tracks)
+    }
+
+    /// Mixes picks from the library, but only in place of a provider's that never came: not
+    /// while the feed is still in flight, and never over picks already there. A signed-out
+    /// run has no feed, so it mixes as soon as the library is ready.
+    fn mix(&mut self, cx: &mut Context<Self>) {
+        if self.feeding || !self.picks.is_empty() {
+            return;
+        }
+        let ready = matches!(
+            self.library.read(cx).state(Shelf::Streaming),
+            LibraryState::Ready(_)
+        );
+        if !ready {
+            return;
+        }
+        self.picks = picks(&self.library, self.picks_seed, cx);
+        self.merge();
+        cx.notify();
     }
 }
 
@@ -262,11 +547,8 @@ fn pruned(sections: &[GenreSection]) -> Vec<GenreSection> {
 }
 
 fn picks(library: &Entity<Library>, seed: u64, cx: &App) -> Rc<Vec<Track>> {
-    let tracks = match library.read(cx).state(cx) {
-        LibraryState::Ready { tracks, .. } => mixed_tracks(tracks, seed),
-        _ => Vec::new(),
-    };
-    Rc::new(tracks)
+    let tracks = library.read(cx).state(Shelf::Streaming).tracks();
+    Rc::new(mixed_tracks(tracks, seed))
 }
 
 fn mixed_tracks(tracks: &[Track], seed: u64) -> Vec<Track> {

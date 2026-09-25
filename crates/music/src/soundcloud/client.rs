@@ -11,6 +11,10 @@ use crate::{
     SavedArtist, Track, UserDetail, UserProfile,
 };
 
+/// How far a library listing reaches. The trait has no limit any more, so the
+/// reach that used to come from the caller lives here.
+const LIMIT: u32 = 10_000;
+
 pub struct SoundCloudClient {
     http: Arc<Http>,
     user: Option<String>,
@@ -67,9 +71,9 @@ impl MusicApi for SoundCloudClient {
         users::images(&self.http, ids).await
     }
 
-    async fn saved_tracks(&self, limit: u32) -> Result<Vec<Track>> {
+    async fn saved_tracks(&self) -> Result<Vec<Track>> {
         let user = self.user_id()?;
-        library::liked_tracks(&self.http, user, limit).await
+        library::liked_tracks(&self.http, user, LIMIT).await
     }
 
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()> {
@@ -85,9 +89,9 @@ impl MusicApi for SoundCloudClient {
         users::track_playcount(&self.http, track_id).await
     }
 
-    async fn playlists(&self, limit: u32) -> Result<Vec<Playlist>> {
+    async fn playlists(&self) -> Result<Vec<Playlist>> {
         let user = self.user_id()?;
-        let (playlists, _albums) = library::saved_sets(&self.http, user, limit).await?;
+        let (playlists, _albums) = library::saved_sets(&self.http, user, LIMIT).await?;
         Ok(playlists)
     }
 
@@ -131,9 +135,9 @@ impl MusicApi for SoundCloudClient {
         playlists::remove_track(&self.http, playlist_id, track_id).await
     }
 
-    async fn saved_albums(&self, limit: u32) -> Result<Vec<Album>> {
+    async fn saved_albums(&self) -> Result<Vec<Album>> {
         let user = self.user_id()?;
-        let (_playlists, albums) = library::saved_sets(&self.http, user, limit).await?;
+        let (_playlists, albums) = library::saved_sets(&self.http, user, LIMIT).await?;
         Ok(albums)
     }
 
@@ -142,9 +146,9 @@ impl MusicApi for SoundCloudClient {
         library::set_saved(&self.http, user, album_id, saved).await
     }
 
-    async fn saved_artists(&self, limit: u32) -> Result<Vec<SavedArtist>> {
+    async fn saved_artists(&self) -> Result<Vec<SavedArtist>> {
         let user = self.user_id()?;
-        library::followed(&self.http, user, limit).await
+        library::followed(&self.http, user, LIMIT).await
     }
 
     async fn set_artist_saved(&self, artist_id: &str, saved: bool) -> Result<()> {

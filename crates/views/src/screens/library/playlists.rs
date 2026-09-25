@@ -5,7 +5,7 @@ use gpui::{AnyElement, App, Entity, TextAlign};
 use i18n::t;
 use music::Playlist;
 use router::Destination;
-use state::{Library, LibraryPart, LibraryState, Origin, Playback};
+use state::{Library, LibraryPart, Origin, Playback, Shelf};
 use ui::rank::{ESSENTIAL, HANDY, NICE, SPARE};
 use ui::{Cell, ColumnSpec, Menu, Pin, TableSource, Width};
 
@@ -73,7 +73,7 @@ pub(super) const COLUMNS: &[ColumnSpec<PlaylistField>] =
 pub(super) struct PlaylistSource {
     library: Entity<Library>,
     playback: Entity<Playback>,
-    slug: &'static str,
+    shelf: Shelf,
     owned: bool,
 }
 
@@ -81,12 +81,12 @@ impl PlaylistSource {
     pub(super) fn shelved(
         library: Entity<Library>,
         playback: Entity<Playback>,
-        slug: &'static str,
+        shelf: Shelf,
     ) -> Self {
         Self {
             library,
             playback,
-            slug,
+            shelf,
             owned: false,
         }
     }
@@ -99,7 +99,7 @@ impl PlaylistSource {
             playback.play_origin(played.clone(), cx)
         });
 
-        cells::index(cell, state, true, None, press, cx)
+        cells::index(cell, state, true, None, None, press, cx)
     }
 
     pub(super) fn at(&self, row: usize, cx: &App) -> Option<Playlist> {
@@ -107,13 +107,7 @@ impl PlaylistSource {
     }
 
     fn playlists<'a>(&self, cx: &'a App) -> &'a [Playlist] {
-        let Some(shelf) = self.library.read(cx).shelf(self.slug) else {
-            return &[];
-        };
-        match &shelf.state {
-            LibraryState::Ready { playlists, .. } => playlists.as_slice(),
-            _ => &[],
-        }
+        self.library.read(cx).state(self.shelf).playlists()
     }
 }
 
@@ -169,7 +163,9 @@ impl TableSource for PlaylistSource {
     }
 
     fn is_loading(&self, cx: &App) -> bool {
-        super::loading(&self.library, self.slug, LibraryPart::Playlists, cx)
+        self.library
+            .read(cx)
+            .loading(self.shelf, LibraryPart::Playlists)
     }
 
     fn pin(&self, row: usize, cx: &App) -> Option<Pin> {

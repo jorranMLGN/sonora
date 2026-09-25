@@ -14,12 +14,14 @@ use ui::Input;
 
 use crate::chrome::Chrome;
 use crate::shared::menus::{ItemMenu, album_menu, artist_menu, playlist_menu};
-use state::{AlbumHit, ArtistHit, Found, Genres, Hit, Kind, Playback, PlaylistHit, Search, Sonora};
+use state::{
+    AlbumHit, ArtistHit, Found, Genres, Hit, Kind, Network, Playback, PlaylistHit, Search, Sonora,
+};
 use ui::ActiveTheme as _;
 use ui::{
     Activate, Card, Deck, Deselect, Pinnable, Popup, Room, Scrollbar, Scroller, SelectLeft,
-    SelectNext, SelectPrevious, SelectRight, Separator, Text, Theme, VAST, Viewport, clock,
-    eyebrow, scrolled, snapped, vacant,
+    SelectNext, SelectPrevious, SelectRight, Separator, Text, Theme, VAST, clock, eyebrow,
+    scrolled, snapped, tabular, vacant,
 };
 
 use crate::shared::cards;
@@ -27,6 +29,7 @@ use crate::shared::cells;
 use crate::shared::nav_label;
 use crate::shared::pins::Pinned as _;
 use crate::shared::shelves;
+use crate::shared::trouble;
 
 const RAIL: Pixels = gpui::px(12.);
 const LANE: Pixels = gpui::px(246.);
@@ -426,6 +429,7 @@ impl SearchView {
             return cards::released(
                 format!("album-artist-{place}"),
                 album.year,
+                None,
                 album.artist_refs.clone(),
                 album.artists.clone(),
                 theme,
@@ -504,6 +508,7 @@ impl SearchView {
                             .whitespace_nowrap()
                             .text_size(theme.text(Text::Small))
                             .text_color(theme.muted_foreground)
+                            .font_features(tabular())
                             .child(clock(track.duration)),
                     )
                     .press(pressed(Press::Song(Box::new(track.clone())), me))
@@ -659,15 +664,49 @@ impl SearchView {
         )
     }
 
-    fn failure(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let reason = self.search.read(cx).error()?.to_owned();
+    /// The page search shows in place of its results. Nothing here works without the network,
+    /// so the No connection state covers the whole screen the moment it is gone, and a failed
+    /// search or a failed browse shows its own reason otherwise. Asking again is the retry,
+    /// since neither loader counts a failure as served.
+    fn failure(&self, asked: bool, gutter: Pixels, cx: &Context<Self>) -> Option<AnyElement> {
+        let offline = Network::lost(cx);
+        let (id, reason, retry) = match asked {
+            true => {
+                let reason = match offline {
+                    true => None,
+                    false => Some(self.search.read(cx).error()?.to_owned()),
+                };
+                let search = self.search.clone();
+                let query = search.read(cx).query().to_owned();
+                let retry: Box<dyn Fn(&mut App)> = Box::new(move |cx| {
+                    search.update(cx, |search, cx| search.ask(&query, cx));
+                });
+                ("search-lost", reason, retry)
+            }
+            false => {
+                let reason = match offline {
+                    true => None,
+                    false => Some(self.genres.read(cx).error()?.to_owned()),
+                };
+                let genres = self.genres.clone();
+                let retry: Box<dyn Fn(&mut App)> = Box::new(move |cx| {
+                    genres.update(cx, |genres, cx| genres.load(cx));
+                });
+                ("search-browse-lost", reason, retry)
+            }
+        };
 
         Some(
-            div()
-                .flex_none()
-                .text_color(cx.theme().danger)
-                .child(reason)
-                .into_any_element(),
+            trouble::lost(
+                id,
+                t!("trouble-not-loaded"),
+                reason.as_deref(),
+                move |_, _, cx| retry(cx),
+            )
+            .flex_1()
+            .min_h_0()
+            .px(gutter)
+            .into_any_element(),
         )
     }
 
@@ -699,15 +738,11 @@ impl SearchView {
     }
 
     fn browse(&self, gutter: Pixels, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let error = self.genres.read(cx).error().map(str::to_owned);
         let found = self.genres.read(cx).genres();
         let theme = *cx.theme();
         let pad = theme.metrics.inset;
         let width = cells::content_width(window, pad * 2., cx);
-        let scroll = self.browsing.read(cx).scroll().clone();
-        let seen = scroll.bounds().size.height;
-        let viewport = Viewport::measured(scrolled(&scroll), seen, window);
-        let plates = shelves::grid("genre", found, width, viewport, window, cx);
+        let plates = shelves::grid("genre", found, width, window, cx);
 
         div()
             .flex()
@@ -716,13 +751,6 @@ impl SearchView {
             .min_h_0()
             .gap_3()
             .child(div().px(gutter).child(eyebrow(t!("search-browse"), cx)))
-            .children(error.map(|error| {
-                div()
-                    .flex_none()
-                    .px(gutter)
-                    .text_color(theme.danger)
-                    .child(SharedString::from(error))
-            }))
             .child(
                 Scroller::new("search-browse", &self.browsing)
                     .px(gutter)
@@ -814,17 +842,10 @@ impl SearchView {
         let theme = *cx.theme();
         let heights = self.heights(&seats, window, cx);
         let scroll = bar.read(cx).scroll().clone();
-        let seen = scroll.bounds().size.height;
-        let above = match lead.is_some() {
-            true => self.lead.get(),
-            false => Pixels::ZERO,
-        };
-        let viewport = Viewport::measured(scrolled(&scroll) - above, seen, window);
         let me = cx.entity().downgrade();
         let measured = self.lead.clone();
         let tracked = scroll.clone();
         let deck = Deck::new(format!("{id}-deck"))
-            .viewport(viewport)
             .rows(heights)
             .gap(theme.font_size * ROW_GAP)
             .when(lead.is_some(), |deck| {
@@ -1065,26 +1086,29 @@ impl Render for SearchView {
         });
 
         let gutter = pad + inset;
-        let results = match (asked, stacked) {
-            (false, _) => self.browse(gutter, window, cx),
-            (true, true) => self.everything(gutter, window, cx),
-            (true, false) => {
-                let lanes = self.lanes(cx);
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .px(gutter)
-                    .children(lanes.iter().enumerate().flat_map(|(at, lane)| {
-                        [
-                            (at > 0).then(|| Separator::vertical().into_any_element()),
-                            Some(self.column(lane, window, cx)),
-                        ]
-                        .into_iter()
-                        .flatten()
-                    }))
-                    .into_any_element()
-            }
+        let results = match self.failure(asked, gutter, cx) {
+            Some(failure) => failure,
+            None => match (asked, stacked) {
+                (false, _) => self.browse(gutter, window, cx),
+                (true, true) => self.everything(gutter, window, cx),
+                (true, false) => {
+                    let lanes = self.lanes(cx);
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_h_0()
+                        .px(gutter)
+                        .children(lanes.iter().enumerate().flat_map(|(at, lane)| {
+                            [
+                                (at > 0).then(|| Separator::vertical().into_any_element()),
+                                Some(self.column(lane, window, cx)),
+                            ]
+                            .into_iter()
+                            .flatten()
+                        }))
+                        .into_any_element()
+                }
+            },
         };
 
         div()
@@ -1107,10 +1131,6 @@ impl Render for SearchView {
                     .flex_none()
                     .px(gutter)
                     .child(self.input.clone()),
-            )
-            .children(
-                self.failure(cx)
-                    .map(|failure| div().px(gutter).child(failure)),
             )
             .when(!stacked, |this| {
                 this.children(self.best(cx).map(|best| div().px(gutter).child(best)))

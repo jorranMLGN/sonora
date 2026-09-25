@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::{
-    InputSource, MusicProvider, PromptSink, ProviderSession, SignIn, SignInFailure, SignInProblem,
-    SignInPrompt, UserProfile,
+    Capabilities, InputSource, MusicProvider, PromptSink, ProviderSession, Shape, SignIn,
+    SignInFailure, SignInProblem, SignInPrompt, UserProfile,
 };
 use auth::ClientId;
 pub use client::SoundCloudClient;
@@ -99,6 +99,7 @@ impl SoundCloudProvider {
     fn guest_session(&self, client_id: ClientId, expired: bool) -> ProviderSession {
         let http = Arc::new(Http::anonymous(client_id));
         ProviderSession {
+            shape: Shape::Saved,
             profile: UserProfile {
                 id: GUEST_ID.to_string(),
                 display_name: "SoundCloud".to_string(),
@@ -106,7 +107,11 @@ impl SoundCloudProvider {
             playback: Arc::new(playback::Factory::new(http.clone())),
             api: Arc::new(SoundCloudClient::new(http)),
             authenticated: false,
-            playcounts: false,
+            capabilities: Capabilities {
+                radio: false,
+                playcounts: false,
+                ..Capabilities::ALL
+            },
             expired,
         }
     }
@@ -115,11 +120,16 @@ impl SoundCloudProvider {
         let http = Arc::new(http);
         let client = SoundCloudClient::new(http.clone()).as_user(profile.id.clone());
         ProviderSession {
+            shape: Shape::Saved,
             profile,
             api: Arc::new(client),
             playback: Arc::new(playback::Factory::new(http)),
             authenticated: true,
-            playcounts: false,
+            capabilities: Capabilities {
+                radio: false,
+                playcounts: false,
+                ..Capabilities::ALL
+            },
             expired: false,
         }
     }
@@ -241,9 +251,9 @@ impl MusicProvider for SoundCloudProvider {
                 log::debug!("soundcloud: token sign-in succeeded");
                 Ok(self.authenticated_session(http, profile))
             }
-            SignIn::Browser(_) | SignIn::Path(_) => Err(anyhow::anyhow!(
-                "soundcloud does not support this sign-in method"
-            )),
+            SignIn::Browser(_) | SignIn::Path(_) | SignIn::Credentials { .. } => Err(
+                anyhow::anyhow!("soundcloud does not support this sign-in method"),
+            ),
         }
     }
 

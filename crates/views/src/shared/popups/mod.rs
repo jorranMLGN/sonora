@@ -1,17 +1,18 @@
 mod accounts;
-mod browsers;
-mod secret;
+mod cookie;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, Context, Div, ElementId, Entity, EntityId, Pixels, ScrollHandle, Window, div, px};
+use gpui::{
+    App, Context, Div, ElementId, Entity, EntityId, FocusHandle, Pixels, ScrollHandle, Window, div,
+    px,
+};
 use ui::{Input, Menu, Picker, Scrollbar, SelectNext, SelectPrevious, Submit};
 
 pub(crate) use accounts::AccountPicker;
-pub(crate) use browsers::BrowserPicker;
-pub(crate) use secret::SecretPrompt;
+pub(crate) use cookie::CookiePrompt;
 
 const SEARCH_HEIGHT: Pixels = px(320.);
 const SELECTED_LEAD: usize = 2;
@@ -23,16 +24,25 @@ pub(crate) struct SearchPopup {
     cursor: Rc<Cell<usize>>,
     query: Rc<RefCell<String>>,
     open: Rc<Cell<bool>>,
+    restore: FocusHandle,
 }
 
 impl SearchPopup {
-    pub(crate) fn new(hint: &'static str, watcher: EntityId, cx: &mut App) -> Self {
+    /// `restore` is the handle the popup hands focus back to when it closes, which the
+    /// owning view has to track on an element it always draws.
+    pub(crate) fn new(
+        hint: &'static str,
+        watcher: EntityId,
+        restore: FocusHandle,
+        cx: &mut App,
+    ) -> Self {
         Self {
             input: cx.new(|cx| Input::new(hint, cx).compact().tucked()),
             scrollbar: cx.new(|_| Scrollbar::inset().watching(watcher)),
             cursor: Rc::new(Cell::new(0)),
             query: Rc::new(RefCell::new(String::new())),
             open: Rc::new(Cell::new(false)),
+            restore,
         }
     }
 
@@ -54,6 +64,10 @@ impl SearchPopup {
         self.scrollbar.read(cx).scroll().scroll_to_item(0);
     }
 
+    /// Follows the popover's open state: the search input takes focus while the popup
+    /// is open and gives it back to `restore` on close. Without that hand back focus
+    /// stays on an input that is no longer drawn, which leaves the dispatch path empty,
+    /// so an action raised by a later click reaches no handler at all.
     pub(crate) fn sync(
         &self,
         open: bool,
@@ -66,16 +80,25 @@ impl SearchPopup {
         }
         match open {
             true => {
-                let selected = selected.unwrap_or_default();
-                self.cursor.set(selected);
-                self.scrollbar
-                    .read(cx)
-                    .scroll()
-                    .scroll_to_item(selected.saturating_sub(SELECTED_LEAD));
+                self.place(selected, cx);
                 self.input.update(cx, |input, cx| input.focus(window, cx));
             }
-            false => self.input.update(cx, |input, cx| input.set_text("", cx)),
+            false => {
+                self.input.update(cx, |input, cx| input.set_text("", cx));
+                window.focus(&self.restore, cx);
+            }
         }
+    }
+
+    /// Moves the cursor to `selected` and scrolls it into view, for when the
+    /// list changes under an open popup; `None` goes back to the top.
+    pub(crate) fn place(&self, selected: Option<usize>, cx: &App) {
+        let selected = selected.unwrap_or_default();
+        self.cursor.set(selected);
+        self.scrollbar
+            .read(cx)
+            .scroll()
+            .scroll_to_item(selected.saturating_sub(SELECTED_LEAD));
     }
 
     pub(crate) fn cursor(&self, count: usize) -> usize {

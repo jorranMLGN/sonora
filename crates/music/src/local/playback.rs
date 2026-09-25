@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
@@ -6,7 +8,7 @@ use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::wire;
-use crate::audio::{Output, Volume};
+use crate::audio::{Chain, Output, Volume};
 use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
@@ -17,10 +19,12 @@ enum Command {
     Load {
         id: String,
         at: Option<Duration>,
+        play: bool,
         seamless: bool,
     },
     Preload {
         id: String,
+        segue: bool,
     },
     Play,
     Pause,
@@ -60,11 +64,12 @@ struct Engine {
 }
 
 impl Player for Engine {
-    fn load(&self, track_id: &str, seamless: bool) -> Result<()> {
+    fn load(&self, track_id: &str, at: Duration, seamless: bool) -> Result<()> {
         self.commands
             .send(Command::Load {
                 id: track_id.to_owned(),
-                at: None,
+                at: (!at.is_zero()).then_some(at),
+                play: true,
                 seamless,
             })
             .context("cannot reach local playback engine")
@@ -75,15 +80,17 @@ impl Player for Engine {
             .send(Command::Load {
                 id: track_id.to_owned(),
                 at: Some(at),
+                play: false,
                 seamless: false,
             })
             .context("cannot reach local playback engine")
     }
 
-    fn preload(&self, track_id: &str) -> Result<()> {
+    fn preload(&self, track_id: &str, segue: bool) -> Result<()> {
         self.commands
             .send(Command::Preload {
                 id: track_id.to_owned(),
+                segue,
             })
             .context("cannot reach local playback engine")
     }
@@ -123,6 +130,30 @@ struct Slot {
     length: Option<Duration>,
 }
 
+/// A file read from `skip` on, with every position counted from there, so the decoder never
+/// sees the ID3v2 tag in front of the audio. A seek back to the first frame then lands on that
+/// frame, not inside the tag, where a cover picture can pass for a frame header.
+struct Audio {
+    file: File,
+    skip: u64,
+}
+
+impl Read for Audio {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.file.read(buf)
+    }
+}
+
+impl Seek for Audio {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let pos = match pos {
+            SeekFrom::Start(at) => SeekFrom::Start(at.saturating_add(self.skip)),
+            relative => relative,
+        };
+        Ok(self.file.seek(pos)?.saturating_sub(self.skip))
+    }
+}
+
 fn run(
     config: PlaybackConfig,
     commands: UnboundedReceiver<Command>,
@@ -150,7 +181,14 @@ async fn engine_loop(
     spectrum: Spectrum,
     cast: Option<CastSink>,
 ) {
-    let output = match Output::open(Volume::new(config.gain), spectrum, "local", cast) {
+    let chain = Chain {
+        volume: Volume::new(config.gain),
+        equalizer: config.equalizer.clone(),
+        spectrum,
+        slug: "local",
+        cast,
+    };
+    let output = match Output::open(chain) {
         Ok(output) => output,
         Err(error) => {
             log::error!("playback: cannot open audio output: {error:#}");
@@ -176,7 +214,7 @@ async fn engine_loop(
             command = commands.recv() => {
                 let Some(command) = command else { break };
                 match command {
-                    Command::Load { id, at, seamless } => {
+                    Command::Load { id, at, play, seamless } => {
                         let segued = seamless
                             && at.is_none()
                             && current.as_ref().is_some_and(|slot| slot.id == id);
@@ -184,12 +222,21 @@ async fn engine_loop(
                             playing = true;
                             sink.play();
                             if let Some(length) = current.as_ref().and_then(|slot| slot.length) {
-                                events.send(PlaybackEvent::Length(length)).ok();
+                                events.send(PlaybackEvent::Length {
+                                    id: Some(id.clone()),
+                                    duration: length,
+                                }).ok();
                             }
-                            events.send(PlaybackEvent::Playing(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Playing {
+                                id: Some(id),
+                                at: sink.get_pos(),
+                            }).ok();
                             continue;
                         }
-                        events.send(PlaybackEvent::Loading(at.unwrap_or_default())).ok();
+                        events.send(PlaybackEvent::Loading {
+                            id: Some(id.clone()),
+                            at: at.unwrap_or_default(),
+                        }).ok();
                         sink.clear();
                         current = None;
                         queued = None;
@@ -197,31 +244,43 @@ async fn engine_loop(
                         match load(&sink, &id) {
                             Ok(slot) => {
                                 place(&sink, &id, at);
-                                match at {
-                                    Some(_) => sink.pause(),
-                                    None => sink.play(),
+                                match play {
+                                    true => sink.play(),
+                                    false => sink.pause(),
                                 }
                                 if let Some(length) = slot.length {
-                                    events.send(PlaybackEvent::Length(length)).ok();
+                                    events.send(PlaybackEvent::Length {
+                                        id: Some(id.clone()),
+                                        duration: length,
+                                    }).ok();
                                 }
                                 prev_len = sink.len();
                                 current = Some(slot);
-                                playing = at.is_none();
+                                playing = play;
                                 let position = at.unwrap_or_default();
                                 events
                                     .send(match playing {
-                                        true => PlaybackEvent::Playing(position),
-                                        false => PlaybackEvent::Paused(position),
+                                        true => PlaybackEvent::Playing {
+                                            id: Some(id),
+                                            at: position,
+                                        },
+                                        false => PlaybackEvent::Paused {
+                                            id: Some(id),
+                                            at: position,
+                                        },
                                     })
                                     .ok();
                             }
                             Err(error) => {
                                 log::warn!("playback: cannot load {id}: {error:#}");
-                                events.send(PlaybackEvent::Unavailable).ok();
+                                events.send(PlaybackEvent::Unavailable { id: Some(id) }).ok();
                             }
                         }
                     }
-                    Command::Preload { id } => {
+                    Command::Preload { id, segue } => {
+                        if !segue {
+                            continue;
+                        }
                         let known = current.as_ref().is_some_and(|slot| slot.id == id);
                         if known || current.is_none() || queued.is_some() {
                             continue;
@@ -239,24 +298,35 @@ async fn engine_loop(
                             events.send(PlaybackEvent::OutputChanged).ok();
                             return;
                         }
-                        if current.is_some() {
+                        if let Some(slot) = &current {
                             sink.play();
                             playing = true;
-                            events.send(PlaybackEvent::Playing(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Playing {
+                                id: Some(slot.id.clone()),
+                                at: sink.get_pos(),
+                            }).ok();
                         }
                     }
                     Command::Pause => {
                         playing = false;
                         let position = sink.get_pos();
                         sink.pause();
-                        events.send(PlaybackEvent::Paused(position)).ok();
+                        if let Some(slot) = &current {
+                            events.send(PlaybackEvent::Paused {
+                                id: Some(slot.id.clone()),
+                                at: position,
+                            }).ok();
+                        }
                     }
                     Command::Seek(position) => {
-                        if current.is_some() {
+                        if let Some(slot) = &current {
                             if let Err(error) = sink.try_seek(position) {
                                 log::warn!("playback: cannot seek: {error}");
                             }
-                            events.send(PlaybackEvent::Position(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Seeked {
+                                id: Some(slot.id.clone()),
+                                at: sink.get_pos(),
+                            }).ok();
                         }
                     }
                     Command::Gain(level) => output.set_volume(level),
@@ -275,18 +345,31 @@ async fn engine_loop(
                 ticks += 1;
                 if current.is_some() && playing && len < prev_len {
                     ticks = 0;
-                    events.send(PlaybackEvent::Ended).ok();
+                    if let Some(slot) = &current {
+                        events.send(PlaybackEvent::Ended { id: Some(slot.id.clone()) }).ok();
+                    }
                     current = queued.take();
                     playing = current.is_some();
                     if let Some(slot) = &current {
                         if let Some(length) = slot.length {
-                            events.send(PlaybackEvent::Length(length)).ok();
+                            events.send(PlaybackEvent::Length {
+                                id: Some(slot.id.clone()),
+                                duration: length,
+                            }).ok();
                         }
-                        events.send(PlaybackEvent::Position(sink.get_pos())).ok();
+                        events.send(PlaybackEvent::Position {
+                            id: Some(slot.id.clone()),
+                            at: sink.get_pos(),
+                        }).ok();
                     }
                 } else if playing && ticks >= report_every {
                     ticks = 0;
-                    events.send(PlaybackEvent::Position(sink.get_pos())).ok();
+                    if let Some(slot) = &current {
+                        events.send(PlaybackEvent::Position {
+                            id: Some(slot.id.clone()),
+                            at: sink.get_pos(),
+                        }).ok();
+                    }
                 }
                 prev_len = len;
             }
@@ -306,16 +389,24 @@ fn place(sink: &rodio::Player, id: &str, at: Option<Duration>) {
 fn load(sink: &rodio::Player, id: &str) -> Result<Slot> {
     let path =
         wire::path_from_track_id(id).ok_or_else(|| anyhow!("{id} is not a local track id"))?;
-    let file =
+    let mut file =
         std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let length = file.metadata().ok().map(|meta| meta.len());
-    let reader = std::io::BufReader::new(file);
+
+    let skip = wire::id3v2_end(path);
+    if skip > 0 {
+        let _ = file.seek(SeekFrom::Start(skip));
+    }
+    let gapless = !wire::has_lying_xing_frame_count(path, skip);
+    let reader = std::io::BufReader::new(Audio { file, skip });
 
     let mut builder = rodio::Decoder::builder()
         .with_data(reader)
-        .with_seekable(true);
+        .with_seekable(true)
+        .with_gapless(gapless);
+
     if let Some(length) = length {
-        builder = builder.with_byte_len(length);
+        builder = builder.with_byte_len(length.saturating_sub(skip));
     }
     let source = builder.build().context("cannot decode audio")?;
     let duration = source.total_duration();

@@ -1,13 +1,15 @@
 use ksni::blocking::{Handle, TrayMethods as _};
-use ksni::menu::{MenuItem, StandardItem};
+use ksni::menu::{CheckmarkItem, MenuItem, StandardItem};
 use ksni::{Category, ToolTip};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{Event, Shown};
+use super::{Art, Event, Shown};
 
 const ID: &str = "sonora";
 const ICON_NAME: &str = "sonora";
 const PNG: &[u8] = include_bytes!("../../../../assets/tray/sonora.png");
+/// Flatpak writes this file into every sandbox it starts.
+const FLATPAK_INFO: &str = "/.flatpak-info";
 
 pub struct Icon {
     handle: Handle<Item>,
@@ -20,7 +22,7 @@ impl Icon {
                 let image = image.into_rgba8();
                 let (width, height) = image.dimensions();
                 let mut data = image.into_raw();
-                for pixel in data.chunks_exact_mut(4) {
+                for pixel in data.as_chunks_mut::<4>().0 {
                     pixel.rotate_right(1);
                 }
                 vec![ksni::Icon {
@@ -39,7 +41,11 @@ impl Icon {
             pixmap,
             shown: None,
         };
-        match item.spawn() {
+        // A sandbox cannot own `org.kde.StatusNotifierItem-<pid>-<n>`, and a manifest cannot
+        // grant it: flatpak's own-name wildcard only matches a `.*` suffix. The watcher
+        // accepts the unique bus name instead.
+        let sandboxed = std::path::Path::new(FLATPAK_INFO).exists();
+        match item.disable_dbus_name(sandboxed).spawn() {
             Ok(handle) => Some(Self { handle }),
             Err(error) => {
                 log::warn!("tray: cannot reach the status notifier host: {error}");
@@ -68,6 +74,16 @@ impl Item {
     fn entry(&self, label: &str, event: Event) -> MenuItem<Self> {
         StandardItem {
             label: label.to_owned(),
+            activate: Box::new(move |this: &mut Self| this.send(event)),
+            ..Default::default()
+        }
+        .into()
+    }
+
+    fn checkmark(&self, label: &str, checked: bool, event: Event) -> MenuItem<Self> {
+        CheckmarkItem {
+            label: label.to_owned(),
+            checked,
             activate: Box::new(move |this: &mut Self| this.send(event)),
             ..Default::default()
         }
@@ -123,7 +139,9 @@ impl ksni::Tray for Item {
         vec![
             StandardItem {
                 label: shown.caption.clone(),
-                enabled: false,
+                icon_data: cover(shown.artwork.as_ref()).unwrap_or_default(),
+                enabled: shown.song,
+                activate: Box::new(|this: &mut Self| this.send(Event::Song)),
                 ..Default::default()
             }
             .into(),
@@ -132,8 +150,29 @@ impl ksni::Tray for Item {
             self.entry(&shown.previous, Event::Previous),
             self.entry(&shown.next, Event::Next),
             MenuItem::Separator,
+            self.checkmark(&shown.shuffle, shown.shuffle_on, Event::Shuffle),
+            self.checkmark(&shown.repeat, shown.repeat_on, Event::Repeat),
+            MenuItem::Separator,
             self.entry(&shown.show, Event::Show),
             self.entry(&shown.quit, Event::Quit),
         ]
+    }
+}
+
+/// The cover as the png a menu item carries. A cover that cannot be encoded is simply left off
+/// the row.
+fn cover(art: Option<&Art>) -> Option<Vec<u8>> {
+    let art = art?;
+    let image = image::RgbaImage::from_raw(art.width, art.height, art.data.clone())?;
+
+    let mut png = Vec::new();
+    let written = image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
+    match written {
+        Ok(()) => Some(png),
+        Err(error) => {
+            log::warn!("tray: cannot encode the cover: {error:#}");
+            None
+        }
     }
 }

@@ -6,7 +6,7 @@ use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
 use music::{Album, ArtistRef, MusicApi, Playlist, Track};
 
-use crate::{Io, Library, LibraryState, Session, SessionEvent, join};
+use crate::{Io, Library, Network, Session, SessionEvent, Shelf, join};
 
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const LIMIT: usize = 20;
@@ -99,6 +99,12 @@ struct Catalog {
     playlists: Vec<Playlist>,
 }
 
+impl Catalog {
+    fn is_empty(&self) -> bool {
+        self.tracks.is_empty() && self.albums.is_empty() && self.playlists.is_empty()
+    }
+}
+
 struct Query {
     terms: Vec<String>,
     whole: String,
@@ -149,7 +155,7 @@ impl Search {
                 this.catalogs.clear();
                 this.ask(&pending, cx);
             }
-            SessionEvent::Reconnected(_) => {}
+            SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
         .detach();
 
@@ -273,21 +279,37 @@ impl Search {
                     return;
                 }
                 this.loading = false;
-                this.served = Some(query);
 
+                // a part that failed keeps what it showed before, so a refused request
+                // never blanks the page; the query counts as served only once every part
+                // answered, so asking it again fetches the rest
                 let mut trouble = Vec::new();
+                let mut held: Vec<(&'static str, Catalog)> = std::mem::take(&mut this.catalogs);
                 this.catalogs = answered
                     .into_iter()
                     .map(|(slug, name, songs, albums, playlists)| {
+                        let kept = held
+                            .iter()
+                            .position(|(known, _)| *known == slug)
+                            .map(|at| held.remove(at).1)
+                            .unwrap_or_default();
                         let catalog = Catalog {
-                            tracks: salvaged(songs, name, &mut trouble),
-                            albums: salvaged(albums, name, &mut trouble),
-                            playlists: salvaged(playlists, name, &mut trouble),
+                            tracks: salvaged(songs, name, kept.tracks, &mut trouble),
+                            albums: salvaged(albums, name, kept.albums, &mut trouble),
+                            playlists: salvaged(playlists, name, kept.playlists, &mut trouble),
                         };
                         (slug, catalog)
                     })
                     .collect();
-                this.error = (!trouble.is_empty()).then(|| trouble.join(" · "));
+                let bare = this.catalogs.iter().all(|(_, catalog)| catalog.is_empty());
+                match trouble.first() {
+                    Some(reason) => Network::failed(reason, cx),
+                    None => {
+                        Network::reached(cx);
+                        this.served = Some(query);
+                    }
+                }
+                this.error = (!trouble.is_empty() && bare).then(|| trouble.join(" · "));
                 this.rank(cx);
             })
             .ok();
@@ -384,15 +406,8 @@ impl Search {
 
         self.hits = {
             let held = self.library.read(cx);
-            let (tracks, albums, playlists) = match held.state(cx) {
-                LibraryState::Ready {
-                    tracks,
-                    albums,
-                    playlists,
-                    ..
-                } => (tracks.as_slice(), albums.as_slice(), playlists.as_slice()),
-                _ => (&[][..], &[][..], &[][..]),
-            };
+            let state = held.state(Shelf::Streaming);
+            let (tracks, albums, playlists) = (state.tracks(), state.albums(), state.playlists());
 
             let empty = Catalog::default();
             let mut all: Vec<(Scored, &'static str)> = Vec::new();
@@ -726,12 +741,20 @@ fn capped(mut scored: Vec<Scored>) -> Vec<Scored> {
     scored
 }
 
-fn salvaged<T>(found: Result<Vec<T>>, provider: &str, trouble: &mut Vec<String>) -> Vec<T> {
+/// The rows a search part answered with, or the rows it showed before when the request
+/// failed. The failure is logged and recorded in `trouble`.
+fn salvaged<T>(
+    found: Result<Vec<T>>,
+    provider: &str,
+    kept: Vec<T>,
+    trouble: &mut Vec<String>,
+) -> Vec<T> {
     match found {
         Ok(found) => found,
         Err(error) => {
+            log::warn!("search: {provider}: {error:#}");
             trouble.push(format!("{provider}: {error:#}"));
-            Vec::new()
+            kept
         }
     }
 }

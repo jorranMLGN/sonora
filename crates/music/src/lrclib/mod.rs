@@ -12,7 +12,7 @@ const ENDPOINT: &str = "https://lrclib.net/api/search";
 const AGENT: &str = concat!(
     "sonora/",
     env!("CARGO_PKG_VERSION"),
-    " (https://github.com/nolight132/sonora)"
+    " (https://github.com/sonorahq/sonora)"
 );
 
 pub struct LrcLib {
@@ -140,7 +140,9 @@ fn hit(found: Found) -> Option<LyricsHit> {
         title: found.track_name.unwrap_or_default(),
         artist: found.artist_name.unwrap_or_default(),
         album: found.album_name.filter(|name| !name.is_empty()),
-        duration: found.duration.map(Duration::from_secs_f64),
+        duration: found
+            .duration
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok()),
         writers: Vec::new(),
     })
 }

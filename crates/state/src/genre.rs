@@ -34,7 +34,7 @@ impl Genres {
                 this.error = None;
                 cx.notify();
             }
-            SessionEvent::Reconnected(_) => {}
+            SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
         .detach();
 
@@ -101,9 +101,9 @@ impl Genres {
 
             this.update(cx, |this, cx| {
                 this.loading = false;
-                match loaded {
+                match crate::settled(loaded, cx) {
                     Ok(genres) => this.genres = Rc::new(genres),
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(reason) => this.error = Some(reason),
                 }
                 cx.notify();
             })
@@ -145,7 +145,7 @@ impl GenreDetails {
                     cx.notify();
                 }
             }
-            SessionEvent::Reconnected(_) => {}
+            SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
         .detach();
 
@@ -161,6 +161,10 @@ impl GenreDetails {
             task: None,
             request: None,
         }
+    }
+
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
     }
 
     pub fn name(&self) -> Option<&str> {
@@ -215,9 +219,9 @@ impl GenreDetails {
 
                 this.loading = false;
                 this.request = None;
-                match loaded {
+                match crate::settled(loaded, cx) {
                     Ok(detail) => this.adopt(&id, detail, cx),
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(reason) => this.error = Some(reason),
                 }
                 cx.notify();
             })

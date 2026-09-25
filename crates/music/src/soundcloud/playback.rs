@@ -11,10 +11,10 @@ use super::auth::ClientId;
 use super::http::Http;
 use super::stream;
 use super::wire::{self, Transcoding};
-use crate::audio::trim;
-use crate::audio::{Output, RAMP, SmoothGain, Trimmed, Volume};
+use crate::audio::{Chain, Output, RAMP, SmoothGain, Trimmed, Volume};
 use crate::cast::CastSink;
 use crate::spectrum::Spectrum;
+use crate::trim;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
 
 const POLL: Duration = Duration::from_millis(20);
@@ -57,8 +57,14 @@ pub fn pick(transcodings: &[Transcoding]) -> Option<&Transcoding> {
 }
 
 enum Command {
-    Load { id: String, at: Option<Duration> },
-    Preload { id: String },
+    Load {
+        id: String,
+        at: Option<Duration>,
+        paused: bool,
+    },
+    Preload {
+        id: String,
+    },
     Play,
     Pause,
     Seek(Duration),
@@ -105,11 +111,12 @@ struct Engine {
 }
 
 impl Player for Engine {
-    fn load(&self, track_id: &str, _seamless: bool) -> Result<()> {
+    fn load(&self, track_id: &str, at: Duration, _seamless: bool) -> Result<()> {
         self.commands
             .send(Command::Load {
                 id: track_id.to_string(),
-                at: None,
+                at: (!at.is_zero()).then_some(at),
+                paused: false,
             })
             .context("cannot reach playback engine")
     }
@@ -119,11 +126,12 @@ impl Player for Engine {
             .send(Command::Load {
                 id: track_id.to_string(),
                 at: Some(at),
+                paused: true,
             })
             .context("cannot reach playback engine")
     }
 
-    fn preload(&self, track_id: &str) -> Result<()> {
+    fn preload(&self, track_id: &str, _segue: bool) -> Result<()> {
         self.commands
             .send(Command::Preload {
                 id: track_id.to_string(),
@@ -225,7 +233,14 @@ async fn engine_loop(
     spectrum: Spectrum,
     cast: Option<CastSink>,
 ) {
-    let output = match Output::open(Volume::new(config.gain), spectrum, "soundcloud", cast) {
+    let chain = Chain {
+        volume: Volume::new(config.gain),
+        equalizer: config.equalizer.clone(),
+        spectrum,
+        slug: "soundcloud",
+        cast,
+    };
+    let output = match Output::open(chain) {
         Ok(output) => output,
         Err(error) => {
             log::error!("playback: cannot open audio output: {error:#}");
@@ -258,18 +273,18 @@ async fn engine_loop(
             command = commands.recv() => {
                 let Some(command) = command else { break };
                 match command {
-                    Command::Load { id, at } => {
-                        if at.is_none() && current.as_ref().is_some_and(|slot| slot.id == id) {
+                    Command::Load { id, at, paused } => {
+                        if !paused && current.as_ref().is_some_and(|slot| slot.id == id) {
                             playing = true;
                             autostart = true;
                             if let Some(slot) = &current {
                                 slot.unmute();
                                 if let Some(length) = slot.length {
-                                    events.send(PlaybackEvent::Length(length)).ok();
+                                    events.send(PlaybackEvent::Length { id: current.as_ref().map(|slot| slot.id.clone()), duration: length }).ok();
                                 }
                             }
                             sink.play();
-                            events.send(PlaybackEvent::Playing(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Playing { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
                             continue;
                         }
                         epoch += 1;
@@ -286,7 +301,7 @@ async fn engine_loop(
                             inflight =
                                 Some(spawn(&http, id.clone(), epoch, Kind::Play, &fetched));
                         }
-                        events.send(PlaybackEvent::Loading(at.unwrap_or_default())).ok();
+                        events.send(PlaybackEvent::Loading { id: current.as_ref().map(|slot| slot.id.clone()), at: at.unwrap_or_default() }).ok();
                         if output.failed() || output.changed() {
                             events.send(PlaybackEvent::OutputChanged).ok();
                             return;
@@ -295,7 +310,7 @@ async fn engine_loop(
                         current = None;
                         queued = None;
                         playing = false;
-                        autostart = at.is_none();
+                        autostart = !paused;
                         hold = at;
                         prev_len = 0;
                         let Some(loaded) = cached else { continue };
@@ -308,7 +323,7 @@ async fn engine_loop(
                             }
                             Err(error) => {
                                 log::warn!("playback: cannot decode {id}: {error:#}");
-                                events.send(PlaybackEvent::Unavailable).ok();
+                                events.send(PlaybackEvent::Unavailable { id: current.as_ref().map(|slot| slot.id.clone()) }).ok();
                             }
                         }
                     }
@@ -331,7 +346,7 @@ async fn engine_loop(
                             sink.play();
                             slot.unmute();
                             playing = true;
-                            events.send(PlaybackEvent::Playing(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Playing { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
                         }
                     }
                     Command::Pause => {
@@ -343,7 +358,7 @@ async fn engine_loop(
                             await_drain(&sink).await;
                             sink.pause();
                         }
-                        events.send(PlaybackEvent::Paused(position)).ok();
+                        events.send(PlaybackEvent::Paused { id: current.as_ref().map(|slot| slot.id.clone()), at: position }).ok();
                     }
                     Command::Seek(position) => match &current {
                         None if hold.is_some() => hold = Some(position),
@@ -357,7 +372,7 @@ async fn engine_loop(
                             if playing {
                                 slot.unmute();
                             }
-                            events.send(PlaybackEvent::Position(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Position { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
                         }
                     },
                     Command::Gain(level) => output.set_volume(level),
@@ -387,7 +402,7 @@ async fn engine_loop(
                             }
                             Err(error) => {
                                 log::warn!("playback: cannot load {id}: {error:#}");
-                                events.send(PlaybackEvent::Unavailable).ok();
+                                events.send(PlaybackEvent::Unavailable { id: current.as_ref().map(|slot| slot.id.clone()) }).ok();
                             }
                         }
                     }
@@ -424,22 +439,22 @@ async fn engine_loop(
                 ticks += 1;
                 if current.is_some() && playing && len < prev_len {
                     ticks = 0;
-                    events.send(PlaybackEvent::Ended).ok();
+                    events.send(PlaybackEvent::Ended { id: current.as_ref().map(|slot| slot.id.clone()) }).ok();
                     current = queued.take();
                     ahead = None;
                     playing = current.is_some();
                     match &current {
                         Some(slot) => {
                             if let Some(length) = slot.length {
-                                events.send(PlaybackEvent::Length(length)).ok();
+                                events.send(PlaybackEvent::Length { id: current.as_ref().map(|slot| slot.id.clone()), duration: length }).ok();
                             }
-                            events.send(PlaybackEvent::Position(sink.get_pos())).ok();
+                            events.send(PlaybackEvent::Position { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
                         }
                         None => log::debug!("playback: track ended with nothing queued ahead"),
                     }
                 } else if playing && ticks >= report_every {
                     ticks = 0;
-                    events.send(PlaybackEvent::Position(sink.get_pos())).ok();
+                    events.send(PlaybackEvent::Position { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
                 }
                 prev_len = len;
             }
@@ -552,11 +567,22 @@ fn announce(
     position: Duration,
 ) {
     if let Some(length) = slot.length {
-        events.send(PlaybackEvent::Length(length)).ok();
+        events
+            .send(PlaybackEvent::Length {
+                id: Some(slot.id.clone()),
+                duration: length,
+            })
+            .ok();
     }
     let event = match playing {
-        true => PlaybackEvent::Playing(position),
-        false => PlaybackEvent::Paused(position),
+        true => PlaybackEvent::Playing {
+            id: Some(slot.id.clone()),
+            at: position,
+        },
+        false => PlaybackEvent::Paused {
+            id: Some(slot.id.clone()),
+            at: position,
+        },
     };
     events.send(event).ok();
 }

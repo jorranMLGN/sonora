@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use crate::tag;
 use crate::{
-    Album, AlbumDetail, Artist, ArtistProfile, Genre, GenreDetail, GenreSection, HomeFeed, Lyrics,
+    Album, AlbumDetail, Artist, ArtistProfile, Genre, GenreDetail, GenreSection, HomeFeed,
     MediaKind, MusicApi, Playlist, PlaylistDetail, SavedArtist, Track, TrackTags, UserDetail,
     UserProfile,
 };
@@ -79,8 +79,8 @@ impl MusicApi for Tagged {
             .collect())
     }
 
-    async fn saved_tracks(&self, limit: u32) -> Result<Vec<Track>> {
-        let mut values = self.inner.saved_tracks(limit).await?;
+    async fn saved_tracks(&self) -> Result<Vec<Track>> {
+        let mut values = self.inner.saved_tracks().await?;
         for value in &mut values {
             models::track(self.slug, value);
         }
@@ -91,8 +91,8 @@ impl MusicApi for Tagged {
         self.inner.has_all_tracks()
     }
 
-    async fn all_tracks(&self, limit: u32) -> Result<Vec<Track>> {
-        let mut values = self.inner.all_tracks(limit).await?;
+    async fn all_tracks(&self) -> Result<Vec<Track>> {
+        let mut values = self.inner.all_tracks().await?;
         for value in &mut values {
             models::track(self.slug, value);
         }
@@ -123,12 +123,8 @@ impl MusicApi for Tagged {
         self.inner.track_playcount(tag::untag(track_id)).await
     }
 
-    async fn track_lyrics(&self, track_id: &str) -> Result<Option<Lyrics>> {
-        self.inner.track_lyrics(tag::untag(track_id)).await
-    }
-
-    async fn playlists(&self, limit: u32) -> Result<Vec<Playlist>> {
-        let mut values = self.inner.playlists(limit).await?;
+    async fn playlists(&self) -> Result<Vec<Playlist>> {
+        let mut values = self.inner.playlists().await?;
         for value in &mut values {
             models::playlist(self.slug, value);
         }
@@ -180,8 +176,8 @@ impl MusicApi for Tagged {
             .await
     }
 
-    async fn saved_albums(&self, limit: u32) -> Result<Vec<Album>> {
-        let mut values = self.inner.saved_albums(limit).await?;
+    async fn saved_albums(&self) -> Result<Vec<Album>> {
+        let mut values = self.inner.saved_albums().await?;
         for value in &mut values {
             models::album(self.slug, value);
         }
@@ -194,8 +190,8 @@ impl MusicApi for Tagged {
             .await
     }
 
-    async fn saved_artists(&self, limit: u32) -> Result<Vec<SavedArtist>> {
-        let mut values = self.inner.saved_artists(limit).await?;
+    async fn saved_artists(&self) -> Result<Vec<SavedArtist>> {
+        let mut values = self.inner.saved_artists().await?;
         for value in &mut values {
             models::saved_artist(self.slug, value);
         }

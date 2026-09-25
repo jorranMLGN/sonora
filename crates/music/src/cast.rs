@@ -6,7 +6,8 @@ use anyhow::{Context as _, Result};
 use rodio::Source;
 use rtrb::RingBuffer;
 
-use crate::audio::{Output, Volume};
+use crate::audio::{Chain, Output, Volume};
+use crate::equalizer::Equalizer;
 use crate::spectrum::Spectrum;
 
 const RING_MILLIS: u32 = 1_000;
@@ -105,7 +106,13 @@ impl Sink {
         let skip = Arc::new(AtomicI64::new(0));
         let cut = Arc::new(AtomicBool::new(false));
 
-        let output = Output::open(Volume::new(1.0), Spectrum::new(), "jam", None)?;
+        let output = Output::open(Chain {
+            volume: Volume::new(1.0),
+            equalizer: Equalizer::default(),
+            spectrum: Spectrum::new(),
+            slug: "jam",
+            cast: None,
+        })?;
         output.sink().append(Jitter {
             samples,
             channels,
@@ -236,8 +243,10 @@ mod tests {
         let mut out = Vec::new();
         to_i16(&[2.0, -2.0, f32::INFINITY, f32::NEG_INFINITY], &mut out);
         let values: Vec<i16> = out
-            .chunks_exact(2)
-            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair))
             .collect();
         assert_eq!(values, vec![i16::MAX, i16::MIN, i16::MAX, i16::MIN]);
     }

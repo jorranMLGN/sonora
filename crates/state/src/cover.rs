@@ -32,7 +32,9 @@ impl Cover {
             .detach();
         cx.subscribe(&session, |this, _, event, cx| match event {
             SessionEvent::SignedOut(slug) => this.forget(slug, cx),
-            SessionEvent::SignedIn(_) | SessionEvent::Reconnected(_) => {}
+            SessionEvent::SignedIn(_)
+            | SessionEvent::Reconnected(_)
+            | SessionEvent::LocalChanged => {}
         })
         .detach();
 
@@ -54,6 +56,13 @@ impl Cover {
 
     pub fn max(&self) -> Option<&str> {
         self.max.as_deref().or(self.large.as_deref())
+    }
+
+    /// Returns the large artwork only when it belongs to `album`.
+    pub(crate) fn large_for(&self, album: &str) -> Option<&str> {
+        self.large
+            .as_deref()
+            .filter(|_| self.album.as_deref() == Some(album))
     }
 
     fn forget(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -126,7 +135,10 @@ impl Cover {
                             cx.notify();
                         }
                     }
-                    Err(error) => log::warn!("cover: cannot load {id}: {error:#}"),
+                    Err(error) => {
+                        log::warn!("cover: cannot load {id}: {error:#}");
+                        crate::noted(&error, cx);
+                    }
                 }
             })
             .ok();

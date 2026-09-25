@@ -29,6 +29,7 @@ use crate::shared::menus::{ItemMenu, album_menu, artist_menu};
 use crate::shared::page;
 use crate::shared::picks::{Picks, Shape};
 use crate::shared::tracks::{PlaybackStatus, TrackSource, Tracks, drop_picked, playback_status};
+use crate::shared::trouble;
 
 const SECTION: &str = "artist";
 const RELEASE_ROWS: usize = 2;
@@ -133,8 +134,13 @@ impl ArtistView {
         let saved = settings.read(cx).table(SECTION);
         let sorting = settings.read(cx).sorting(SECTION);
         let mode = settings.read(cx).view_or(SECTION, Mode::List);
-        let columns =
-            crate::shared::tracks::artist_columns(Sonora::global(cx).session.read(cx).playcounts());
+        let columns = crate::shared::tracks::artist_columns(
+            Sonora::global(cx)
+                .session
+                .read(cx)
+                .capabilities()
+                .playcounts,
+        );
         let scroll = scrollbar.read(cx).scroll().clone();
         let shown = Rc::new(Cell::new(LISTED));
         let table = cx.new(|cx| {
@@ -310,7 +316,15 @@ impl ArtistView {
                 )
                 .from(self.playing_from(cx)),
             )
-            .children(self.follow_button(cx))
+            .child(
+                HeroPlayButton::shuffle(
+                    "shuffle-artist",
+                    self.popular.as_ref().clone(),
+                    self.playback.clone(),
+                )
+                .from(self.playing_from(cx)),
+            )
+            .children(self.favorite_button(cx))
             .children(overflow);
 
         let cover = artist.and_then(|artist| artist.cover_large.clone());
@@ -344,33 +358,39 @@ impl ArtistView {
         })
     }
 
-    fn follow_button(&self, cx: &App) -> Option<Button> {
+    fn favorite_button(&self, cx: &App) -> Option<Button> {
         let theme = *cx.theme();
-        let library = Sonora::global(cx).library.clone();
-        let target = self.saved_artist(cx)?;
-        if music::is_local_id(&target.id) {
+        // A provider with no followed artists has nothing for this to toggle.
+        if !Sonora::global(cx)
+            .session
+            .read(cx)
+            .capabilities()
+            .follow_artists
+        {
             return None;
         }
-        let followed = library.read(cx).saved_artist(&target.id);
+        let library = Sonora::global(cx).library.clone();
+        let target = self.saved_artist(cx)?;
+        let saved = library.read(cx).saved_artist(&target.id);
 
         let heart = Button::new("artist-toggle-library")
             .outline()
-            .icon(match followed {
+            .icon(match saved {
                 true => "icons/heart-filled.svg",
                 false => "icons/heart.svg",
             })
-            .tooltip(match followed {
-                true => "artist-unfollow",
-                false => "artist-follow",
+            .tooltip(match saved {
+                true => "menu-remove-from-library",
+                false => "menu-add-to-library",
             })
             .disabled(library.read(cx).pending_artist(&target.id));
 
         Some(
-            match followed {
+            match saved {
                 true => heart.tint(theme.primary),
                 false => heart,
             }
-            .on_click(move |_, _, cx| match followed {
+            .on_click(move |_, _, cx| match saved {
                 true => Confirm::artists(vec![target.clone()], cx),
                 false => {
                     library.update(cx, |library, cx| library.toggle_artist(target.clone(), cx));
@@ -691,12 +711,11 @@ impl ArtistView {
             "artist-popular",
             tracks,
             self.playback.clone(),
-            self.playback_status.0.clone(),
             self.width,
             self.popular_page,
         )
         .title("artist-popular")
-        .eyebrow("artist-popular-eyebrow")
+        .eyebrow(i18n::lookup("artist-popular-eyebrow", None))
         .vacancy("artist-popular-empty")
         .detailed()
         .loading(self.detail.read(cx).is_loading())
@@ -772,14 +791,29 @@ impl ArtistView {
         )
     }
 
+    /// The page an artist shows instead of its hero and its tables when it cannot be read: the
+    /// No connection state as soon as the network is gone, whatever this page happens to hold,
+    /// and the failure of its own load otherwise. Opening the same artist again is the retry.
     fn failure(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let error = self.detail.read(cx).error()?.to_owned();
+        let id = self.detail.read(cx).id()?.to_owned();
+        let reason = match trouble::unreachable(&id, cx) {
+            true => None,
+            false => Some(self.detail.read(cx).error()?.to_owned()),
+        };
+        let detail = self.detail.clone();
+
         Some(
-            div()
-                .pb_4()
-                .text_color(cx.theme().danger)
-                .child(error)
-                .into_any_element(),
+            trouble::lost(
+                "artist-lost",
+                t!("trouble-not-loaded"),
+                reason.as_deref(),
+                move |_, _, cx| {
+                    let id = id.clone();
+                    detail.update(cx, |detail, cx| detail.open(&id, cx));
+                },
+            )
+            .size_full()
+            .into_any_element(),
         )
     }
 }
@@ -800,6 +834,10 @@ impl Tooled for ArtistView {
 
 impl Render for ArtistView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(failure) = self.failure(cx) {
+            return div().relative().size_full().child(failure);
+        }
+
         let theme = *cx.theme();
         let inset = theme.metrics.inset;
         let previous = self.width;
@@ -852,20 +890,15 @@ impl Render for ArtistView {
             .pt(inset)
             .pb(inset)
             .on_scroll_wheel(cx.listener(Self::release_scroll))
-            .child(
-                div()
-                    .child(self.header(cx))
-                    .children(self.failure(cx))
-                    .when(listed, |this| {
-                        this.child(
-                            div()
-                                .pb_3()
-                                .text_size(theme.text(Text::Title))
-                                .font_weight(FontWeight::BOLD)
-                                .child(t!("artist-popular")),
-                        )
-                    }),
-            )
+            .child(div().child(self.header(cx)).when(listed, |this| {
+                this.child(
+                    div()
+                        .pb_3()
+                        .text_size(theme.text(Text::Title))
+                        .font_weight(FontWeight::BOLD)
+                        .child(t!("artist-popular")),
+                )
+            }))
             .child(match self.mode {
                 Mode::Grid => self.popular(cx),
                 Mode::List => self.listed(cx),

@@ -190,9 +190,9 @@ impl Render for MiniPlayer {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(previous(&self.playback, cx))
-                            .child(toggle(&self.playback, false, cx))
-                            .child(next(&self.playback, &self.queue, cx))
+                            .child(previous(&self.playback, false, cx))
+                            .child(toggle(&self.playback, false, false, cx))
+                            .child(next(&self.playback, &self.queue, false, cx))
                             .child(self.loudness(cx)),
                     )
                     .child(

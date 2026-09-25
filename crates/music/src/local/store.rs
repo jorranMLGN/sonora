@@ -1,7 +1,6 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, params};
+use storage::Database;
 
 use crate::LOCAL_PLAYLIST_PREFIX;
 
@@ -11,50 +10,54 @@ pub struct Stored {
     pub modified_at: i64,
 }
 
+/// Which local favorites table a star lands in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Starred {
+    Tracks,
+    Albums,
+    Artists,
+}
+
+impl Starred {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Tracks => "favorites",
+            Self::Albums => "favorite_albums",
+            Self::Artists => "favorite_artists",
+        }
+    }
+
+    fn column(self) -> &'static str {
+        match self {
+            Self::Tracks => "track_id",
+            Self::Albums => "album_id",
+            Self::Artists => "artist_id",
+        }
+    }
+}
+
 pub struct Store {
-    path: PathBuf,
+    database: Database,
 }
 
 impl Store {
-    pub fn new(state_dir: &Path) -> Self {
-        Self {
-            path: state_dir.join("local-playlists.sqlite3"),
-        }
+    pub fn new(database: Database) -> Self {
+        Self { database }
     }
 
-    fn open(&self) -> Result<Connection> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).context("cannot create the local music directory")?;
-        }
-        let connection = Connection::open(&self.path).context("cannot open local playlists")?;
-        connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS playlists (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    modified_at INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS playlist_tracks (
-                    playlist_id TEXT NOT NULL,
-                    track_id TEXT NOT NULL,
-                    position INTEGER NOT NULL,
-                    PRIMARY KEY (playlist_id, track_id)
-                );
-                CREATE INDEX IF NOT EXISTS playlist_tracks_order
-                    ON playlist_tracks (playlist_id, position);
-                CREATE TABLE IF NOT EXISTS favorites (
-                    track_id TEXT PRIMARY KEY,
-                    added_at INTEGER NOT NULL
-                );",
-            )
-            .context("cannot prepare local playlists")?;
-        Ok(connection)
+    fn open(&self) -> Result<rusqlite::Connection> {
+        self.database.open().context("cannot open local playlists")
     }
 
-    pub fn favorites(&self) -> Result<Vec<(String, i64)>> {
+    /// The starred ids of one kind, newest first, with the moment each was starred.
+    pub fn starred(&self, kind: Starred) -> Result<Vec<(String, i64)>> {
         let connection = self.open()?;
         let mut query = connection
-            .prepare("SELECT track_id, added_at FROM favorites ORDER BY added_at DESC")
+            .prepare(&format!(
+                "SELECT {}, added_at FROM {} ORDER BY added_at DESC",
+                kind.column(),
+                kind.table()
+            ))
             .context("cannot read local favorites")?;
         let rows = query
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
@@ -64,16 +67,20 @@ impl Store {
             .context("cannot read local favorites")
     }
 
-    pub fn set_favorite(&self, track_id: &str, saved: bool) -> Result<()> {
+    pub fn set_starred(&self, kind: Starred, id: &str, saved: bool) -> Result<()> {
         let connection = self.open()?;
         match saved {
             true => connection.execute(
-                "INSERT OR REPLACE INTO favorites (track_id, added_at) VALUES (?, ?)",
-                params![track_id, stamp()],
+                &format!(
+                    "INSERT OR REPLACE INTO {} ({}, added_at) VALUES (?, ?)",
+                    kind.table(),
+                    kind.column()
+                ),
+                params![id, stamp()],
             ),
             false => connection.execute(
-                "DELETE FROM favorites WHERE track_id = ?",
-                params![track_id],
+                &format!("DELETE FROM {} WHERE {} = ?", kind.table(), kind.column()),
+                params![id],
             ),
         }
         .context("cannot update a local favorite")?;

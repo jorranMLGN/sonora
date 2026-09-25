@@ -34,7 +34,7 @@ impl SongDetail {
                     cx.notify();
                 }
             }
-            SessionEvent::Reconnected(_) => {}
+            SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
         .detach();
         Self {
@@ -47,6 +47,10 @@ impl SongDetail {
             task: None,
             request: None,
         }
+    }
+
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
     }
 
     pub fn track(&self) -> Option<&Track> {
@@ -106,9 +110,9 @@ impl SongDetail {
                 }
                 this.loading = false;
                 this.request = None;
-                match loaded {
+                match crate::settled(loaded, cx) {
                     Ok(page) => this.page = Some(page),
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(reason) => this.error = Some(reason),
                 }
                 cx.notify();
             })

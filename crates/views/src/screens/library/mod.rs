@@ -16,10 +16,11 @@ use gpui::{
     SharedString, WeakEntity, Window, div, point, px, relative,
 };
 use i18n::t;
-use music::Track;
+use music::{Shape, Track};
 use router::{Destination, LOCAL, LibraryTab, navigate};
 use state::{
-    AppSettings, Library, LibraryPart, LibraryState, Origin, Playback, PlaybackState, Sonora,
+    AppSettings, Library, LibraryPart, LibraryState, Origin, Playback, PlaybackState, Scan, Shelf,
+    Sonora,
 };
 use ui::{
     ActiveTheme as _, Button, Card, Deck, FilterChange, LEADING, Mode, Pinnable, Popovers, Popup,
@@ -33,7 +34,7 @@ use crate::shared::pins::Pinned as _;
 use crate::shared::tracks::{
     self, LIBRARY_COLUMNS, PlaybackStatus, TrackField, TrackSource, Tracks, playback_status,
 };
-use crate::shared::{cards, cells, local, page};
+use crate::shared::{cards, cells, local, page, trouble};
 use albums::{AlbumField, AlbumSource};
 use artists::{ArtistField, ArtistSource};
 use playlists::{PlaylistField, PlaylistSource};
@@ -42,7 +43,6 @@ impl From<LibraryTab> for Section {
     fn from(tab: LibraryTab) -> Self {
         match tab {
             LibraryTab::Songs => Section::Songs,
-            LibraryTab::Favorites => Section::Favorites,
             LibraryTab::Albums => Section::Albums,
             LibraryTab::Playlists => Section::Playlists,
             LibraryTab::Artists => Section::Artists,
@@ -50,9 +50,10 @@ impl From<LibraryTab> for Section {
     }
 }
 
+/// One page of a shelf. Songs lists the favorites on a `Shape::Saved` shelf and every song on a
+/// `Shape::Catalog` one; the other three follow the same rule for their kind.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    Favorites,
     Songs,
     Albums,
     Playlists,
@@ -82,17 +83,15 @@ enum DeckKey {
 }
 
 impl Section {
-    const ALL: [Self; 5] = [
-        Self::Favorites,
-        Self::Songs,
-        Self::Albums,
-        Self::Playlists,
-        Self::Artists,
-    ];
+    const ALL: [Self; 4] = [Self::Songs, Self::Albums, Self::Playlists, Self::Artists];
+
+    /// The settings key a section's layout is stored under, per provider.
+    fn key(self, slug: &str) -> String {
+        format!("{slug}-{}", self.name())
+    }
 
     fn name(self) -> &'static str {
         match self {
-            Section::Favorites => "favorites",
             Section::Songs => "songs",
             Section::Albums => "albums",
             Section::Playlists => "playlists",
@@ -100,119 +99,97 @@ impl Section {
         }
     }
 
-    fn key(self, slug: &str) -> String {
-        format!("{slug}-{}", self.name())
-    }
-
     fn mode(self) -> Mode {
         match self {
-            Section::Favorites | Section::Songs => Mode::List,
+            Section::Songs => Mode::List,
             Section::Albums | Section::Playlists | Section::Artists => Mode::Grid,
         }
     }
 
     fn slot(self) -> usize {
         match self {
-            Section::Favorites => 0,
-            Section::Songs => 1,
-            Section::Albums => 2,
-            Section::Playlists => 3,
-            Section::Artists => 4,
+            Section::Songs => 0,
+            Section::Albums => 1,
+            Section::Playlists => 2,
+            Section::Artists => 3,
         }
     }
 
     fn listing(self) -> bool {
-        matches!(self, Section::Favorites | Section::Songs)
+        self == Section::Songs
     }
 
-    fn vacancy(self, slug: &str) -> &'static str {
-        match (slug == LOCAL, self) {
-            (false, Section::Favorites | Section::Songs) => "library-no-songs",
-            (false, Section::Albums) => "library-no-albums",
-            (false, Section::Playlists) => "library-no-playlists",
-            (false, Section::Artists) => "library-no-artists",
-            (true, Section::Favorites) => "library-no-local-favorites",
-            (true, Section::Songs) => "library-no-local-songs",
-            (true, Section::Albums) => "library-no-local-albums",
-            (true, Section::Playlists) => "library-no-local-playlists",
-            (true, Section::Artists) => "library-no-local-artists",
+    fn vacancy(self, shelf: Shelf, shape: Shape) -> &'static str {
+        match (shelf.local(), shape, self) {
+            (true, _, Section::Songs) => "library-no-local-songs",
+            (true, _, Section::Albums) => "library-no-local-albums",
+            (true, _, Section::Playlists) => "library-no-local-playlists",
+            (true, _, Section::Artists) => "library-no-local-artists",
+            (false, Shape::Saved, Section::Songs) => "library-no-songs",
+            (false, Shape::Saved, Section::Albums) => "library-no-albums",
+            (false, Shape::Saved, Section::Artists) => "library-no-artists",
+            (false, Shape::Catalog, Section::Songs) => "library-no-catalog-songs",
+            (false, Shape::Catalog, Section::Albums) => "library-no-catalog-albums",
+            (false, Shape::Catalog, Section::Artists) => "library-no-catalog-artists",
+            (false, _, Section::Playlists) => "library-no-playlists",
         }
     }
 
-    fn glyph(self) -> &'static str {
-        match self {
-            Section::Favorites => "icons/heart.svg",
-            Section::Songs => "icons/music.svg",
-            Section::Albums => "icons/disc-3.svg",
-            Section::Playlists => "icons/list-music.svg",
-            Section::Artists => "icons/user-round.svg",
+    fn glyph(self, shape: Shape) -> &'static str {
+        match (self, shape) {
+            (Section::Songs, Shape::Saved) => "icons/heart.svg",
+            (Section::Songs, Shape::Catalog) => "icons/music.svg",
+            (Section::Albums, _) => "icons/disc-3.svg",
+            (Section::Playlists, _) => "icons/list-music.svg",
+            (Section::Artists, _) => "icons/user-round.svg",
         }
     }
 
     fn part(self) -> LibraryPart {
         match self {
-            Section::Favorites | Section::Songs => LibraryPart::Tracks,
+            Section::Songs => LibraryPart::Tracks,
             Section::Albums => LibraryPart::Albums,
             Section::Playlists => LibraryPart::Playlists,
             Section::Artists => LibraryPart::Artists,
         }
     }
+}
 
-    fn origin(self, slug: &str) -> Origin {
-        match (slug == LOCAL, self) {
-            (false, _) => Origin::saved(slug),
-            (true, Section::Songs) => Origin::local(),
-            (true, _) => Origin::local_favorites(),
-        }
+fn origin(shelf: Shelf, slug: &str) -> Origin {
+    match shelf.local() {
+        true => Origin::local(),
+        false => Origin::saved(slug),
     }
 }
 
 struct ShelfTracks {
     library: Entity<Library>,
-    slug: &'static str,
-    section: Section,
+    shelf: Shelf,
 }
 
 impl Tracks for ShelfTracks {
     fn tracks<'a>(&self, cx: &'a App) -> &'a [Track] {
-        let Some(shelf) = self.library.read(cx).shelf(self.slug) else {
-            return &[];
-        };
-        let tracks = match &shelf.state {
-            LibraryState::Ready { tracks, .. } => tracks.as_slice(),
-            _ => &[],
-        };
-        match self.section {
-            Section::Favorites => shelf.favorites.as_deref().unwrap_or(tracks),
-            _ => tracks,
-        }
+        self.library.read(cx).state(self.shelf).tracks()
     }
 
     fn is_loading(&self, cx: &App) -> bool {
-        loading(&self.library, self.slug, self.section.part(), cx)
+        loading(&self.library, self.shelf, Section::Songs, cx)
     }
 }
 
-fn loading(library: &Entity<Library>, slug: &str, part: LibraryPart, cx: &App) -> bool {
-    match library.read(cx).shelf(slug) {
-        Some(shelf) => shelf.loading(part),
-        None => joining(slug, cx),
-    }
-}
-
-fn joining(slug: &str, cx: &App) -> bool {
-    let session = Sonora::global(cx).session.read(cx);
-    session.is_pending() && session.provider_slug().is_some_and(|active| active == slug)
+fn loading(library: &Entity<Library>, shelf: Shelf, section: Section, cx: &App) -> bool {
+    library.read(cx).loading(shelf, section.part())
 }
 
 pub struct LibraryView {
     slug: &'static str,
+    shelf: Shelf,
     library: Entity<Library>,
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
     playback_status: PlaybackStatus,
     section: Section,
-    views: [Mode; 5],
+    views: [Mode; 4],
     width: Pixels,
     card_columns: usize,
     card_tile: Pixels,
@@ -221,7 +198,6 @@ pub struct LibraryView {
     cards_dirty: bool,
     card_scrollbar: Entity<Scrollbar>,
     scrollbar: Entity<Scrollbar>,
-    favorites: Entity<TableState<TrackSource>>,
     songs: Entity<TableState<TrackSource>>,
     albums: Entity<TableState<AlbumSource>>,
     playlists: Entity<TableState<PlaylistSource>>,
@@ -229,7 +205,7 @@ pub struct LibraryView {
     context_menu: Option<(LibraryMenu, Point<Pixels>)>,
     toolbar: Entity<Toolbar>,
     popovers: Popovers,
-    sliders: [Sliders; 5],
+    sliders: [Sliders; 4],
     me: WeakEntity<Self>,
 }
 
@@ -241,6 +217,7 @@ impl LibraryView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let shelf = Shelf::Of(slug);
         let width = cells::content_width(window, Pixels::ZERO, cx);
         let settings = Sonora::global(cx).settings.clone();
         let stored = |section: Section, cx: &App| {
@@ -259,47 +236,33 @@ impl LibraryView {
         let scrollbar = cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(id));
         let scroll = scrollbar.read(cx).scroll().clone();
 
-        let listed = |section: Section, cx: &mut Context<TableState<TrackSource>>| {
+        let songs = cx.new(|cx| {
             let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(id));
-            let origin = section.origin(slug);
+            let from = origin(shelf, slug);
             let source = TrackSource::new(
                 LIBRARY_COLUMNS,
                 ShelfTracks {
                     library: library.clone(),
-                    slug,
-                    section,
+                    shelf,
                 },
                 playback.clone(),
                 playlist_scrollbar,
             )
-            .from(move |_| Some(origin.clone()));
-            let source = match section == Section::Songs {
-                true => source.with_liked(library.clone()),
-                false => source,
-            };
-            let source = source.table(cx.weak_entity());
-            let mut delegate = TableDelegate::new(source, width, cx);
-            if section == Section::Favorites {
-                delegate = delegate.with_sort(TrackField::AddedAt, Sort::Descending, cx);
-            }
-            let (layout, sorting) = stored(section, cx);
+            .from(move |_| Some(from.clone()))
+            .with_liked(library.clone())
+            .starrable(shelf)
+            .table(cx.weak_entity());
+            let mut delegate =
+                TableDelegate::new(source, width, cx).with_sort(TrackField::AddedAt, RECENT, cx);
+            let (layout, sorting) = stored(Section::Songs, cx);
             delegate.set_layout(layout, cx);
             if let Some(sorting) = sorting {
                 delegate.set_sorting(sorting, cx);
             }
-            delegate
-        };
-
-        let favorites = cx.new(|cx| {
-            let delegate = listed(Section::Favorites, cx);
-            TableState::new(delegate, cx).follow(scroll.clone())
-        });
-        let songs = cx.new(|cx| {
-            let delegate = listed(Section::Songs, cx);
             TableState::new(delegate, cx).follow(scroll.clone())
         });
         let albums = cx.new(|cx| {
-            let source = AlbumSource::shelved(library.clone(), playback.clone(), slug);
+            let source = AlbumSource::shelved(library.clone(), playback.clone(), shelf);
             let mut delegate =
                 TableDelegate::new(source, width, cx).with_sort(AlbumField::AddedAt, RECENT, cx);
             let (layout, sorting) = stored(Section::Albums, cx);
@@ -310,7 +273,7 @@ impl LibraryView {
             TableState::new(delegate, cx).follow(scroll.clone())
         });
         let playlists = cx.new(|cx| {
-            let source = PlaylistSource::shelved(library.clone(), playback.clone(), slug);
+            let source = PlaylistSource::shelved(library.clone(), playback.clone(), shelf);
             let mut delegate = TableDelegate::new(source, width, cx).with_sort(
                 PlaylistField::Modified,
                 RECENT,
@@ -324,7 +287,7 @@ impl LibraryView {
             TableState::new(delegate, cx).follow(scroll.clone())
         });
         let artists = cx.new(|cx| {
-            let source = ArtistSource::shelved(library.clone(), playback.clone(), slug);
+            let source = ArtistSource::shelved(library.clone(), playback.clone(), shelf);
             let mut delegate =
                 TableDelegate::new(source, width, cx).with_sort(ArtistField::AddedAt, RECENT, cx);
             let (layout, sorting) = stored(Section::Artists, cx);
@@ -337,12 +300,15 @@ impl LibraryView {
 
         cx.observe(&library, |this, _, cx| {
             this.rebuild(cx);
+            this.restore(cx);
             cx.notify();
         })
         .detach();
 
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
+        cx.observe(&Scan::global(cx), |_, _, cx| cx.notify())
+            .detach();
 
         let current_playback = playback_status(&playback, cx);
         cx.observe(&playback, |this, playback, cx| {
@@ -358,24 +324,18 @@ impl LibraryView {
         })
         .detach();
 
-        cx.subscribe(&favorites, |this, _, event, cx| match event {
-            TableEvent::DoubleClicked(display) => this.play(*display, cx),
-            TableEvent::Activated(display) => {
-                let table = this.tracks().clone();
-                page::play_or_toggle(&table, &this.playback, *display, cx)
-            }
-            TableEvent::Removed => tracks::drop_picked(&this.favorites, cx),
-            _ => this.persist(Section::Favorites, cx),
-        })
-        .detach();
-
         cx.subscribe(&songs, |this, _, event, cx| match event {
             TableEvent::DoubleClicked(display) => this.play(*display, cx),
             TableEvent::Activated(display) => {
                 let table = this.tracks().clone();
                 page::play_or_toggle(&table, &this.playback, *display, cx)
             }
-            TableEvent::Removed => {}
+            // on a saved shelf the list is the favorites, so removing a row unstars it
+            TableEvent::Removed => {
+                if this.shape(cx) == Shape::Saved {
+                    tracks::drop_picked(&this.songs, cx);
+                }
+            }
             _ => this.persist(Section::Songs, cx),
         })
         .detach();
@@ -421,13 +381,14 @@ impl LibraryView {
 
         let card_scrollbar = cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(id));
 
-        Self {
+        let mut view = Self {
             slug,
+            shelf,
             library,
             settings,
             playback,
             playback_status: current_playback,
-            section: Section::Favorites,
+            section: Section::Songs,
             views,
             width,
             card_columns: 0,
@@ -437,7 +398,6 @@ impl LibraryView {
             cards_dirty: true,
             card_scrollbar,
             scrollbar,
-            favorites,
             songs,
             albums,
             playlists,
@@ -447,7 +407,9 @@ impl LibraryView {
             popovers: Popovers::default(),
             sliders: Section::ALL.map(|_| Sliders::default()),
             me: me.downgrade(),
-        }
+        };
+        view.restore(cx);
+        view
     }
 
     fn create_playlist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -455,7 +417,7 @@ impl LibraryView {
         PlaylistEditor::open(
             Edit::Create {
                 tracks: Vec::new(),
-                slug: Some(self.slug),
+                shelf: self.shelf,
             },
             window,
             cx,
@@ -469,7 +431,6 @@ impl LibraryView {
 
     fn table(&self, section: Section) -> &dyn ui::Listing {
         match section {
-            Section::Favorites => &self.favorites,
             Section::Songs => &self.songs,
             Section::Albums => &self.albums,
             Section::Playlists => &self.playlists,
@@ -477,21 +438,16 @@ impl LibraryView {
         }
     }
 
-    fn tables(&self) -> [&dyn ui::Listing; 5] {
-        [
-            &self.favorites,
-            &self.songs,
-            &self.albums,
-            &self.playlists,
-            &self.artists,
-        ]
+    fn tables(&self) -> [&dyn ui::Listing; 4] {
+        [&self.songs, &self.albums, &self.playlists, &self.artists]
     }
 
     fn tracks(&self) -> &Entity<TableState<TrackSource>> {
-        match self.section {
-            Section::Songs => &self.songs,
-            _ => &self.favorites,
-        }
+        &self.songs
+    }
+
+    fn shape(&self, cx: &App) -> Shape {
+        self.library.read(cx).shape(self.shelf)
     }
 
     fn column_toggles(&self, cx: &App) -> Vec<Toggle> {
@@ -519,39 +475,91 @@ impl LibraryView {
         page::store(&self.settings.clone(), self.table(section), &key, &key, cx);
     }
 
+    /// Fills filter axes the storage names but the tables have not narrowed yet. This runs at
+    /// construction and whenever the library reloads, so a range saved before its rows arrived
+    /// still lands once the bounds are known.
+    fn restore(&mut self, cx: &mut Context<Self>) {
+        for section in Section::ALL {
+            let key = section.key(self.slug);
+            page::restore(&self.settings.clone(), self.table(section), &key, cx);
+        }
+    }
+
+    /// Whether the shelf has no folder to list. A scan in flight is not that: a folder is only
+    /// recorded once its scan lands, so the setup screen would otherwise cover the whole of the
+    /// first import, which is the longest one there is.
     fn unconfigured(&self, cx: &App) -> bool {
-        self.slug == LOCAL && Sonora::global(cx).session.read(cx).local_path().is_none()
+        self.shelf.local()
+            && Sonora::global(cx).session.read(cx).local_paths().is_empty()
+            && Scan::global(cx).read(cx).progress().is_none()
+    }
+
+    /// What an empty local page says while a scan is filling it. The page is not empty, it is
+    /// early, so it counts the files read instead of offering the vacancy's caption.
+    fn scanning(&self, cx: &App) -> Option<Vacancy> {
+        if !self.shelf.local() || self.table(self.section).row_count(cx) > 0 {
+            return None;
+        }
+        let progress = Scan::global(cx).read(cx).progress()?;
+        let caption = match progress.found {
+            0 => t!("library-scanning"),
+            found => t!(
+                "library-scanning-progress",
+                read = progress.read,
+                found = found
+            ),
+        };
+        let shape = self.library.read(cx).shape(self.shelf);
+        Some(Vacancy::new(caption).icon(self.section.glyph(shape)))
     }
 
     fn note(&self, cx: &App) -> Option<Vacancy> {
-        let part = self.section.part();
-        if loading(&self.library, self.slug, part, cx) {
+        if let Some(scanning) = self.scanning(cx) {
+            return Some(scanning);
+        }
+        if loading(&self.library, self.shelf, self.section, cx) {
             return None;
         }
         let table = self.table(self.section);
-        let shelf = self.library.read(cx).shelf(self.slug);
-        match shelf.map(|shelf| &shelf.state) {
-            Some(LibraryState::Loading) => return None,
-            Some(LibraryState::Failed(_)) => return Some(Vacancy::new(t!("library-not-loaded"))),
+        let library = self.library.read(cx);
+        match library.state(self.shelf) {
+            LibraryState::Loading => return None,
+            LibraryState::Failed(reason) => {
+                return Some(self.lost("library-lost", t!("library-not-loaded"), reason));
+            }
             _ if table.row_count(cx) > 0 => return None,
             _ => {}
         }
 
-        let failed = shelf.is_some_and(|shelf| shelf.failed(part));
+        let problem = library.part_problem(self.shelf, self.section.part());
+        let shape = library.shape(self.shelf);
 
-        Some(match (table.filtering(cx), failed) {
+        Some(match (table.filtering(cx), problem) {
             (true, _) => Vacancy::new(t!("library-no-matches")),
-            (false, true) => Vacancy::new(t!("library-part-not-loaded")),
-            (false, false) => Vacancy::new(i18n::lookup(self.section.vacancy(self.slug), None))
-                .icon(self.section.glyph()),
+            (false, Some(reason)) => {
+                self.lost("library-part-lost", t!("library-part-not-loaded"), reason)
+            }
+            (false, None) => {
+                Vacancy::new(i18n::lookup(self.section.vacancy(self.shelf, shape), None))
+                    .icon(self.section.glyph(shape))
+            }
+        })
+    }
+
+    /// The state a shelf that did not load shows, with a button that loads it again.
+    fn lost(&self, id: &'static str, label: SharedString, reason: &str) -> Vacancy {
+        let library = self.library.clone();
+        let shelf = self.shelf;
+
+        trouble::lost(id, label, Some(reason), move |_, _, cx| {
+            library.update(cx, |library, cx| library.refresh(shelf, cx));
         })
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.slug == LOCAL {
-            return;
-        }
-        self.library.update(cx, |library, cx| library.refresh(cx));
+        let shelf = self.shelf;
+        self.library
+            .update(cx, |library, cx| library.refresh(shelf, cx));
     }
 
     pub fn select(&mut self, section: Section, cx: &mut Context<Self>) {
@@ -579,8 +587,18 @@ impl LibraryView {
     fn header(&self, cx: &Context<Self>) -> AnyElement {
         let state = self.tracks().read(cx);
         let delegate = state.delegate();
-        let count = delegate.row_count();
-        let duration: std::time::Duration = (0..count)
+        let listed = delegate.row_count();
+        // While the songs are still arriving, the provider's own total is the count to show,
+        // so it does not climb a page at a time. A filter counts what it kept.
+        let count = match self.table(Section::Songs).filtering(cx) {
+            true => listed,
+            false => self
+                .library
+                .read(cx)
+                .expected(self.shelf, Section::Songs.part())
+                .map_or(listed, |expected| expected.max(listed)),
+        };
+        let duration: std::time::Duration = (0..listed)
             .filter_map(|display| delegate.source().peek(delegate.row(display), cx))
             .map(|track| track.duration)
             .sum();
@@ -588,10 +606,10 @@ impl LibraryView {
         if !duration.is_zero() {
             strip = strip.text(clock(duration));
         }
-        let songs = self.section == Section::Songs;
-        let (title, icon, eyebrow) = match songs {
-            true => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-local")),
-            false => (
+        let (title, icon, eyebrow) = match (self.shape(cx), self.shelf.local()) {
+            (Shape::Catalog, true) => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-local")),
+            (Shape::Catalog, false) => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-library")),
+            (Shape::Saved, _) => (
                 t!("library-liked-songs"),
                 "icons/heart-filled.svg",
                 t!("detail-playlist"),
@@ -603,12 +621,23 @@ impl LibraryView {
             .accent()
             .eyebrow(eyebrow)
             .meta(strip)
-            .actions(HeroPlayButton::listed(
-                "play-library",
-                t!("library-play-liked-songs"),
-                self.tracks(),
-                self.playback.clone(),
-            ))
+            .actions(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(HeroPlayButton::listed(
+                        "play-library",
+                        t!("library-play-liked-songs"),
+                        self.tracks(),
+                        self.playback.clone(),
+                    ))
+                    .child(HeroPlayButton::shuffle_listed(
+                        "shuffle-library",
+                        self.tracks(),
+                        self.playback.clone(),
+                    )),
+            )
             .into_any_element()
     }
 
@@ -668,24 +697,35 @@ impl LibraryView {
         }
         let library = self.library.clone();
         let table = self.albums.clone();
-        Confirm::ask(
-            Kind::Albums(albums.len()),
-            move |cx| {
-                library.update(cx, |library, cx| {
-                    for album in albums {
-                        library.toggle_album(album, cx);
-                    }
-                });
-                table.update(cx, |table, cx| {
-                    table.delegate_mut().clear_selection();
-                    cx.notify();
-                });
-            },
-            cx,
-        );
+        let count = albums.len();
+        let starred = Confirm::unstarring(&albums[0].id, cx);
+        let apply = move |cx: &mut App| {
+            library.update(cx, |library, cx| {
+                for album in albums {
+                    library.toggle_album(album, cx);
+                }
+            });
+            table.update(cx, |table, cx| {
+                table.delegate_mut().clear_selection();
+                cx.notify();
+            });
+        };
+        match starred {
+            true => apply(cx),
+            false => Confirm::ask(Kind::Albums(count), apply, cx),
+        }
     }
 
     fn drop_artists(&mut self, cx: &mut Context<Self>) {
+        // Nothing to unfollow where following is not a thing the provider has.
+        if !Sonora::global(cx)
+            .session
+            .read(cx)
+            .capabilities_of(self.shelf)
+            .follow_artists
+        {
+            return;
+        }
         let rows = self.artists.read(cx).delegate().picked();
         let artists: Vec<_> = {
             let state = self.artists.read(cx);
@@ -697,21 +737,23 @@ impl LibraryView {
         }
         let library = self.library.clone();
         let table = self.artists.clone();
-        Confirm::ask(
-            Kind::Artists(artists.len()),
-            move |cx| {
-                library.update(cx, |library, cx| {
-                    for artist in artists {
-                        library.toggle_artist(artist, cx);
-                    }
-                });
-                table.update(cx, |table, cx| {
-                    table.delegate_mut().clear_selection();
-                    cx.notify();
-                });
-            },
-            cx,
-        );
+        let count = artists.len();
+        let starred = Confirm::unstarring(&artists[0].id, cx);
+        let apply = move |cx: &mut App| {
+            library.update(cx, |library, cx| {
+                for artist in artists {
+                    library.toggle_artist(artist, cx);
+                }
+            });
+            table.update(cx, |table, cx| {
+                table.delegate_mut().clear_selection();
+                cx.notify();
+            });
+        };
+        match starred {
+            true => apply(cx),
+            false => Confirm::ask(Kind::Artists(count), apply, cx),
+        }
     }
 
     fn drop_playlists(&mut self, cx: &mut Context<Self>) {
@@ -801,7 +843,6 @@ impl LibraryView {
         }
         if self.cards_dirty {
             self.card_rows = match self.section {
-                Section::Favorites => deck(&self.favorites, columns, cx),
                 Section::Songs => deck(&self.songs, columns, cx),
                 Section::Albums => deck(&self.albums, columns, cx),
                 Section::Playlists => deck(&self.playlists, columns, cx),
@@ -825,8 +866,6 @@ impl LibraryView {
             scroll.set_offset(point(Pixels::ZERO, -(top + into + inset)));
         }
 
-        let visible = scroll.bounds().size.height;
-        let viewport = Viewport::measured(scrolled(&scroll) - inset, visible, window);
         let rows = self.card_rows.clone();
         let section = self.section;
         let view = self.me.clone();
@@ -835,7 +874,6 @@ impl LibraryView {
             .py(inset)
             .child(
                 Deck::new("library-deck")
-                    .viewport(viewport)
                     .rows(heights)
                     .gap(gap)
                     .draw(move |index, _, cx| {
@@ -850,9 +888,6 @@ impl LibraryView {
                         match row {
                             DeckRow::Heading(display) => {
                                 let label = match section {
-                                    Section::Favorites => {
-                                        view.favorites.read(cx).delegate().group(*display, cx)
-                                    }
                                     Section::Songs => {
                                         view.songs.read(cx).delegate().group(*display, cx)
                                     }
@@ -874,7 +909,7 @@ impl LibraryView {
                             }
                             DeckRow::Cards(cards) => {
                                 let row = match section {
-                                    Section::Favorites | Section::Songs => CardGrid::new(room)
+                                    Section::Songs => CardGrid::new(room)
                                         .children(cards.iter().filter_map(|&(display, row)| {
                                             view.track_card(display, row, card, cx)
                                         }))
@@ -1070,7 +1105,10 @@ impl Render for LibraryView {
 
         let context_menu = self.context_menu.clone().map(|(target, position)| {
             let menu = match target {
-                LibraryMenu::Item(item) => item.menu(self.playback.clone(), false, cx),
+                LibraryMenu::Item(item) => {
+                    let menus = self.tracks().read(cx).delegate().source().menu();
+                    item.menu(menus, self.playback.clone(), false, cx)
+                }
                 LibraryMenu::Track(track) => self
                     .tracks()
                     .read(cx)
@@ -1218,11 +1256,12 @@ impl Tooled for LibraryView {
         let mut tools = Vec::new();
         tools.extend(create);
         tools.extend(columns);
-        if self.section != Section::Artists {
+        let filters = self.table(self.section).filters(cx);
+        if !filters.is_empty() {
             tools.push(tools::filters(
                 &self.popovers,
                 &self.sliders[self.section.slot()],
-                self.table(self.section).filters(cx),
+                filters,
                 move |change, cx| {
                     filtered.update(cx, |view, cx| view.filter(change, cx)).ok();
                 },
@@ -1250,7 +1289,9 @@ impl Tooled for LibraryView {
 impl LibraryView {
     fn filter(&mut self, change: FilterChange, cx: &mut Context<Self>) {
         self.cards_dirty = true;
-        self.table(self.section).filter(change, cx);
+        let section = self.section;
+        self.table(section).filter(change, cx);
+        self.persist(section, cx);
         cx.notify();
     }
 }

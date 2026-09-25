@@ -111,6 +111,8 @@ pub(crate) fn genre_item(slug: &str, value: &mut GenreItem) {
         GenreItem::Playlist(entry) => playlist(slug, entry),
         GenreItem::Album(entry) => album(slug, entry),
         GenreItem::Genre(entry) => genre(slug, entry),
+        GenreItem::Track(entry) => track(slug, entry),
+        GenreItem::Artist(entry) => saved_artist(slug, entry),
     }
 }
 
@@ -139,7 +141,7 @@ pub(crate) fn user_detail(slug: &str, value: &mut UserDetail) {
 
 pub(crate) fn home_feed(slug: &str, value: &mut HomeFeed) {
     for entry in &mut value.listen_again {
-        track(slug, entry);
+        genre_item(slug, entry);
     }
     for entry in value.quick_picks.iter_mut().flatten() {
         track(slug, entry);
@@ -151,7 +153,7 @@ pub(crate) fn home_feed(slug: &str, value: &mut HomeFeed) {
 
 pub(crate) mod bare {
     use crate::tag;
-    use crate::{Album, ArtistRef, Genre, GenreItem, GenreSection, Playlist};
+    use crate::{Album, ArtistRef, Genre, GenreItem, GenreSection, Playlist, SavedArtist, Track};
 
     pub(crate) fn genre_section(value: &mut GenreSection) {
         for item in &mut value.items {
@@ -164,6 +166,8 @@ pub(crate) mod bare {
             GenreItem::Playlist(entry) => playlist(entry),
             GenreItem::Album(entry) => album(entry),
             GenreItem::Genre(entry) => genre(entry),
+            GenreItem::Track(entry) => track(entry),
+            GenreItem::Artist(entry) => saved_artist(entry),
         }
     }
 
@@ -180,6 +184,22 @@ pub(crate) mod bare {
     }
 
     fn genre(value: &mut Genre) {
+        value.id = tag::untag(&value.id).to_owned();
+    }
+
+    fn track(value: &mut Track) {
+        if let Some(id) = value.id.as_mut() {
+            *id = tag::untag(id).to_owned();
+        }
+        if let Some(id) = value.album_id.as_mut() {
+            *id = tag::untag(id).to_owned();
+        }
+        for reference in &mut value.artist_refs {
+            artist_ref(reference);
+        }
+    }
+
+    fn saved_artist(value: &mut SavedArtist) {
         value.id = tag::untag(&value.id).to_owned();
     }
 

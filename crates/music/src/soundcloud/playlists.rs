@@ -96,6 +96,7 @@ pub async fn detail(http: &Http, id: &str) -> Result<crate::PlaylistDetail> {
     let raw = fetch_raw(http, id).await?;
     let tracks = resolve_tracks(http, id, &raw).await?;
     Ok(crate::PlaylistDetail {
+        continuation: None,
         playlist: wire::playlist(raw),
         tracks,
     })

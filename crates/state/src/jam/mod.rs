@@ -20,8 +20,7 @@ type Reply<T> = oneshot::Sender<T>;
 type Waiting = Vec<Reply<Option<Arc<Sheet>>>>;
 
 use crate::{
-    AppSettings, Cover, Io, Library, LibraryState, Lyrics, Playback, PlaybackState, Queue, Session,
-    join,
+    AppSettings, Cover, Io, Library, Lyrics, Playback, PlaybackState, Queue, Session, join,
 };
 use cast::Broadcast;
 use receiver::ReceiverEvent;
@@ -680,12 +679,7 @@ impl Jam {
         let library = self.library.read(cx);
         let mut packs = Vec::new();
         for slug in self.session.read(cx).active_slugs() {
-            let Some(shelf) = library.shelf(slug) else {
-                continue;
-            };
-            let LibraryState::Ready { playlists, .. } = &shelf.state else {
-                continue;
-            };
+            let playlists = library.state_for(slug).playlists();
             packs.extend(playlists.iter().map(|playlist| Pack {
                 id: playlist.id.clone(),
                 name: playlist.name.clone(),

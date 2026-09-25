@@ -13,7 +13,7 @@ use router::{Destination, Link as _, navigate};
 use state::{Playback, PlaybackState};
 use ui::{
     ActiveTheme as _, Artwork, Avatar, Cell, ExplicitBadge, InlineLink, InlineLinks, ROW_GROUP,
-    Theme,
+    Theme, clock, tabular,
 };
 
 use crate::chrome::Chrome;
@@ -56,6 +56,7 @@ impl RenderOnce for Glyph {
 
 #[derive(IntoElement)]
 struct Thumb {
+    row: usize,
     url: Option<String>,
 }
 
@@ -63,7 +64,9 @@ impl RenderOnce for Thumb {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
 
-        Artwork::new(self.url).size(theme.metrics.thumb)
+        Artwork::new(self.url)
+            .id(("artwork", self.row))
+            .size(theme.metrics.thumb)
     }
 }
 
@@ -80,10 +83,13 @@ impl RenderOnce for Face {
     }
 }
 
+/// The transport cell at the head of a row. `number` is the label the row rests at; `None`
+/// counts the rows, which is what a list with no numbering of its own wants.
 pub(crate) fn index<F>(
     cell: &Cell<F>,
     state: Option<PlaybackState>,
     playable: bool,
+    number: Option<SharedString>,
     preload: Option<Tap>,
     press: Option<Tap>,
     cx: &App,
@@ -111,7 +117,7 @@ pub(crate) fn index<F>(
                 false => faded,
             })
             .group_hover(ROW_GROUP, |style| style.invisible())
-            .child(format!("{}", cell.display + 1))
+            .child(number.unwrap_or_else(|| SharedString::from((cell.display + 1).to_string())))
             .into_any_element(),
     };
 
@@ -294,6 +300,14 @@ pub(crate) fn dim<F>(cell: &Cell<F>, value: impl Into<SharedString>, muted: Hsla
         .into_any_element()
 }
 
+/// A track length in tabular digits, so the column reads as a monospace strip.
+pub(crate) fn length<F>(cell: &Cell<F>, value: Duration, muted: Hsla) -> AnyElement {
+    line(cell, Some(muted))
+        .font_features(tabular())
+        .child(clock(value))
+        .into_any_element()
+}
+
 pub(crate) fn stamp(seconds: Option<i64>) -> SharedString {
     seconds
         .and_then(|seconds| jiff::Timestamp::new(seconds, 0).ok())
@@ -389,7 +403,9 @@ pub(crate) fn mark(icon: &'static str, cx: &App) -> AnyElement {
 }
 
 pub(crate) fn artwork<F>(cell: &Cell<F>, url: Option<String>) -> AnyElement {
-    cell.middle().child(Thumb { url }).into_any_element()
+    cell.middle()
+        .child(Thumb { row: cell.row, url })
+        .into_any_element()
 }
 
 pub(crate) fn avatar<F>(cell: &Cell<F>, url: Option<String>) -> AnyElement {
