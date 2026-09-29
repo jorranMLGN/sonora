@@ -70,7 +70,20 @@
         border: 1px solid var(--line);
         border-radius: 16px;
         background: var(--fill) center/cover no-repeat;
+        position: relative;
+        overflow: hidden;
       }
+      .art canvas {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 42%;
+        pointer-events: none;
+      }
+      .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font-size: 13px; color: var(--dim); }
+      .toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
       h1 { margin: 0; font-size: 21px; font-weight: 650; line-height: 1.25; }
       .artist { margin-top: 2px; font-size: 15px; }
       .album, .meta { color: var(--dim); font-size: 13px; }
@@ -256,7 +269,7 @@
     <main>
       <div class="rail">
         <div class="eyebrow" id="room">{{jam-page-title}}</div>
-        <div class="art" id="art"></div>
+        <div class="art" id="art"><canvas id="spectrum" hidden></canvas></div>
 
         <h1 id="title">{{jam-page-nothing}}</h1>
         <div class="artist" id="artist"></div>
@@ -294,6 +307,10 @@
         <div class="card">
           <label for="here">{{jam-page-here}}</label>
           <input id="here" type="range" min="0" max="100" step="1" value="100" />
+          <label class="toggle" for="spectrumOn">
+            <span>{{jam-page-spectrum}}</span>
+            <input id="spectrumOn" type="checkbox" checked />
+          </label>
         </div>
       </div>
 
@@ -416,6 +433,14 @@
       const HERE_KEY = "sonora.jam.here";
       const NAME_KEY = "sonora.jam.name";
       const DEVICE_KEY = "sonora.jam.device";
+      const SPECTRUM_KEY = "sonora.jam.spectrum";
+      // the same shape the app draws: 32 bands from 100 Hz to 6 kHz, read off as thin bars
+      const BANDS = 32;
+      const LOW_HZ = 100;
+      const HIGH_HZ = 6000;
+      const BAR = 3;
+      const BAR_GAP = 1.5;
+      const still = matchMedia("(prefers-reduced-motion: reduce)");
       const HELD_DRAG = 600;
       const SAMPLES = 8;
       const BURST = 8;
@@ -443,6 +468,11 @@
       let socket = null;
       let ctx = null;
       let gain = null;
+      let bus = null;
+      let analyser = null;
+      let spectra = null;
+      let drawing = 0;
+      let spectrumOn = true;
       let format = null;
       let lead = 250;
       let origin = 0;
@@ -486,6 +516,7 @@
         here = stored === null ? 100 : Math.min(100, Math.max(0, Number(stored) || 0));
         me = localStorage.getItem(NAME_KEY) || "";
         device = localStorage.getItem(DEVICE_KEY) || "";
+        spectrumOn = localStorage.getItem(SPECTRUM_KEY) !== "off";
       } catch (_) {}
 
       if (!device) {
@@ -500,6 +531,7 @@
       el("offset").value = String(trim);
       el("offsetValue").textContent = `${trim} ms`;
       el("here").value = String(here);
+      el("spectrumOn").checked = spectrumOn;
       el("me").value = me;
 
       window.addEventListener("error", (event) => fault(event.message));
@@ -525,6 +557,17 @@
           localStorage.setItem(HERE_KEY, String(here));
         } catch (_) {}
       });
+
+      el("spectrumOn").addEventListener("change", (event) => {
+        spectrumOn = event.target.checked;
+        try {
+          localStorage.setItem(SPECTRUM_KEY, spectrumOn ? "on" : "off");
+        } catch (_) {}
+        spectrum();
+      });
+
+      document.addEventListener("visibilitychange", spectrum);
+      still.addEventListener?.("change", spectrum);
 
       el("me").addEventListener("change", (event) => {
         me = event.target.value.trim().slice(0, 40);
@@ -640,12 +683,23 @@
         gain = ctx.createGain();
         gain.gain.value = here / 100;
         gain.connect(ctx.destination);
+        // tapped before the volume, so the spectrum shows the music rather than the slider
+        bus = ctx.createGain();
+        bus.connect(gain);
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.7;
+        analyser.minDecibels = -85;
+        analyser.maxDecibels = -22;
+        bus.connect(analyser);
+        spectra = new Uint8Array(analyser.frequencyBinCount);
         await ctx.resume();
         playAt = null;
         base = null;
         behind = false;
         bind(true);
         running = true;
+        spectrum();
         el("play").textContent = TEXT.stop;
         el("hint").hidden = true;
       }
@@ -662,6 +716,9 @@
           ctx.close().catch(() => {});
           ctx = null;
         }
+        analyser = null;
+        bus = null;
+        spectrum();
       }
 
       function connect() {
@@ -1040,10 +1097,98 @@
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.playbackRate.value = rate;
-        source.connect(gain);
+        source.connect(bus);
         source.start(playAt);
         playAt += frames / format.rate / rate;
         heard += frames;
+      }
+
+      /// Draws the spectrum over the foot of the artwork while sound plays, and nothing
+      /// otherwise: the loop stops with the audio, when the tab is hidden, and for a reader who
+      /// asked for less motion.
+      function spectrum() {
+        cancelAnimationFrame(drawing);
+        drawing = 0;
+        const canvas = el("spectrum");
+        const frame = () => {
+          const shown = spectrumOn && analyser && running && !document.hidden && !still.matches;
+          canvas.hidden = !shown;
+          if (!shown) return;
+          paint(canvas, bands());
+          drawing = requestAnimationFrame(frame);
+        };
+        frame();
+      }
+
+      function bands() {
+        analyser.getByteFrequencyData(spectra);
+        const nyquist = ctx.sampleRate / 2;
+        const out = new Array(BANDS);
+        for (let band = 0; band < BANDS; band++) {
+          const from = LOW_HZ * Math.pow(HIGH_HZ / LOW_HZ, band / BANDS);
+          const to = LOW_HZ * Math.pow(HIGH_HZ / LOW_HZ, (band + 1) / BANDS);
+          const first = Math.floor((from / nyquist) * spectra.length);
+          const last = Math.max(first + 1, Math.ceil((to / nyquist) * spectra.length));
+          let peak = 0;
+          for (let bin = first; bin < last && bin < spectra.length; bin++) peak = Math.max(peak, spectra[bin]);
+          out[band] = peak / 255;
+        }
+        return out;
+      }
+
+      /// The band curve at `at`, 0 at the left edge and 1 at the right: a Catmull-Rom spline
+      /// through the bands, so neighbouring bars rise and fall together.
+      function sample(bands, at) {
+        const last = bands.length - 1;
+        const t = Math.min(last, Math.max(0, at * bands.length - 0.5));
+        const index = Math.floor(t);
+        const f = t - index;
+        const band = (offset) => bands[Math.min(last, Math.max(0, index + offset))];
+        const [p0, p1, p2, p3] = [band(-1), band(0), band(1), band(2)];
+        const value = 0.5 * (2 * p1 + (p2 - p0) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f + (3 * (p1 - p2) + p3 - p0) * f * f * f);
+        return Math.min(1, Math.max(0, value));
+      }
+
+      function paint(canvas, levels) {
+        const ratio = window.devicePixelRatio || 1;
+        const width = Math.round(canvas.clientWidth * ratio);
+        const height = Math.round(canvas.clientHeight * ratio);
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        const pen = canvas.getContext("2d");
+        pen.clearRect(0, 0, width, height);
+
+        // a shade under the bars keeps them readable over bright artwork
+        const shade = pen.createLinearGradient(0, 0, 0, height);
+        shade.addColorStop(0, "rgba(0, 0, 0, 0)");
+        shade.addColorStop(1, "rgba(0, 0, 0, 0.45)");
+        pen.fillStyle = shade;
+        pen.fillRect(0, 0, width, height);
+
+        // the accent is a fixed hex; its alpha channel fades the foot without color-mix,
+        // which not every browser parses as a gradient stop
+        const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#5b8cff";
+        const body = pen.createLinearGradient(0, 0, 0, height);
+        body.addColorStop(0, accent);
+        body.addColorStop(1, /^#[0-9a-f]{6}$/i.test(accent) ? `${accent}8c` : accent);
+        pen.fillStyle = body;
+
+        const bar = BAR * ratio;
+        const gap = BAR_GAP * ratio;
+        const count = Math.max(1, Math.floor((width + gap) / (bar + gap)));
+        const drawn = (width - gap * (count - 1)) / count;
+        pen.beginPath();
+        for (let index = 0; index < count; index++) {
+          const level = Math.max(0.03, sample(levels, (index + 0.5) / count));
+          const tall = level * height;
+          const left = index * (drawn + gap);
+          const cap = Math.min(drawn / 2, tall);
+          if (pen.roundRect) pen.roundRect(left, height - tall, drawn, tall, [cap, cap, 0, 0]);
+          else pen.rect(left, height - tall, drawn, tall);
+        }
+        pen.fill();
       }
 
       function clamp(value, reach) {

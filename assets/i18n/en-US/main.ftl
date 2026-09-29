@@ -996,6 +996,7 @@ jam-page-pause = Pause
 jam-page-shuffle = Shuffle
 jam-page-repeat = Repeat
 jam-page-here = Volume on this device
+jam-page-spectrum = Show the spectrum
 jam-page-everyone = Volume for everyone
 jam-page-queue = Up next
 jam-page-queue-empty = Nothing queued
