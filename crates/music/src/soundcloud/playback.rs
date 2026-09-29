@@ -509,7 +509,12 @@ fn begin(
     start: bool,
     at: Option<Duration>,
 ) -> Result<Slot> {
-    sink.clear();
+    // rodio's clear sets the pending skip count rather than adding to it, so clearing a sink
+    // `silence` has just cleared would cancel that skip and leave the old, muted track playing
+    // ahead of this one
+    if sink.len() > 0 {
+        sink.clear();
+    }
     let slot = append(sink, id, loaded, true)?;
     if let Some(at) = at
         && let Err(error) = sink.try_seek(at)
