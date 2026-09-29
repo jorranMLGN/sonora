@@ -42,15 +42,16 @@
         display: grid;
         align-content: start;
         gap: 18px;
-        grid-template-areas: "rail" "words" "flow" "crowd" "meters";
+        grid-template-areas: "rail" "eq" "words" "flow" "crowd" "meters";
       }
       .rail { grid-area: rail; min-width: 0; }
       .flow { grid-area: flow; min-width: 0; }
       #words { grid-area: words; }
+      #eq { grid-area: eq; min-width: 0; }
       #crowd { grid-area: crowd; }
       .meters { grid-area: meters; }
       .rail > :first-child, .flow > :first-child { margin-top: 0; }
-      #words, #crowd, .meters { margin-top: 0; }
+      #words, #crowd, #eq, .meters { margin-top: 0; }
       .meters {
         padding-top: 16px;
         border-top: 1px solid var(--line);
@@ -84,6 +85,73 @@
       }
       .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font-size: 13px; color: var(--dim); }
       .toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+      .scope {
+        position: relative;
+        margin-top: 14px;
+        border-radius: 12px;
+        background: var(--fill);
+        overflow: hidden;
+      }
+      .scope canvas {
+        display: block;
+        width: 100%;
+        height: 280px;
+        touch-action: none;
+        cursor: ns-resize;
+      }
+      .readout {
+        position: absolute;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: var(--bg);
+        color: var(--fg);
+        font-size: 12px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 120ms;
+      }
+      .readout.on { opacity: 1; }
+      .eq.off .scope canvas { opacity: 0.45; }
+      .eq.off .chip.on { border-color: var(--line); background: var(--fill); color: var(--fg); }
+      .chips {
+        display: flex;
+        gap: 6px;
+        margin: 12px -16px 0;
+        padding: 0 16px 2px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .chips::-webkit-scrollbar { display: none; }
+      .chip {
+        flex: none;
+        width: auto;
+        margin: 0;
+        padding: 7px 13px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--dim);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .chip.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+      .chip:disabled { opacity: 1; }
+      .chip:disabled:not(.on) { display: none; }
+      .quiet {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      @media (prefers-reduced-motion: reduce) { .readout { transition: none; } }
       h1 { margin: 0; font-size: 21px; font-weight: 650; line-height: 1.25; }
       .artist { margin-top: 2px; font-size: 15px; }
       .album, .meta { color: var(--dim); font-size: 13px; }
@@ -223,8 +291,9 @@
           max-width: 980px;
           gap: 24px 32px;
           grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-          grid-template-rows: auto auto 1fr auto;
+          grid-template-rows: auto auto auto 1fr auto;
           grid-template-areas:
+            "rail  eq"
             "rail  words"
             "rail  flow"
             "crowd flow"
@@ -233,6 +302,8 @@
         main > * { align-self: start; }
         .rail { border-right: 1px solid var(--line); padding-right: 32px; }
         .art { max-width: 300px; margin-top: 16px; }
+        .scope canvas { height: 320px; }
+        .chips { flex-wrap: wrap; margin: 12px 0 0; padding: 0; overflow: visible; }
       }
 
       @media (min-width: 1040px) {
@@ -245,14 +316,16 @@
           scrollbar-width: thin;
         }
         .art { max-width: 240px; }
+        .scope canvas { height: 360px; }
       }
 
       @media (min-width: 1440px) {
         main {
           max-width: 1440px;
           grid-template-columns: minmax(260px, 320px) minmax(0, 1.5fr) minmax(280px, 1fr);
-          grid-template-rows: auto auto 1fr auto;
+          grid-template-rows: auto auto auto 1fr auto;
           grid-template-areas:
+            "rail  eq    eq"
             "rail  flow  words"
             "rail  flow  crowd"
             "rail  flow  ."
@@ -313,6 +386,20 @@
           </label>
         </div>
       </div>
+
+      <details class="card eq" id="eq">
+        <summary>{{jam-page-equalizer}}</summary>
+        <label class="toggle" for="eqOn">
+          <span>{{jam-page-equalizer-on}}</span>
+          <input id="eqOn" type="checkbox" checked />
+        </label>
+        <div class="scope">
+          <canvas id="eqScope"></canvas>
+          <div class="readout" id="eqReadout"></div>
+        </div>
+        <div class="chips" id="eqPresets" role="group" aria-label="{{settings-equalizer-preset}}"></div>
+        <div class="quiet" id="bands"></div>
+      </details>
 
       <details class="card" id="words" hidden open>
         <summary>{{jam-page-lyrics}}</summary>
@@ -406,6 +493,21 @@
         lyrics_none: "{{jam-page-lyrics-none}}",
         favorite: "{{jam-page-favorite}}",
         favorited: "{{jam-page-favorited}}",
+        presets: {
+          flat: "{{settings-equalizer-flat}}",
+          "bass-boost": "{{settings-equalizer-bass-boost}}",
+          "bass-reducer": "{{settings-equalizer-bass-reducer}}",
+          "treble-boost": "{{settings-equalizer-treble-boost}}",
+          vocal: "{{settings-equalizer-vocal}}",
+          rock: "{{settings-equalizer-rock}}",
+          pop: "{{settings-equalizer-pop}}",
+          jazz: "{{settings-equalizer-jazz}}",
+          classical: "{{settings-equalizer-classical}}",
+          electronic: "{{settings-equalizer-electronic}}",
+          acoustic: "{{settings-equalizer-acoustic}}",
+          loudness: "{{settings-equalizer-loudness}}",
+          custom: "{{settings-equalizer-custom}}",
+        },
         denied: {
           Closed: "{{jam-page-denied-closed}}",
           Unknown: "{{jam-page-denied-unknown}}",
@@ -440,6 +542,31 @@
       const HIGH_HZ = 6000;
       const BAR = 3;
       const BAR_GAP = 1.5;
+      const PAINT_MS = 33;
+      const EQ_KEY = "sonora.jam.eq";
+      // the app's own equalizer, music::equalizer: one octave per band, Q of the square root of
+      // two so neighbours meet at half gain, and the same presets, so a curve sounds alike here
+      const FREQUENCIES = [31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+      const EQ_Q = Math.SQRT2;
+      const EQ_REACH = 12;
+      const NYQUIST_MARGIN = 0.95;
+      // the equalizer's graph spans what an ear hears
+      const SCOPE_LOW = 20;
+      const SCOPE_HIGH = 20000;
+      const PRESETS = {
+        flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "bass-boost": [6, 5, 4, 2.5, 1, 0, 0, 0, 0, 0],
+        "bass-reducer": [-6, -5, -4, -2.5, -1, 0, 0, 0, 0, 0],
+        "treble-boost": [0, 0, 0, 0, 0, 1, 2.5, 4, 5, 6],
+        vocal: [-2, -3, -3, 1, 4, 4, 3, 1.5, 0, -1.5],
+        rock: [5, 4, 3, 1, -0.5, -1, 0.5, 2.5, 3.5, 4.5],
+        pop: [-1.5, -1, 0, 2, 4, 4, 2, 0, -1, -1.5],
+        jazz: [4, 3, 1.5, 2, -1.5, -1.5, 0, 1.5, 3, 4],
+        classical: [4.5, 3.5, 3, 2.5, -1.5, -1.5, 0, 2.5, 3.5, 4],
+        electronic: [4.5, 4, 1, 0, -2, 2, 1, 1.5, 4, 5],
+        acoustic: [5, 4.5, 3.5, 1, 2, 1.5, 3.5, 4, 3.5, 2],
+        loudness: [6, 4, 0, 0, -2, 0, -1, -5, 5, 1],
+      };
       const still = matchMedia("(prefers-reduced-motion: reduce)");
       const HELD_DRAG = 600;
       const SAMPLES = 8;
@@ -472,6 +599,15 @@
       let analyser = null;
       let spectra = null;
       let drawing = 0;
+      let easelFor = null;
+      let filters = [];
+      let preamp = null;
+      let eqPreset = "flat";
+      let eqGains = PRESETS.flat.slice();
+      let eqOn = true;
+      let scopeFor = null;
+      let scoping = 0;
+      let grabbed = null;
       let spectrumOn = true;
       let format = null;
       let lead = 250;
@@ -517,6 +653,12 @@
         me = localStorage.getItem(NAME_KEY) || "";
         device = localStorage.getItem(DEVICE_KEY) || "";
         spectrumOn = localStorage.getItem(SPECTRUM_KEY) !== "off";
+        const curve = JSON.parse(localStorage.getItem(EQ_KEY) || "null");
+        if (curve && Array.isArray(curve.gains) && curve.gains.length === FREQUENCIES.length) {
+          eqGains = curve.gains.map((db) => Math.min(EQ_REACH, Math.max(-EQ_REACH, Number(db) || 0)));
+          eqPreset = curve.preset in PRESETS ? curve.preset : "custom";
+          eqOn = curve.on !== false;
+        }
       } catch (_) {}
 
       if (!device) {
@@ -566,7 +708,18 @@
         spectrum();
       });
 
+      equalizer();
+
       document.addEventListener("visibilitychange", spectrum);
+      window.addEventListener("resize", () => {
+        easelFor = null;
+        scopeFor = null;
+        scope();
+      });
+      matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => {
+        scopeFor = null;
+        scope();
+      });
       still.addEventListener?.("change", spectrum);
 
       el("me").addEventListener("change", (event) => {
@@ -685,13 +838,23 @@
         gain.connect(ctx.destination);
         // tapped before the volume, so the spectrum shows the music rather than the slider
         bus = ctx.createGain();
-        bus.connect(gain);
+        filters = FREQUENCIES.map((hz) => {
+          const filter = ctx.createBiquadFilter();
+          filter.type = "peaking";
+          filter.frequency.value = hz;
+          filter.Q.value = EQ_Q;
+          return filter;
+        });
+        preamp = ctx.createGain();
+        filters.reduce((from, filter) => (from.connect(filter), filter), bus).connect(preamp);
+        preamp.connect(gain);
+        shape(false);
         analyser = ctx.createAnalyser();
-        analyser.fftSize = 2048;
+        analyser.fftSize = 8192;
         analyser.smoothingTimeConstant = 0.7;
         analyser.minDecibels = -85;
         analyser.maxDecibels = -22;
-        bus.connect(analyser);
+        preamp.connect(analyser);
         spectra = new Uint8Array(analyser.frequencyBinCount);
         await ctx.resume();
         playAt = null;
@@ -700,6 +863,7 @@
         bind(true);
         running = true;
         spectrum();
+        scope();
         el("play").textContent = TEXT.stop;
         el("hint").hidden = true;
       }
@@ -718,7 +882,10 @@
         }
         analyser = null;
         bus = null;
+        filters = [];
+        preamp = null;
         spectrum();
+        scope();
       }
 
       function connect() {
@@ -1105,16 +1272,22 @@
 
       /// Draws the spectrum over the foot of the artwork while sound plays, and nothing
       /// otherwise: the loop stops with the audio, when the tab is hidden, and for a reader who
-      /// asked for less motion.
+      /// asked for less motion. It paints at most every `PAINT_MS`, since the same thread has to
+      /// take every audio chunk off the socket and schedule it before its time comes.
       function spectrum() {
         cancelAnimationFrame(drawing);
         drawing = 0;
         const canvas = el("spectrum");
-        const frame = () => {
+        let painted = 0;
+        easelFor = null;
+        const frame = (now) => {
           const shown = spectrumOn && analyser && running && !document.hidden && !still.matches;
           canvas.hidden = !shown;
           if (!shown) return;
-          paint(canvas, bands());
+          if (!now || now - painted >= PAINT_MS) {
+            painted = now || 0;
+            paint(canvas, bands());
+          }
           drawing = requestAnimationFrame(frame);
         };
         frame();
@@ -1149,23 +1322,21 @@
         return Math.min(1, Math.max(0, value));
       }
 
-      function paint(canvas, levels) {
-        const ratio = window.devicePixelRatio || 1;
+      /// The canvas size, pen and gradients, built once per size rather than every frame:
+      /// reading the layout or the computed style from a frame forces the browser to redo both.
+      function easel(canvas) {
+        if (easelFor) return easelFor;
+        const ratio = Math.min(2, window.devicePixelRatio || 1);
         const width = Math.round(canvas.clientWidth * ratio);
         const height = Math.round(canvas.clientHeight * ratio);
-        if (canvas.width !== width || canvas.height !== height) {
-          canvas.width = width;
-          canvas.height = height;
-        }
+        canvas.width = width;
+        canvas.height = height;
         const pen = canvas.getContext("2d");
-        pen.clearRect(0, 0, width, height);
 
         // a shade under the bars keeps them readable over bright artwork
         const shade = pen.createLinearGradient(0, 0, 0, height);
         shade.addColorStop(0, "rgba(0, 0, 0, 0)");
         shade.addColorStop(1, "rgba(0, 0, 0, 0.45)");
-        pen.fillStyle = shade;
-        pen.fillRect(0, 0, width, height);
 
         // the accent is a fixed hex; its alpha channel fades the foot without color-mix,
         // which not every browser parses as a gradient stop
@@ -1173,6 +1344,16 @@
         const body = pen.createLinearGradient(0, 0, 0, height);
         body.addColorStop(0, accent);
         body.addColorStop(1, /^#[0-9a-f]{6}$/i.test(accent) ? `${accent}8c` : accent);
+
+        easelFor = { ratio, width, height, pen, shade, body };
+        return easelFor;
+      }
+
+      function paint(canvas, levels) {
+        const { ratio, width, height, pen, shade, body } = easel(canvas);
+        pen.clearRect(0, 0, width, height);
+        pen.fillStyle = shade;
+        pen.fillRect(0, 0, width, height);
         pen.fillStyle = body;
 
         const bar = BAR * ratio;
@@ -1189,6 +1370,337 @@
           else pen.rect(left, height - tall, drawn, tall);
         }
         pen.fill();
+      }
+
+      /// Builds the preset chips, the graph and one hidden slider per band, and keeps them, the
+      /// stored curve and the filters in step. Only this device hears it: the host's own
+      /// equalizer is already in the stream, so this shapes the sound on top of whatever the host
+      /// chose. The sliders are what a keyboard or a screen reader moves; the graph is the same
+      /// ten values under a finger.
+      function equalizer() {
+        const toggle = el("eqOn");
+        toggle.checked = eqOn;
+        toggle.addEventListener("change", () => {
+          eqOn = toggle.checked;
+          reshape();
+        });
+
+        const chips = el("eqPresets");
+        for (const id of [...Object.keys(PRESETS), "custom"]) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "chip";
+          chip.dataset.preset = id;
+          chip.textContent = TEXT.presets[id];
+          // custom is where dragging a band lands, never something to pick
+          chip.disabled = id === "custom";
+          chip.addEventListener("click", () => {
+            eqOn = true;
+            eqPreset = id;
+            eqGains = PRESETS[id].slice();
+            reshape();
+          });
+          chips.append(chip);
+        }
+
+        const bands = el("bands");
+        FREQUENCIES.forEach((hz, index) => {
+          const slider = document.createElement("input");
+          slider.type = "range";
+          slider.min = String(-EQ_REACH);
+          slider.max = String(EQ_REACH);
+          slider.step = "0.5";
+          slider.setAttribute("aria-label", hertz(hz));
+          slider.addEventListener("input", () => lift(index, Number(slider.value) || 0));
+          bands.append(slider);
+        });
+
+        const canvas = el("eqScope");
+        canvas.addEventListener("pointerdown", (event) => {
+          const band = nearest(canvas, event);
+          grabbed = { band, id: event.pointerId };
+          // capture keeps the drag when a finger leaves the graph; a pointer already gone throws
+          try {
+            canvas.setPointerCapture(event.pointerId);
+          } catch (_) {}
+          drag(canvas, event);
+        });
+        canvas.addEventListener("pointermove", (event) => {
+          if (grabbed?.id === event.pointerId) drag(canvas, event);
+        });
+        const release = (event) => {
+          if (grabbed?.id !== event.pointerId) return;
+          grabbed = null;
+          el("eqReadout").classList.remove("on");
+          scope();
+        };
+        canvas.addEventListener("pointerup", release);
+        canvas.addEventListener("pointercancel", release);
+        // a double tap puts one band back to flat
+        canvas.addEventListener("dblclick", (event) => lift(nearest(canvas, event), 0));
+        el("eq").addEventListener("toggle", scope);
+
+        drawEqualizer();
+      }
+
+      /// Sets one band and works out whether the curve still matches a preset.
+      function lift(index, db) {
+        eqOn = true;
+        eqGains[index] = Math.min(EQ_REACH, Math.max(-EQ_REACH, Math.round(db * 2) / 2));
+        eqPreset =
+          Object.keys(PRESETS).find((id) => PRESETS[id].every((gain, band) => gain === eqGains[band])) ||
+          "custom";
+        reshape();
+      }
+
+      /// The band whose column the pointer is in, so a finger anywhere above a handle moves it.
+      function nearest(canvas, event) {
+        const box = canvas.getBoundingClientRect();
+        const x = (event.clientX - box.left) / box.width;
+        let best = 0;
+        FREQUENCIES.forEach((hz, index) => {
+          if (Math.abs(across(hz) - x) < Math.abs(across(FREQUENCIES[best]) - x)) best = index;
+        });
+        return best;
+      }
+
+      function drag(canvas, event) {
+        const box = canvas.getBoundingClientRect();
+        const { top, bottom } = plotArea(box.height);
+        const y = Math.min(bottom, Math.max(top, event.clientY - box.top));
+        lift(grabbed.band, EQ_REACH - ((y - top) / (bottom - top)) * EQ_REACH * 2);
+        const readout = el("eqReadout");
+        readout.textContent = `${hertz(FREQUENCIES[grabbed.band])} · ${decibels(eqGains[grabbed.band])}`;
+        readout.classList.add("on");
+      }
+
+      function reshape() {
+        try {
+          localStorage.setItem(EQ_KEY, JSON.stringify({ on: eqOn, preset: eqPreset, gains: eqGains }));
+        } catch (_) {}
+        shape(true);
+        drawEqualizer();
+      }
+
+      function drawEqualizer() {
+        el("eqOn").checked = eqOn;
+        el("eq").classList.toggle("off", !eqOn);
+        el("eqPresets").querySelectorAll(".chip").forEach((chip) => {
+          chip.classList.toggle("on", chip.dataset.preset === eqPreset);
+          chip.setAttribute("aria-pressed", String(chip.dataset.preset === eqPreset));
+        });
+        const on = el("eqPresets").querySelector(".chip.on");
+        if (on && el("eq").open) {
+          const row = el("eqPresets");
+          row.scrollTo({ left: on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2, behavior: still.matches ? "auto" : "smooth" });
+        }
+        el("bands").querySelectorAll("input").forEach((slider, index) => {
+          slider.value = String(eqGains[index]);
+          slider.setAttribute("aria-valuetext", decibels(eqGains[index]));
+        });
+        scope();
+      }
+
+      function hertz(hz) {
+        return hz >= 1000 ? `${hz / 1000} kHz` : `${Math.round(hz)} Hz`;
+      }
+
+      function decibels(db) {
+        return `${db > 0 ? "+" : ""}${db} dB`;
+      }
+
+      /// Where a frequency sits across the graph, 0 at the left and 1 at the right, on the
+      /// logarithmic scale an ear hears octaves on.
+      function across(hz) {
+        return Math.log(hz / SCOPE_LOW) / Math.log(SCOPE_HIGH / SCOPE_LOW);
+      }
+
+      /// The rows the curve may use: room above for the readout, room below for the labels.
+      function plotArea(height) {
+        return { top: 26, bottom: height - 28 };
+      }
+
+      /// How loud the whole curve is at `hz`, in decibels: the ten peaking filters' magnitudes
+      /// multiplied, worked out the way music::equalizer builds its biquads, so it holds with
+      /// no audio running too.
+      function response(hz, rate) {
+        let db = 0;
+        const w = (2 * Math.PI * hz) / rate;
+        const [cos1, sin1, cos2, sin2] = [Math.cos(w), Math.sin(w), Math.cos(2 * w), Math.sin(2 * w)];
+        FREQUENCIES.forEach((centre, index) => {
+          const gain = eqGains[index];
+          if (!gain || centre >= (rate / 2) * NYQUIST_MARGIN) return;
+          const a = Math.pow(10, gain / 40);
+          const w0 = (2 * Math.PI * centre) / rate;
+          const alpha = Math.sin(w0) / (2 * EQ_Q);
+          const c = -2 * Math.cos(w0);
+          const [b0, b1, b2] = [1 + alpha * a, c, 1 - alpha * a];
+          const [a0, a1, a2] = [1 + alpha / a, c, 1 - alpha / a];
+          const nr = b0 + b1 * cos1 + b2 * cos2;
+          const ni = -(b1 * sin1 + b2 * sin2);
+          const dr = a0 + a1 * cos1 + a2 * cos2;
+          const di = -(a1 * sin1 + a2 * sin2);
+          db += 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
+        });
+        return db;
+      }
+
+      /// Paints the graph while the card is open: the loop runs only while sound plays and
+      /// motion is welcome, and otherwise one still frame follows each change.
+      function scope() {
+        cancelAnimationFrame(scoping);
+        scoping = 0;
+        const open = el("eq").open && !document.hidden;
+        if (!open) return;
+        const live = running && analyser && !still.matches;
+        let painted = 0;
+        const frame = (now) => {
+          if (!el("eq").open || document.hidden) return;
+          if (!now || now - painted >= PAINT_MS) {
+            painted = now || 0;
+            paintScope();
+          }
+          if (live) scoping = requestAnimationFrame(frame);
+        };
+        frame();
+      }
+
+      /// The canvas, pen, colours and fixed layers, built once per size.
+      function scopeCanvas() {
+        if (scopeFor) return scopeFor;
+        const canvas = el("eqScope");
+        const ratio = Math.min(2, window.devicePixelRatio || 1);
+        const css = { width: canvas.clientWidth, height: canvas.clientHeight };
+        canvas.width = Math.round(css.width * ratio);
+        canvas.height = Math.round(css.height * ratio);
+        const pen = canvas.getContext("2d");
+        pen.setTransform(ratio, 0, 0, ratio, 0, 0);
+        const style = getComputedStyle(document.documentElement);
+        const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+        const colors = {
+          accent: token("--accent", "#5b8cff"),
+          line: token("--line", "#26262d"),
+          dim: token("--dim", "#9a9aa5"),
+          fg: token("--fg", "#f3f3f5"),
+          bg: token("--bg", "#0e0e11"),
+        };
+        const { top, bottom } = plotArea(css.height);
+        const hex = /^#[0-9a-f]{6}$/i.test(colors.accent);
+        // the music in the accent, the curve in the text colour over it, so the two never read
+        // as one shape
+        const glow = pen.createLinearGradient(0, top, 0, bottom);
+        glow.addColorStop(0, hex ? `${colors.fg}24` : colors.fg);
+        glow.addColorStop(0.5, hex ? `${colors.fg}05` : colors.fg);
+        glow.addColorStop(1, hex ? `${colors.fg}24` : colors.fg);
+        const music = pen.createLinearGradient(0, top, 0, bottom);
+        music.addColorStop(0, hex ? `${colors.accent}b0` : colors.accent);
+        music.addColorStop(1, hex ? `${colors.accent}10` : colors.accent);
+        scopeFor = { pen, ...css, top, bottom, colors, glow, music };
+        return scopeFor;
+      }
+
+      function paintScope() {
+        const { pen, width, height, top, bottom, colors, glow, music } = scopeCanvas();
+        if (!width) return;
+        const middle = (top + bottom) / 2;
+        const toY = (db) => middle - (db / EQ_REACH) * (middle - top);
+        pen.clearRect(0, 0, width, height);
+
+        // the grid: 0 dB bold, ±6 and ±12 faint, a tick per band
+        pen.lineWidth = 1;
+        for (const db of [-12, -6, 0, 6, 12]) {
+          pen.strokeStyle = colors.line;
+          pen.globalAlpha = db === 0 ? 1 : 0.55;
+          pen.beginPath();
+          pen.moveTo(0, Math.round(toY(db)) + 0.5);
+          pen.lineTo(width, Math.round(toY(db)) + 0.5);
+          pen.stroke();
+        }
+        pen.globalAlpha = 1;
+        pen.fillStyle = colors.dim;
+        pen.font = "11px system-ui, -apple-system, sans-serif";
+        pen.textBaseline = "middle";
+        pen.textAlign = "left";
+        pen.fillText("+12", 6, toY(12));
+        pen.fillText("−12", 6, toY(-12));
+
+        // the music: what reaches the ear now, the equalizer included
+        if (running && analyser && ctx) {
+          analyser.getByteFrequencyData(spectra);
+          const nyquist = ctx.sampleRate / 2;
+          const step = 3;
+          pen.beginPath();
+          pen.moveTo(0, bottom);
+          for (let x = 0; x <= width; x += step) {
+            const from = SCOPE_LOW * Math.pow(SCOPE_HIGH / SCOPE_LOW, x / width);
+            const to = SCOPE_LOW * Math.pow(SCOPE_HIGH / SCOPE_LOW, (x + step) / width);
+            const first = Math.floor((from / nyquist) * spectra.length);
+            const last = Math.max(first + 1, Math.ceil((to / nyquist) * spectra.length));
+            let peak = 0;
+            for (let bin = first; bin < last && bin < spectra.length; bin++) peak = Math.max(peak, spectra[bin]);
+            pen.lineTo(x, bottom - (peak / 255) * (bottom - top));
+          }
+          pen.lineTo(width, bottom);
+          pen.closePath();
+          pen.fillStyle = music;
+          pen.fill();
+        }
+
+        // the curve, filled towards 0 dB so boosts and cuts read at a glance
+        const rate = ctx ? ctx.sampleRate : format?.rate || 48000;
+        const points = [];
+        for (let x = 0; x <= width; x += 2) {
+          const hz = SCOPE_LOW * Math.pow(SCOPE_HIGH / SCOPE_LOW, x / width);
+          points.push([x, toY(Math.max(-EQ_REACH, Math.min(EQ_REACH, response(hz, rate))))]);
+        }
+        pen.beginPath();
+        pen.moveTo(0, middle);
+        points.forEach(([x, y]) => pen.lineTo(x, y));
+        pen.lineTo(width, middle);
+        pen.closePath();
+        pen.fillStyle = glow;
+        pen.fill();
+        pen.beginPath();
+        points.forEach(([x, y], index) => (index ? pen.lineTo(x, y) : pen.moveTo(x, y)));
+        pen.strokeStyle = colors.fg;
+        pen.lineWidth = 2;
+        pen.lineJoin = "round";
+        pen.stroke();
+
+        // a handle per band, with its frequency under it
+        pen.textAlign = "center";
+        pen.textBaseline = "alphabetic";
+        FREQUENCIES.forEach((hz, index) => {
+          const x = across(hz) * width;
+          const y = toY(eqGains[index]);
+          const held = grabbed?.band === index;
+          pen.fillStyle = held ? colors.fg : colors.dim;
+          pen.fillText(hz >= 1000 ? `${hz / 1000}k` : String(Math.round(hz)), x, height - 8);
+          pen.beginPath();
+          pen.arc(x, y, held ? 10 : 7.5, 0, Math.PI * 2);
+          pen.fillStyle = held || eqGains[index] ? colors.fg : colors.bg;
+          pen.fill();
+          pen.lineWidth = 2;
+          pen.strokeStyle = colors.fg;
+          pen.stroke();
+        });
+      }
+
+      /// Sets the filters to the curve, or flat while the switch is off, so turning it back on
+      /// restores the same curve. The preamp takes the highest boost back off, since a
+      /// browser clips anything past full scale where the app's mixer would not be asked to.
+      /// A band too close to Nyquist for this context's rate is left flat rather than aliased.
+      function shape(smooth) {
+        if (!ctx || !preamp) return;
+        const set = (param, value) =>
+          smooth ? param.setTargetAtTime(value, ctx.currentTime, 0.015) : (param.value = value);
+        const nyquist = ctx.sampleRate / 2;
+        filters.forEach((filter, index) => {
+          const heard = eqOn && FREQUENCIES[index] < nyquist * NYQUIST_MARGIN;
+          set(filter.gain, heard ? eqGains[index] : 0);
+        });
+        const top = eqOn ? Math.max(0, ...eqGains) : 0;
+        set(preamp.gain, Math.pow(10, -top / 20));
       }
 
       function clamp(value, reach) {
@@ -1224,6 +1736,9 @@
         } else if (running && chunks > 0 && heard === 0) {
           el("hint").hidden = false;
           el("hint").textContent = TEXT.silent;
+        } else if (running) {
+          // a late chunk is a moment, not a state: clear the warning once playback has caught up
+          el("hint").hidden = true;
         }
       }, TICK);
 
