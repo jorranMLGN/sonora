@@ -36,6 +36,9 @@ const BACKGROUND_SINGING_BLUR: Pixels = px(0.75);
 const VEIL: f32 = 0.3;
 /// The tallest the canvas above the queue may be, as a share of the window.
 const CANVAS_SHARE: f32 = 0.55;
+/// How much of the canvas above the queue shows through, so it sits back behind the list the
+/// way a cover would rather than competing with it.
+const CANVAS_DIM: f32 = 0.8;
 const HAZE: f32 = 0.45;
 const VERSE_FADE: f32 = 1.25;
 const PAST: f32 = 0.4;
@@ -1820,7 +1823,8 @@ impl Render for Aside {
             && crate::shared::canvas::canvas_playing(cx))
         .then(|| {
             let width = Chrome::sidebar_right(cx) - theme.metrics.pad * 2.;
-            let height = (width * (16. / 9.)).min(window.viewport_size().height * CANVAS_SHARE);
+            // square, like a cover, cropped from the upright clip
+            let height = width.min(window.viewport_size().height * CANVAS_SHARE);
             self.canvas_art
                 .update(cx, |art, _| art.set_side(width, height, theme.radius * 2.));
             self.canvas_art.clone()
@@ -1868,8 +1872,8 @@ impl Render for Aside {
                         this.child(
                             div()
                                 .flex_none()
-                                .px(theme.metrics.pad)
-                                .pb(theme.metrics.pad)
+                                .p(theme.metrics.pad)
+                                .opacity(CANVAS_DIM)
                                 .child(art),
                         )
                     })
