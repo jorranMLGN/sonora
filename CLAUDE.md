@@ -36,6 +36,7 @@ crates/
   embed/      build-script helper that walks a folder and writes include_bytes! literals
   webview/    a native browser window with a throwaway session, for cookie sign-ins
   widevine/   fetching the CDM from Google, the pssh box and CENC fMP4 parsing, for any DRM'd provider
+  video/      the OpenH264 store, fetched from Cisco on request, and a looping H.264 clip player
 ```
 
 Dependency direction is strict; do not create a back edge:
@@ -44,7 +45,7 @@ Dependency direction is strict; do not create a back edge:
 sonora → views → state → music
          state, music → storage
          state → webview
-         music → widevine
+         music → widevine, video
          all ui-side crates → ui, router, input → ui → gpui
          every ui-side crate → i18n, icons → gpui
 ```
@@ -96,6 +97,19 @@ sonora → views → state → music
   from Settings; a CDM already open stays open until the process ends. Only a successful search is remembered, so a
   module installed mid-run is picked up without a restart. `music::drm` is the only door
   `state` and `views` use, so neither ever names a provider to ask about protected playback.
+- `video` is a leaf that knows nothing about music or gpui, and it never ships a decoder either.
+  `openh264` is built with `libloading` only, never `source`: Cisco's H.264 patent licence covers
+  only the binary a user fetches from Cisco, so its `libopenh264` 2.6.0 is downloaded to
+  `$XDG_CACHE_HOME/sonora/openh264/<version>/` once the user agrees, then loaded through
+  `OpenH264API::from_blob_path`, which refuses a file whose sha256 `openh264` does not know.
+  `SONORA_OPENH264` points at a module a package brings. `video::Player` parses a clip once and
+  loops it on a thread of its own, converting BT.709 YUV to the BGRA `RenderImage` wants at the
+  width the screen asks for, and sleeps whenever it is paused or nothing has drawn it for half a
+  second. The only provider with a Canvas is Spotify (`MusicApi::canvas`, extended metadata
+  `ExtensionKind::CANVAZ`); `state::Codec` asks for the decoder, `state::Canvas` follows the
+  playing track, and `views::shared::canvas::CanvasArt` draws it in fullscreen and above the
+  queue. No release artefact, package or Flatpak carries the binary, and `about.toml` never gains
+  an entry for it. `music::video` is the only door `state` and `views` use.
 - `ui` depends only on `gpui`, `serde` and `i18n`, plus the per-platform crates `ui::motion` needs
   to read the system reduce-motion preference (`objc2-app-kit`, `windows-sys`, `ashpd`). It must
   never know about `music`, `state`, or playback.
@@ -282,6 +296,7 @@ construction, layout and scene assembly, never GPU fill.
 | App state         | `$XDG_DATA_HOME/sonora/state.sqlite` (window/layout/playback state, pins, history, local playlists, usage flags)                  |
 | Credentials cache | `$XDG_CACHE_HOME/sonora/<provider>/credentials.json`, one per provider slug (`spotify`, `youtube`), owner-only mode                |
 | Local cover cache | `$XDG_CACHE_HOME/sonora/local-covers/`                                                                                             |
+| OpenH264          | `$XDG_CACHE_HOME/sonora/openh264/<version>/`, Cisco's decoder for canvases, fetched on request                                     |
 | Library snapshots | `$XDG_CACHE_HOME/sonora/cache.sqlite` (what each shelf showed last, to draw before the provider answers)                          |
 | OAuth redirect    | `http://127.0.0.1:8989/login`, override with `SONORA_REDIRECT_URI`                                                                |
 | Scrobble callback | `http://127.0.0.1:8990/scrobble` (Last.fm and Libre.fm)                                                                           |

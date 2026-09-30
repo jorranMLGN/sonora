@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Spotify songs with a Canvas now play its looping video in fullscreen and above the queue.
 - Start a jam and send whatever Sonora is playing to the other devices on your network, whichever
   provider it came from.
 - Listen from any phone, tablet or laptop by opening a page Sonora serves on your network: no
