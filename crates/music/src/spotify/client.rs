@@ -8,7 +8,8 @@ use librespot_protocol::playlist4_external::SelectedListContent as RootList;
 use protobuf::Message as _;
 
 use crate::spotify::{
-    albums, artists, collection, collection2, pathfinder, playlists, profiles, radio, search, wire,
+    albums, artists, canvas, collection, collection2, pathfinder, playlists, profiles, radio,
+    search, wire,
 };
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, Genre, GenreDetail, HomeFeed, Playlist,
@@ -100,6 +101,10 @@ impl MusicApi for LibrespotClient {
 
     async fn track(&self, track_id: &str) -> Result<Track> {
         collection::track(&self.session, track_id).await
+    }
+
+    async fn canvas(&self, track_id: &str) -> Result<Option<String>> {
+        canvas::canvas(&self.session, track_id).await
     }
 
     async fn track_playcount(&self, track_id: &str) -> Result<Option<u64>> {

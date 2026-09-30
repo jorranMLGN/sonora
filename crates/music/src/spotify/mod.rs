@@ -2,6 +2,7 @@ pub mod auth;
 
 mod albums;
 mod artists;
+mod canvas;
 mod client;
 mod collection;
 mod collection2;
