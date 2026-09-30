@@ -292,6 +292,7 @@ fn open_window(cx: &mut App) {
         cover: _,
         drm: _,
         codec: _,
+        canvas: _,
         library,
         history: _,
         jam: _,
