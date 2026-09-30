@@ -1,7 +1,12 @@
 //! A short, silent H.264 clip played as frames: the decoder store, the download and the
 //! looping player. Knows nothing about music or gpui; `music::video` is the one door into it.
 
+mod annexb;
 pub mod codec;
+mod convert;
+mod player;
+
+pub use player::{Frame, Player};
 
 use std::sync::OnceLock;
 use std::time::Duration;
