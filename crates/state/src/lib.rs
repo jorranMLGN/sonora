@@ -1,5 +1,6 @@
 mod artist;
 mod catalog;
+mod codec;
 mod cover;
 mod detail;
 mod discord;
@@ -33,6 +34,7 @@ mod usage;
 mod window_shape;
 
 pub use artist::ArtistDetail;
+pub use codec::{Codec, CodecState};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
 pub use drm::{CdmState, Drm};
@@ -158,6 +160,7 @@ pub struct Sonora {
     pub session: Entity<Session>,
     pub cover: Entity<Cover>,
     pub drm: Entity<Drm>,
+    pub codec: Entity<Codec>,
     pub library: Entity<Library>,
     pub history: Entity<History>,
     pub jam: Entity<Jam>,
@@ -231,6 +234,7 @@ pub fn init(
     });
     let cover = cx.new(|cx| Cover::new(session.clone(), playback.clone(), io.clone(), cx));
     let drm = cx.new(|cx| Drm::new(session.clone(), io.clone(), cx));
+    let codec = cx.new(|_| Codec::new(io.clone()));
     let updates = cx.new(|cx| Updates::new(settings.clone(), io.clone(), cx));
     let parts = jam::Parts {
         playback: playback.clone(),
@@ -258,6 +262,7 @@ pub fn init(
         session,
         cover,
         drm,
+        codec,
         library,
         history,
         jam,

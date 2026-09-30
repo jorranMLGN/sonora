@@ -14,6 +14,7 @@ use crate::chrome::{
     Chrome, PlayerBar, SidebarLeft, SidebarRight, SpectrumStrip, TitleBarOptions, ToastStack,
     UpdateNotice,
 };
+use crate::shared::codec::CodecPrompt;
 use crate::shared::confirm::Confirm;
 use crate::shared::playlist_editor::PlaylistEditor;
 use crate::shared::tag_editor::TagEditor;
@@ -50,6 +51,7 @@ pub(crate) struct Workspace {
     tag_editor: Entity<TagEditor>,
     confirm: Entity<Confirm>,
     widevine: Entity<WidevinePrompt>,
+    codec: Entity<CodecPrompt>,
     toasts: Entity<ToastStack>,
     notice: Entity<UpdateNotice>,
     content: AnyView,
@@ -81,6 +83,7 @@ impl Workspace {
             tag_editor: TagEditor::entity(cx),
             confirm: Confirm::entity(cx),
             widevine: cx.new(WidevinePrompt::new),
+            codec: cx.new(CodecPrompt::new),
             toasts: cx.new(ToastStack::new),
             notice: cx.new(UpdateNotice::new),
             content,
@@ -372,6 +375,7 @@ impl Render for Workspace {
             .child(self.tag_editor.clone())
             .child(self.confirm.clone())
             .child(self.widevine.clone())
+            .child(self.codec.clone())
             .child(self.notice.clone())
     }
 }
