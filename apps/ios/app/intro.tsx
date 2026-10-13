@@ -17,6 +17,7 @@ import { ProviderCard } from '../src/components/ProviderCard';
 import { ErrorBanner } from '../src/components/Screen';
 import { t } from '../src/i18n';
 import { setFlag } from '../src/preferences';
+import { useReduceMotion } from '../src/settings';
 import { useStore } from '../src/store';
 import { makeStyles, useTheme } from '../src/styles';
 import { sizes, spacing } from '../src/theme';
@@ -36,6 +37,8 @@ const PAGE_SHIFT = 40;
 /** The equalizer's bars: how long each takes to rise and fall, and how low it sinks. */
 const BAR_PERIODS = [620, 840, 540, 760, 680];
 const BAR_LOW = 0.3;
+/** Where each bar holds while motion is reduced, so the mark still reads as an equalizer. */
+const BAR_STILL = [0.55, 1, 0.4, 0.85, 0.7];
 /** The rings that pulse out of the mark, and how long one takes to fade out. */
 const RINGS = 3;
 const RING_MS = 2400;
@@ -49,22 +52,40 @@ function connected(provider: ProviderInfo): boolean {
   return provider.session.kind === 'signedIn';
 }
 
-/** A value that runs `animation` on a loop from mount until unmount. */
-function useLoop(make: (value: Animated.Value) => Animated.CompositeAnimation, start = 0) {
+/**
+ * A value that runs `animation` on a loop from mount until unmount. While motion is reduced it
+ * holds at `rest` instead.
+ */
+function useLoop(
+  make: (value: Animated.Value) => Animated.CompositeAnimation,
+  start = 0,
+  rest = start,
+) {
   const value = useRef(new Animated.Value(start)).current;
+  const still = useReduceMotion();
   useEffect(() => {
+    if (still) {
+      value.setValue(rest);
+      return;
+    }
+    value.setValue(start);
     const loop = make(value);
     loop.start();
     return () => loop.stop();
-    // The animation is fixed for the life of the component.
-  }, []);
+    // The animation is fixed for the life of the component; only reduced motion stops it.
+  }, [still]);
   return value;
 }
 
 /** Fades and lifts its children in, `delay` milliseconds after it mounts. */
 function Rise({ delay = 0, children }: { delay?: number; children: ReactNode }) {
-  const shown = useRef(new Animated.Value(0)).current;
+  const still = useReduceMotion();
+  const shown = useRef(new Animated.Value(still ? 1 : 0)).current;
   useEffect(() => {
+    if (still) {
+      shown.setValue(1);
+      return;
+    }
     Animated.timing(shown, {
       toValue: 1,
       duration: RISE_MS,
@@ -72,7 +93,7 @@ function Rise({ delay = 0, children }: { delay?: number; children: ReactNode }) 
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [shown, delay]);
+  }, [shown, delay, still]);
   const translateY = shown.interpolate({ inputRange: [0, 1], outputRange: [RISE_DISTANCE, 0] });
   return (
     <Animated.View style={{ opacity: shown, transform: [{ translateY }] }}>{children}</Animated.View>
@@ -111,7 +132,7 @@ function Glow() {
 }
 
 /** One bar of the equalizer, rising and falling on its own beat. */
-function Bar({ period, offset }: { period: number; offset: number }) {
+function Bar({ period, offset, rest }: { period: number; offset: number; rest: number }) {
   const styles = useStyles();
   const level = useLoop(
     (value) =>
@@ -133,6 +154,7 @@ function Bar({ period, offset }: { period: number; offset: number }) {
         ]),
       ),
     BAR_LOW,
+    rest,
   );
   return <Animated.View style={[styles.bar, { transform: [{ scaleY: level }] }]} />;
 }
@@ -162,15 +184,20 @@ function Ring({ index }: { index: number }) {
 /** Sonora's mark for the intro: an equalizer at play, with rings pulsing out of it. */
 function Mark() {
   const styles = useStyles();
-  const entrance = useRef(new Animated.Value(0)).current;
+  const still = useReduceMotion();
+  const entrance = useRef(new Animated.Value(still ? 1 : 0)).current;
   useEffect(() => {
+    if (still) {
+      entrance.setValue(1);
+      return;
+    }
     Animated.spring(entrance, {
       toValue: 1,
       friction: 6,
       tension: 50,
       useNativeDriver: true,
     }).start();
-  }, [entrance]);
+  }, [entrance, still]);
   return (
     <Animated.View style={[styles.markFrame, { opacity: entrance, transform: [{ scale: entrance }] }]}>
       {Array.from({ length: RINGS }, (_, index) => (
@@ -178,7 +205,7 @@ function Mark() {
       ))}
       <View style={styles.mark}>
         {BAR_PERIODS.map((period, index) => (
-          <Bar key={index} period={period} offset={index * STAGGER_MS} />
+          <Bar key={index} period={period} offset={index * STAGGER_MS} rest={BAR_STILL[index]} />
         ))}
       </View>
     </Animated.View>
@@ -189,9 +216,15 @@ function Mark() {
 function Check() {
   const { colors } = useTheme();
   const styles = useStyles();
-  const pop = useRef(new Animated.Value(0)).current;
-  const burst = useRef(new Animated.Value(0)).current;
+  const still = useReduceMotion();
+  const pop = useRef(new Animated.Value(still ? 1 : 0)).current;
+  const burst = useRef(new Animated.Value(still ? 1 : 0)).current;
   useEffect(() => {
+    if (still) {
+      pop.setValue(1);
+      burst.setValue(1);
+      return;
+    }
     Animated.parallel([
       Animated.spring(pop, { toValue: 1, friction: 5, tension: 70, useNativeDriver: true }),
       Animated.timing(burst, {
@@ -201,7 +234,7 @@ function Check() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [pop, burst]);
+  }, [pop, burst, still]);
   const rotate = pop.interpolate({ inputRange: [0, 1], outputRange: ['-30deg', '0deg'] });
   const ringScale = burst.interpolate({ inputRange: [0, 1], outputRange: [0.8, 2] });
   const ringOpacity = burst.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.6, 0] });
@@ -221,15 +254,20 @@ function Check() {
 function Connected({ on }: { on: boolean }) {
   const { colors } = useTheme();
   const styles = useStyles();
+  const still = useReduceMotion();
   const shown = useRef(new Animated.Value(on ? 1 : 0)).current;
   useEffect(() => {
+    if (still) {
+      shown.setValue(on ? 1 : 0);
+      return;
+    }
     Animated.spring(shown, {
       toValue: on ? 1 : 0,
       friction: 5,
       tension: 80,
       useNativeDriver: true,
     }).start();
-  }, [shown, on]);
+  }, [shown, on, still]);
   return (
     <Animated.View
       pointerEvents="none"
@@ -244,10 +282,12 @@ function Connected({ on }: { on: boolean }) {
 function Dots({ step }: { step: number }) {
   const { colors } = useTheme();
   const styles = useStyles();
+  const still = useReduceMotion();
   const at = useRef(new Animated.Value(step)).current;
   useEffect(() => {
-    Animated.spring(at, { toValue: step, friction: 8, useNativeDriver: false }).start();
-  }, [at, step]);
+    if (still) at.setValue(step);
+    else Animated.spring(at, { toValue: step, friction: 8, useNativeDriver: false }).start();
+  }, [at, step, still]);
   return (
     <View style={styles.dots}>
       {STEPS.map((name, index) => {
@@ -278,8 +318,10 @@ function Action({
   quiet?: boolean;
 }) {
   const styles = useStyles();
+  const still = useReduceMotion();
   const pressed = useRef(new Animated.Value(1)).current;
   const to = (value: number) =>
+    !still &&
     Animated.spring(pressed, { toValue: value, friction: 6, tension: 200, useNativeDriver: true }).start();
   return (
     <Pressable onPress={onPress} onPressIn={() => to(PRESSED_SCALE)} onPressOut={() => to(1)}>
@@ -394,6 +436,7 @@ export default function Intro() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const page = useRef(new Animated.Value(1)).current;
+  const still = useReduceMotion();
 
   const finish = () => {
     setFlag('introSeen', true);
@@ -403,6 +446,10 @@ export default function Intro() {
 
   /** Slides the current page out to the left and the next one in from the right. */
   const go = (next: number) => {
+    if (still) {
+      setStep(next);
+      return;
+    }
     Animated.timing(page, {
       toValue: 0,
       duration: PAGE_MS / 2,
