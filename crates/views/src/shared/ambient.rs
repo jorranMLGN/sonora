@@ -1,6 +1,9 @@
 //! The ambient background: a flowing colour field behind fullscreen, five soft
-//! blobs under a heavy blur with a dark overlay so lyrics stay readable. `Root`
-//! owns the one entity and paints it under everything, title bar included.
+//! blobs under a heavy blur, darkened so lyrics stay readable. `Root` owns the
+//! one entity, paints it under everything, title bar included, and paints no
+//! background of its own beneath it: the field stands in for the page and
+//! carries the window's own opacity, so a see-through window stays see-through
+//! in fullscreen.
 //!
 //! `ambient` decides whether it is painted at all, and with it whether the
 //! fullscreen controls frost what they float over. `ambient_motion` decides
@@ -37,7 +40,10 @@ const BLUR_FULL: f32 = 4.;
 /// the pixels. Nothing in the field is sharper than the blur, so the upscale
 /// shows nothing.
 const DOWNSCALE: f32 = 4.;
-/// Dark overlay keeping lyrics readable over the field.
+/// How much of itself the field keeps under the dark overlay that holds lyrics readable over
+/// it. The overlay is folded into the colours rather than painted as a sheet of its own: over
+/// an opaque stack multiplying every layer by what it lets through is the same picture, and a
+/// black sheet this strong was most of what a see-through window's alpha went on.
 const SHADE: f32 = 0.55;
 
 /// One blob: base centre (fractions of the layer), diameter (fraction of the
@@ -198,6 +204,14 @@ impl Render for Ambient {
             false => 0.,
         };
         let colors = self.wash(Self::colors(&theme), animates);
+        // The field stands in for the page rather than sitting on it, so it carries the
+        // window's own opacity and `Root` paints no background beneath it. One opacity thins
+        // every layer at once; a quad still adds to what it covers, which is why the blobs
+        // read a shade denser than the gaps between them.
+        let clarity = match theme.transparent {
+            true => theme.background.a,
+            false => 1.,
+        };
         // Geometry resolves against the layer's own pixel bounds, measured a
         // frame ago by the canvas, so the discs stay circular at any window
         // aspect ratio. The field is laid out at a fraction of those bounds
@@ -205,12 +219,20 @@ impl Render for Ambient {
         let bounds = self.bounds.get();
         let wide = bounds.size.width.as_f32().max(1.) / DOWNSCALE;
         let high = bounds.size.height.as_f32().max(1.) / DOWNSCALE;
+        // The field reaches into the corners the chrome rounds, and GPUI clips only to a
+        // rectangle, so the sheet takes the window's radius itself.
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let radius = crate::chrome::window_radius(Sonora::global(cx).settings.read(cx), cx, window);
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        let radius: Option<gpui::Pixels> = None;
 
         div()
             .id("ambient")
             .absolute()
             .inset_0()
             .overflow_hidden()
+            .when_some(radius, |this, radius| this.rounded(radius))
+            .opacity(clarity)
             .child(
                 canvas(
                     {
@@ -222,48 +244,69 @@ impl Render for Ambient {
                 .absolute()
                 .size_full(),
             )
-            .child(div().absolute().inset_0().bg(theme.background))
             .child(
                 div()
                     .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(wide))
-                    .h(px(high))
-                    .layer_scale(DOWNSCALE)
-                    .layer_scale_origin(point(0., 0.))
-                    .blur(px(BLUR_FULL / window.scale_factor()))
-                    .children(SPECS.iter().enumerate().map(|(index, spec)| {
-                        let (base_x, base_y, size, period, phase, amp_x, amp_y) = *spec;
-                        let spin = TAU * elapsed / period;
-                        let x = base_x + amp_x * (spin + phase).sin();
-                        let y = base_y + amp_y * (spin * 0.83 + phase * 1.7).cos();
-                        let grown =
-                            wide.min(high) * size * (1. + 0.12 * (spin * 0.6 + phase * 2.3).sin());
-                        let color = colors[index];
-                        div()
-                            .absolute()
-                            .left(px(x * wide - grown / 2.))
-                            .top(px(y * high - grown / 2.))
-                            .size(px(grown))
-                            .children((0..DISCS).map(move |step| {
-                                let fraction =
-                                    1. - step as f32 / DISCS as f32 * (1. - 1. / DISCS as f32);
-                                let opacity = DISC_FAINT
-                                    + step as f32 / (DISCS as f32 - 1.)
-                                        * (DISC_STRONG - DISC_FAINT);
-                                let stepped = grown * fraction;
-                                div()
-                                    .absolute()
-                                    .left(px((grown - stepped) / 2.))
-                                    .top(px((grown - stepped) / 2.))
-                                    .size(px(stepped))
-                                    .rounded_full()
-                                    .bg(color.opacity(opacity))
-                            }))
+                    .inset_0()
+                    .when_some(radius, |this, radius| this.rounded(radius))
+                    .bg(shaded(Hsla {
+                        a: 1.,
+                        ..theme.background
                     })),
             )
-            .child(div().absolute().inset_0().bg(gpui::black().opacity(SHADE)))
+            // The blur spreads the blobs past any shape they could be cut to, so a rounded window
+            // fades them out toward every edge instead. The fade sits on an unblurred layer the
+            // size of the window, since a blurred one measures it from past its own blur reach.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .when_some(radius, |this, radius| {
+                        this.fade_edges(radius * 2., radius * 2.)
+                            .fade_sides(radius * 2., radius * 2.)
+                    })
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .w(px(wide))
+                            .h(px(high))
+                            .layer_scale(DOWNSCALE)
+                            .layer_scale_origin(point(0., 0.))
+                            .blur(px(BLUR_FULL / window.scale_factor()))
+                            .children(SPECS.iter().enumerate().map(|(index, spec)| {
+                                let (base_x, base_y, size, period, phase, amp_x, amp_y) = *spec;
+                                let spin = TAU * elapsed / period;
+                                let x = base_x + amp_x * (spin + phase).sin();
+                                let y = base_y + amp_y * (spin * 0.83 + phase * 1.7).cos();
+                                let grown = wide.min(high)
+                                    * size
+                                    * (1. + 0.12 * (spin * 0.6 + phase * 2.3).sin());
+                                let color = colors[index];
+                                div()
+                                    .absolute()
+                                    .left(px(x * wide - grown / 2.))
+                                    .top(px(y * high - grown / 2.))
+                                    .size(px(grown))
+                                    .children((0..DISCS).map(move |step| {
+                                        let fraction = 1.
+                                            - step as f32 / DISCS as f32 * (1. - 1. / DISCS as f32);
+                                        let opacity = DISC_FAINT
+                                            + step as f32 / (DISCS as f32 - 1.)
+                                                * (DISC_STRONG - DISC_FAINT);
+                                        let stepped = grown * fraction;
+                                        div()
+                                            .absolute()
+                                            .left(px((grown - stepped) / 2.))
+                                            .top(px((grown - stepped) / 2.))
+                                            .size(px(stepped))
+                                            .rounded_full()
+                                            .bg(shaded(color).opacity(opacity))
+                                    }))
+                            })),
+                    ),
+            )
             // Every buffer the field passes through holds eight bits a channel, and a gradient
             // this wide and this dark steps through only a few dozen of them, so its steps read
             // as bands that slide with the blobs. The dither scatters each step over
@@ -276,6 +319,21 @@ impl Render for Ambient {
 /// glass on its controls as well, which only has the field to blur.
 pub(crate) fn shown(cx: &App) -> bool {
     Sonora::global(cx).settings.read(cx).ambient()
+}
+
+/// A colour as the dark overlay leaves it. Black at `SHADE` over an opaque colour is that
+/// colour's channels cut by what the sheet lets through, so cutting them here is the same
+/// picture with one layer fewer to spend the window's alpha on.
+fn shaded(color: Hsla) -> Hsla {
+    let rgba = Rgba::from(color);
+    let kept = 1. - SHADE;
+
+    Hsla::from(Rgba {
+        r: rgba.r * kept,
+        g: rgba.g * kept,
+        b: rgba.b * kept,
+        a: rgba.a,
+    })
 }
 
 /// Straight-line blend between two colours through RGB, so a wash between two

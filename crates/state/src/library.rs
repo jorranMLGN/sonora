@@ -73,7 +73,7 @@ struct Held {
     /// provider said so on the first page. Absent, the rows so far are the count.
     expected: HashMap<LibraryPart, usize>,
     /// The parts whose rows come from the last run's snapshot rather than from this run's
-    /// provider. The first real rows of such a part replace them instead of joining them.
+    /// provider. The part's real rows replace them once they have all arrived.
     stale: HashSet<LibraryPart>,
     starred: Starred,
     tasks: Vec<Task<()>>,
@@ -238,6 +238,35 @@ impl Landed {
     }
 }
 
+/// What a playlist change puts in: tracks already named, or every track of an album, which
+/// the provider is asked for only once the change runs.
+#[derive(Clone, Debug)]
+pub enum Addition {
+    Tracks(Vec<String>),
+    Album(String),
+}
+
+impl Addition {
+    /// Whether there is nothing to add. An album always counts as something, since its
+    /// tracks are not known until it is read.
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Tracks(ids) if ids.is_empty())
+    }
+
+    /// The track ids to add, reading an album's tracks from `client` first.
+    async fn resolve(self, client: &Arc<dyn MusicApi>) -> anyhow::Result<Vec<String>> {
+        match self {
+            Self::Tracks(ids) => Ok(ids),
+            Self::Album(id) => Ok(client
+                .album_tracks(&id)
+                .await?
+                .into_iter()
+                .filter_map(|track| track.id)
+                .collect()),
+        }
+    }
+}
+
 struct PlaylistMutation {
     action: &'static str,
     done: &'static str,
@@ -388,6 +417,12 @@ fn take<T>(
         });
         Vec::new()
     })
+}
+
+/// Whether the provider lists `uri` as pinned. A provider may leave unpinned items out
+/// entirely, so a missing item reads as unpinned.
+fn holds_pin(items: &[music::PinTarget], uri: &str) -> bool {
+    items.iter().any(|item| item.uri == uri && item.pinned)
 }
 
 impl Library {
@@ -700,9 +735,9 @@ pub struct Library {
     session: Entity<Session>,
     io: Io,
     playlist_tasks: HashMap<&'static str, Task<()>>,
-    sidebar_task: Option<Task<()>>,
-    sidebar_pin_task: Option<Task<()>>,
-    sidebar_items: Option<Vec<music::LibraryItem>>,
+    pin_targets_task: Option<Task<()>>,
+    pin_task: Option<Task<()>>,
+    pin_targets: Option<Vec<music::PinTarget>>,
     pending: HashMap<String, Task<()>>,
     pending_albums: HashMap<String, Task<()>>,
     pending_artists: HashMap<String, Task<()>>,
@@ -728,9 +763,9 @@ impl Library {
                 let shelf = Shelf::Of(slug);
                 this.active = session.read(cx).provider_slug();
                 if slug != &music::tag::LOCAL {
-                    this.sidebar_pin_task = None;
-                    this.sidebar_items = None;
-                    this.sync_sidebar(cx);
+                    this.pin_task = None;
+                    this.pin_targets = None;
+                    this.sync_pin_targets(cx);
                 }
                 this.prime(shelf, cx);
                 this.load(shelf, cx);
@@ -751,9 +786,9 @@ impl Library {
                 this.reading.retain(|id, _| whose(id) != Some(*slug));
                 this.mosaics.retain(|id, _| whose(id) != Some(*slug));
                 if slug != &music::tag::LOCAL {
-                    this.sidebar_pin_task = None;
-                    this.sidebar_task = None;
-                    this.sidebar_items = None;
+                    this.pin_task = None;
+                    this.pin_targets_task = None;
+                    this.pin_targets = None;
                 }
                 this.active = session.read(cx).provider_slug();
                 cx.notify();
@@ -784,9 +819,9 @@ impl Library {
             session,
             io,
             playlist_tasks: HashMap::new(),
-            sidebar_task: None,
-            sidebar_pin_task: None,
-            sidebar_items: None,
+            pin_targets_task: None,
+            pin_task: None,
+            pin_targets: None,
             pending: HashMap::new(),
             pending_albums: HashMap::new(),
             pending_artists: HashMap::new(),
@@ -799,6 +834,7 @@ impl Library {
             priming: HashMap::new(),
         };
         library.active = library.session.read(cx).provider_slug();
+        library.held_mut(Shelf::Local).shape = Shape::Catalog;
         for shelf in library.shelves(cx) {
             library.held_mut(shelf).state = LibraryState::Loading;
             library.prime(shelf, cx);
@@ -813,7 +849,8 @@ impl Library {
 
     /// Puts the last run's rows on a shelf while this run's are still on their way, so a launch
     /// shows a library before the provider has answered. Every part stays awaited, so the page
-    /// still reads as loading and the first rows the provider sends replace what was primed.
+    /// still reads as loading, and each part's primed rows stay until the provider has sent all
+    /// of that part.
     /// A shelf that has already heard from its provider is left alone.
     fn prime(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
@@ -938,19 +975,19 @@ impl Library {
         }
     }
 
-    pub fn sidebar_items(&self) -> Option<&[music::LibraryItem]> {
-        self.sidebar_items.as_deref()
+    pub fn pin_targets(&self) -> Option<&[music::PinTarget]> {
+        self.pin_targets.as_deref()
     }
 
-    pub fn sidebar_pin_pending(&self) -> bool {
-        self.sidebar_pin_task.is_some()
+    pub fn pin_pending(&self) -> bool {
+        self.pin_task.is_some()
     }
 
     /// Changes the provider's own pin for `uri` and calls `done` with whether it stuck. A second
     /// change replaces the one in flight, so the last one wins and only its `done` runs. A pin
-    /// the provider turns away for being past its limit counts as stuck too, since Sonora keeps
-    /// the pin itself and the sidebar has no limit of its own.
-    pub fn set_sidebar_pinned(
+    /// the provider turns away for being past its limit or outside the library counts as stuck
+    /// too, since Sonora keeps the pin itself and the sidebar has no limit of its own.
+    pub fn set_pinned(
         &mut self,
         uri: String,
         pinned: bool,
@@ -958,10 +995,9 @@ impl Library {
         cx: &mut Context<Self>,
     ) {
         if self
-            .sidebar_items
+            .pin_targets
             .as_ref()
-            .and_then(|items| items.iter().find(|item| item.uri == uri))
-            .is_some_and(|item| item.pinned == pinned)
+            .is_some_and(|items| holds_pin(items, &uri) == pinned)
         {
             return;
         }
@@ -969,36 +1005,39 @@ impl Library {
             return;
         };
         // Keep a polling response from overwriting the result of this mutation.
-        self.sidebar_task = None;
+        self.pin_targets_task = None;
         let io = self.io.clone();
-        let order = music::LibraryOrder::default();
-        self.sidebar_pin_task = Some(cx.spawn(async move |this, cx| {
+        self.pin_task = Some(cx.spawn(async move |this, cx| {
             let result = join(io.spawn(async move {
-                let result = client.set_library_item_pinned(&uri, pinned).await?;
-                if result == music::LibraryPinResult::LimitReached {
+                let result = client.set_pinned(&uri, pinned).await?;
+                if result != music::PinOutcome::Updated {
                     return Ok((result, None));
                 }
-                let items = client.library_items(order).await?;
+                let items = client.pin_targets().await?;
                 anyhow::ensure!(
-                    items.as_ref().is_some_and(|items| items
-                        .iter()
-                        .any(|item| item.uri == uri && item.pinned == pinned)),
-                    "Spotify did not confirm the updated library pin"
+                    items
+                        .as_ref()
+                        .is_some_and(|items| holds_pin(items, &uri) == pinned),
+                    "the provider did not confirm the updated library pin"
                 );
                 Ok((result, items))
             }))
             .await;
             this.update(cx, |this, cx| {
-                this.sidebar_pin_task = None;
+                this.pin_task = None;
                 match result {
-                    Ok((music::LibraryPinResult::Updated, items)) => {
-                        this.sidebar_items = items;
+                    Ok((music::PinOutcome::Updated, items)) => {
+                        this.pin_targets = items;
                         done(true, cx);
                     }
-                    Ok((music::LibraryPinResult::LimitReached, _)) => {
+                    Ok((music::PinOutcome::LimitReached, _)) => {
                         log::debug!(
                             "library: the provider's pin limit is reached, pinning locally"
                         );
+                        done(true, cx);
+                    }
+                    Ok((music::PinOutcome::Outside, _)) => {
+                        log::debug!("library: the item is not in the library, pinning locally");
                         done(true, cx);
                     }
                     Err(error) => {
@@ -1007,7 +1046,7 @@ impl Library {
                         done(false, cx);
                     }
                 }
-                this.sync_sidebar(cx);
+                this.sync_pin_targets(cx);
                 cx.notify();
             })
             .ok();
@@ -1015,29 +1054,28 @@ impl Library {
         cx.notify();
     }
 
-    fn sync_sidebar(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_pin_pending() {
+    fn sync_pin_targets(&mut self, cx: &mut Context<Self>) {
+        if self.pin_pending() {
             return;
         }
-        self.sidebar_task = None;
+        self.pin_targets_task = None;
         let Some(client) = self.session.read(cx).client_of(Shelf::Streaming) else {
             return;
         };
         let io = self.io.clone();
-        let order = music::LibraryOrder::default();
-        self.sidebar_task = Some(cx.spawn(async move |this, cx| {
+        self.pin_targets_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 let client = client.clone();
-                let loaded = join(io.spawn(async move { client.library_items(order).await })).await;
+                let loaded = join(io.spawn(async move { client.pin_targets().await })).await;
                 if this
                     .update(cx, |this, cx| match loaded {
-                        Ok(items) if items != this.sidebar_items => {
-                            this.sidebar_items = items;
+                        Ok(items) if items != this.pin_targets => {
+                            this.pin_targets = items;
                             cx.notify();
                         }
                         Ok(_) => {}
                         Err(error) => {
-                            log::warn!("library: cannot synchronize sidebar library: {error:#}");
+                            log::warn!("library: cannot read the provider's pins: {error:#}");
                             crate::noted(&error, cx);
                         }
                     })
@@ -1394,10 +1432,11 @@ impl Library {
         }
     }
 
+    /// Creates a playlist called `name` and fills it with `addition`, which may be empty.
     pub fn create_playlist(
         &mut self,
         name: String,
-        tracks: Vec<String>,
+        addition: Addition,
         shelf: Shelf,
         cx: &mut Context<Self>,
     ) {
@@ -1411,6 +1450,7 @@ impl Library {
                 shelf,
             },
             move |client| async move {
+                let tracks = addition.resolve(&client).await?;
                 let id = client.create_playlist(&name).await?;
                 for track in &tracks {
                     client.add_track_to_playlist(&id, track).await?;
@@ -1483,21 +1523,26 @@ impl Library {
         track_id: String,
         cx: &mut Context<Self>,
     ) {
-        self.add_tracks_to_playlist(playlist_id, vec![track_id], cx);
+        self.add_tracks_to_playlist(playlist_id, Addition::Tracks(vec![track_id]), cx);
     }
 
+    /// Adds `addition` to a playlist. An album leaves out the tracks the playlist is known to
+    /// hold already, so adding it a second time adds only what it was missing. Named tracks
+    /// always go in, since adding one again is how a listener asks for a second copy.
     pub fn add_tracks_to_playlist(
         &mut self,
         playlist_id: String,
-        track_ids: Vec<String>,
+        addition: Addition,
         cx: &mut Context<Self>,
     ) {
-        if track_ids.is_empty() {
+        if addition.is_empty() {
             return;
         }
         let added = playlist_id.clone();
-        let held = track_ids.clone();
-        let added_count = track_ids.len() as u32;
+        let known = match addition {
+            Addition::Album(_) => self.contents.get(&playlist_id).cloned().unwrap_or_default(),
+            Addition::Tracks(_) => HashSet::new(),
+        };
         let name = self
             .playlist(&playlist_id)
             .map(|playlist| playlist.name.clone());
@@ -1512,15 +1557,18 @@ impl Library {
                 invalidated: Some(playlist_id.clone()),
             },
             move |client| async move {
+                let mut track_ids = addition.resolve(&client).await?;
+                track_ids.retain(|id| !known.contains(id));
                 for track_id in &track_ids {
                     client.add_track_to_playlist(&playlist_id, track_id).await?;
                 }
-                Ok(())
+                Ok(track_ids)
             },
-            move |this, _, cx| {
+            move |this, track_ids, cx| {
+                let added_count = track_ids.len() as u32;
                 this.amend_playlist(&added, |playlist| playlist.track_count += added_count, cx);
                 if let Some(ids) = this.contents.get_mut(&added) {
-                    ids.extend(held);
+                    ids.extend(track_ids);
                 }
                 cx.emit(LibraryEvent::TrackAdded { playlist: added });
             },
@@ -1913,7 +1961,14 @@ impl Library {
         cx.notify();
     }
 
+    /// Forgets a playlist on the shelf and in the pin snapshot, notifying listeners of its removal.
     fn forget_playlist(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(targets) = self.pin_targets.as_mut() {
+            targets.retain(|target| {
+                target.kind != music::PinTargetKind::Playlist
+                    || target.uri.rsplit_once(':').map(|(_, id)| id) != Some(id)
+            });
+        }
         cx.emit(LibraryEvent::PlaylistGone(id.to_owned()));
         self.drop_playlist(id, cx);
     }
@@ -1966,14 +2021,14 @@ impl Library {
 
     pub fn refresh(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         if shelf == Shelf::Streaming {
-            self.sync_sidebar(cx);
+            self.sync_pin_targets(cx);
         }
         self.load(shelf, cx);
     }
 
     /// Loads a shelf from its provider. A `Saved` shape reads the `saved_*` lists; a `Catalog`
     /// shape reads the `all_*` lists and the `saved_*` ones beside them for hearts and filters.
-    /// Rows a snapshot primed stay on screen while this runs, each part until its own rows
+    /// Rows a snapshot primed stay on screen while this runs, each part until all of its own rows
     /// arrive; a shelf with nothing primed goes back to loading, as a refresh does. The
     /// favorites stay up either way until the new ones land, so a Favorites only filter shows
     /// what it showed before rather than nothing.
@@ -2093,9 +2148,11 @@ impl Library {
         })
     }
 
-    /// Loads one part a page at a time. The shelf shows each page as it lands and learns how
-    /// many rows to expect from the first, so a long library reads from its first hundred rows
-    /// rather than its last. A page that fails ends the part with that failure.
+    /// Loads one part a page at a time. A part with nothing primed shows each page as it lands
+    /// and learns how many rows to expect from the first, so a long library reads from its first
+    /// hundred rows rather than its last. A part a snapshot primed holds its pages back and swaps
+    /// them in together once the last one lands, so the snapshot never shrinks to one page. A
+    /// page that fails ends the part with that failure, and a primed part keeps its snapshot.
     fn stream<T, R>(
         &self,
         shelf: Shelf,
@@ -2118,20 +2175,26 @@ impl Library {
                     return;
                 }
             };
+            let mut held_back = Vec::new();
             while let Some(page) = pages.recv().await {
                 let landed = match page {
                     Ok(Page { total, items }) => {
                         let placed = this.update(cx, |this, cx| {
                             let held = this.held_mut(shelf);
+                            if held.stale.contains(&part) {
+                                return Some(items);
+                            }
                             if let Some(total) = total {
                                 held.expected.insert(part, total);
                             }
-                            shed(&mut held.state, &mut held.stale, part);
                             extend(&mut held.state, wrap(Ok(items)));
                             cx.notify();
+                            None
                         });
-                        if placed.is_err() {
-                            return;
+                        match placed {
+                            Ok(Some(items)) => held_back.extend(items),
+                            Ok(None) => {}
+                            Err(_) => return,
                         }
                         continue;
                     }
@@ -2145,6 +2208,7 @@ impl Library {
                 let held = this.held_mut(shelf);
                 held.expected.remove(&part);
                 shed(&mut held.state, &mut held.stale, part);
+                extend(&mut held.state, wrap(Ok(held_back)));
                 settle(&mut held.state, &mut held.awaited, part, shelf.fatal());
                 this.keep(shelf, Kind::Listed, part, cx);
                 cx.notify();

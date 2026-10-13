@@ -125,10 +125,12 @@ pub struct Session {
     prompt_task: Option<Task<()>>,
     input: Option<UnboundedSender<String>>,
     /// The browser window a `SignInPrompt::Secret` opened, while it is up.
-    window: Option<webview::Login>,
+    window: Option<webview::Page>,
     window_task: Option<Task<()>>,
     local_provider: Arc<dyn MusicProvider>,
     local_folders: Vec<PathBuf>,
+    /// The local engine's factory, there from startup so a file plays before any scan.
+    local_playback: Option<Arc<dyn PlaybackFactory>>,
     local_task: Option<Task<()>>,
     /// Whether a local scan is under way, so the UI can show its progress.
     scanning: bool,
@@ -153,6 +155,7 @@ impl Session {
         let active = providers
             .iter()
             .position(|provider| provider.slug() == remembered);
+        let local_playback = local_provider.playback_factory();
         let mut session = Self {
             state: SessionState::SignedOut,
             providers,
@@ -170,6 +173,7 @@ impl Session {
             window_task: None,
             local_provider,
             local_folders,
+            local_playback,
             local_task: None,
             scanning: false,
             watch: None,
@@ -197,7 +201,14 @@ impl Session {
         self.playback_for_slug(self.provider_slug()?)
     }
 
+    /// The playback factory of one provider. The local one is the factory made at startup
+    /// whenever the provider offers one, so its engine never waits for a scan.
     pub fn playback_for_slug(&self, slug: &str) -> Option<Arc<dyn PlaybackFactory>> {
+        if slug == self.local_slug()
+            && let Some(playback) = self.local_playback.clone()
+        {
+            return Some(playback);
+        }
         self.connected.get(slug).map(|entry| entry.playback.clone())
     }
 
@@ -252,6 +263,12 @@ impl Session {
         self.connected.get(slug).map(|entry| entry.catalog.clone())
     }
 
+    /// The local provider itself, so a file can be read as a track without waiting for
+    /// a scan: an explorer open may point outside every configured folder.
+    pub fn local_provider(&self) -> Arc<dyn MusicProvider> {
+        self.local_provider.clone()
+    }
+
     pub fn local_paths(&self) -> Vec<String> {
         self.local_folders
             .iter()
@@ -267,8 +284,8 @@ impl Session {
                 slug: provider.slug(),
                 name: provider.name(),
                 options: provider.sign_in_options(),
-                // Asked in this order because answering `supported` costs a library load on
-                // Linux, and only a provider that signs in with cookies is worth it.
+                // Asked in this order because answering `supported` starts a child process once
+                // on Linux, and only a provider that signs in with cookies is worth it.
                 web_sign_in: provider.web_sign_in().is_some() && webview::supported(),
                 protected: provider.protected(),
                 stored: provider.stored(),
@@ -426,6 +443,12 @@ impl Session {
         self.connected
             .get(slug)
             .is_some_and(|entry| !entry.authenticated)
+    }
+
+    /// Whether the active session is an anonymous guest session rather than an authenticated account.
+    pub fn guest(&self) -> bool {
+        self.provider_slug()
+            .is_some_and(|slug| self.guest_for(slug))
     }
 
     /// What the live streaming provider can do beyond listing and playing. Nothing is offered
@@ -672,8 +695,9 @@ impl Session {
             proof: sign_in.proof.iter().map(ToString::to_string).collect(),
             title: t!("login-window-title", provider = provider.name()).to_string(),
             agent: sign_in.agent.map(str::to_owned),
+            script: None,
         };
-        match webview::Login::open(target) {
+        match webview::Page::open(target) {
             Ok(login) => self.window = Some(login),
             Err(error) => {
                 log::warn!("session: cannot open the sign-in window: {error:#}");
@@ -1070,39 +1094,6 @@ impl Session {
                         log::warn!("session: cannot update local music folders: {error:#}");
                         cx.notify();
                     }
-                }
-            })
-            .ok();
-        }));
-    }
-
-    /// Brings up the local engine even when no folder has ever been configured, so a
-    /// file-association open can play a track without the user having visited Settings first.
-    /// A no-op once a local client already exists or one is already being brought up; a
-    /// configured library goes through the normal [`Session::rescan_local`] path instead.
-    pub fn ensure_local_ready(&mut self, cx: &mut Context<Self>) {
-        let slug = self.local_provider.slug();
-        if self.connected.contains_key(slug) || self.local_task.is_some() {
-            return;
-        }
-        if !self.local_folders.is_empty() {
-            return self.rescan_local(false, cx);
-        }
-
-        let provider = self.local_provider.clone();
-        let io = self.io.clone();
-        self.local_task = Some(cx.spawn(async move |this, cx| {
-            let prompt: PromptSink = Arc::new(|_| {});
-            let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let signed_in = join(io.spawn(async move {
-                provider.sign_in(SignIn::Path(Vec::new()), prompt, rx).await
-            }))
-            .await;
-
-            this.update(cx, |this, cx| match signed_in {
-                Ok(session) => this.local_signed_in(session, cx),
-                Err(error) => {
-                    log::warn!("session: cannot initialize local playback: {error:#}");
                 }
             })
             .ok();

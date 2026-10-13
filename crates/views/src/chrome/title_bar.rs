@@ -191,11 +191,13 @@ impl Render for TitleBar {
             false => Pixels::ZERO,
         };
         let content = self.options.content.clone();
+        let window_fullscreen = window.is_fullscreen();
         let settings = self.settings.read(cx);
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let controls = matches!(window.window_decorations(), Decorations::Client { .. });
+        let controls =
+            matches!(window.window_decorations(), Decorations::Client { .. }) && !window_fullscreen;
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        let controls = settings.window_controls();
+        let controls = settings.window_controls() && !window_fullscreen;
         let decorated = cfg!(not(target_os = "macos")) && controls;
         let leading = decorated && settings.controls_on_left();
         #[cfg(not(target_os = "macos"))]
@@ -203,7 +205,7 @@ impl Render for TitleBar {
         #[cfg(target_os = "macos")]
         let traffic_light = false;
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let radius = crate::chrome::window_radius(settings);
+        let radius = crate::chrome::window_radius(settings, cx, window);
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let radius: Option<Pixels> = None;
 
@@ -217,8 +219,13 @@ impl Render for TitleBar {
             .when(!self.options.transparent && !theme.transparent, |this| {
                 this.bg(theme.background)
             })
-            .when(self.options.border, |this| {
-                this.border_b_1().border_color(theme.title_bar_border)
+            // The height is a border box, so a bar that drops its border centres its controls
+            // one pixel lower than one that keeps it. The edge is always an edge; only its
+            // colour goes, and fullscreen's controls land where the workspace's do.
+            .border_b_1()
+            .border_color(match self.options.border {
+                true => theme.title_bar_border,
+                false => gpui::transparent_black(),
             })
             .window_control_area(gpui::WindowControlArea::Drag)
             .on_mouse_down(
@@ -226,7 +233,7 @@ impl Render for TitleBar {
                 cx.listener(
                     |this, event: &MouseDownEvent, window, _| match event.click_count {
                         1 => this.grabbed = true,
-                        2 if !SYSTEM_ZOOMS => window.zoom_window(),
+                        2 if !SYSTEM_ZOOMS => titlebar_double_click(window),
                         _ => {}
                     },
                 ),
@@ -300,4 +307,13 @@ fn window_controls(leading: bool, traffic_light: bool) -> AnyElement {
         true => TrafficLightControls::new(leading).into_any_element(),
         false => WindowControls::new(leading).into_any_element(),
     }
+}
+
+/// Runs the title bar's double-click action. macOS performs the action set in System Settings;
+/// the window zooms everywhere else, since there is no such preference.
+fn titlebar_double_click(window: &Window) {
+    #[cfg(target_os = "macos")]
+    window.titlebar_double_click();
+    #[cfg(not(target_os = "macos"))]
+    window.zoom_window();
 }

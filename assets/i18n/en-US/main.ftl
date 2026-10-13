@@ -105,6 +105,7 @@ menu-add-tracks-to-playlist = { $count ->
 menu-new-playlist = New playlist
 menu-edit-tags = Edit tags
 menu-no-playlists = No playlists
+menu-search-playlists = Search a playlist
 menu-add-to-library = Add to Favorites
 menu-add-tracks-to-library = { $count ->
     [one] Add { $count } track to Favorites
@@ -152,8 +153,6 @@ menu-copy = Copy
 menu-paste = Paste
 menu-select-all = Select all
 menu-remove-from-queue = Remove from queue
-menu-open-playlist = Open playlist
-menu-play-playlist = Play playlist
 menu-rename-playlist = Rename playlist
 menu-delete-playlist = Delete playlist
 menu-add-playlist-to-library = Add to Library
@@ -170,8 +169,6 @@ menu-library-remove-tracks = { $count ->
 }
 menu-make-playlist-public = Make public
 menu-make-playlist-private = Make private
-menu-open-album = Open album
-menu-play-album = Play album
 menu-play-artist = Play artist
 
 # playlist editor
@@ -220,6 +217,7 @@ queue-title = Queue
 queue-history = History
 queue-now-playing = Now playing
 queue-from = From
+queue-from-radio = { $name } radio
 queue-next-in-queue = Next in queue
 queue-up-next = Up next
 queue-reset = Reset
@@ -338,7 +336,6 @@ login-choose-title = Sign in to { $provider }
 login-choose-detail = Choose how to sign in to { $provider }.
 
 # album and playlist pages
-detail-album = Album
 detail-playlist = Playlist
 detail-play-album = Play album
 detail-play-playlist = Play playlist
@@ -346,7 +343,6 @@ detail-play-playlist = Play playlist
 # play button
 play-pause = Pause
 play-resume = Resume
-play-loading = Loading…
 play-shuffle = Shuffle
 
 # artist page
@@ -368,6 +364,11 @@ artist-filter-all = All
 artist-filter-albums = Albums
 artist-filter-singles = Singles
 artist-filter-eps = EPs
+artist-appears-on = Appears on
+album-also-like = You might also like
+album-tab-albums = Albums
+album-tab-artists = Artists
+album-label = ℗ { $label }
 
 # user profile page
 user-eyebrow = Profile
@@ -400,6 +401,11 @@ home-featured-open = Open album
 home-resume = Jump back in
 home-new-releases = New from your artists
 home-because = Because you listened to { $artist }
+home-recently-added = Recently added
+home-playlists = Playlists
+home-favorite-albums = Favorite albums
+home-artists = Artists
+home-collection-albums = Albums from your collection
 
 # search page
 search-placeholder = What do you want to listen to?
@@ -479,6 +485,11 @@ count-tracks =
        *[other] { $count } tracks
     }
 
+# running times
+runtime-seconds = { $seconds }s
+runtime-minutes = { $minutes }m { $seconds }s
+runtime-hours = { $hours }h { $minutes }m
+
 # dates
 date-just-now = Just now
 date-minute-ago = A minute ago
@@ -512,7 +523,8 @@ settings-theme-detail = Choose the application colour palette
 settings-opacity = Opacity
 settings-opacity-detail = Adjust the app background opacity
 settings-opacity-value = { $percent }%
-settings-theme-config = Open config
+settings-theme-folder = Open folder
+settings-theme-unavailable = This theme can be applied only when adaptive theme is disabled
 settings-adaptive = Adaptive theme
 settings-adaptive-detail = Tint the palette with the artwork of the playing album
 settings-ambient = Ambient background
@@ -569,8 +581,12 @@ settings-spectrum-opacity-detail = How strongly the spectrum shows through what 
 settings-spectrum-percent = { $value }%
 settings-spectrum-pixels = { $value } px
 settings-spectrum-millis = { $value } ms
+settings-visualizer-absolute = Ignore volume
+settings-visualizer-absolute-detail = Draw the spectrum at the track's own level, however loud Sonora plays it
 settings-fullscreen-controls-autohide = Hide fullscreen controls
 settings-fullscreen-controls-autohide-detail = Fade out playback controls when fullscreen is inactive
+settings-os-fullscreen = Use OS fullscreen
+settings-os-fullscreen-detail = Make the fullscreen view fill the whole screen, the way F11 does
 settings-icons = Icon pack
 settings-icons-detail = Choose the icon set the interface draws from
 settings-motion = Reduce motion
@@ -581,13 +597,16 @@ settings-saver = Battery saving
 settings-saver-detail = Cap the frame rate of animations while Sonora is not focused, applied from the next launch
 settings-corners = Corners
 settings-corners-detail = How rounded surfaces and controls are
-settings-blur = Blur
-settings-blur-detail = Draw the window over a blurred desktop. Needs an opacity below 100%
+settings-blur = Blur UI
+settings-blur-detail = Frost the menus and floating controls over whatever they cover
+settings-blur-window = Blur window
+settings-blur-window-detail = Draw the window over a blurred desktop. Needs an opacity below 100%
 settings-font = Font size
 settings-font-detail = Base text size, everything else scales with it
 settings-font-value = { $size } px
 settings-startup = Show on startup
 settings-startup-detail = The screen Sonora opens on launch
+settings-startup-no-guest = Unavailable in Guest mode
 settings-entries = Sidebar entries
 settings-entries-detail = The sections listed in the sidebar
 settings-entries-pick = Choose entries
@@ -621,8 +640,10 @@ mini-corner-top-left = Top left
 mini-corner-top-right = Top right
 mini-corner-bottom-left = Bottom left
 mini-corner-bottom-right = Bottom right
-settings-close-to-tray = Keep playing when closed
-settings-close-to-tray-detail = Keep Sonora in the system tray and continue playing after its window closes
+settings-close-to-tray = Keep running in the background
+settings-close-to-tray-detail = Keep Sonora running and playing after its window closes
+settings-tray-icon = Show in the system tray
+settings-tray-icon-detail = Put an icon with playback controls in the system tray
 settings-discord = Show on Discord
 settings-discord-detail = Put the track you are playing on your Discord profile
 settings-discord-name = Status name
@@ -654,12 +675,14 @@ settings-gapless = Gapless playback
 settings-gapless-detail = Runs one track into the next without a pause, the way an album was sequenced
 settings-sleep = Sleep timer
 settings-sleep-detail = Lets the music stop on its own after a set time, so it can play you to sleep
+settings-stay-awake = Stay awake during playback
+settings-stay-awake-detail = Prevent sleep while playing and keep the display on when playing in fullscreen
 settings-sleep-configure = Configure…
 settings-sleep-off = Off
 settings-sleep-end-of-track = End of track
 settings-sleep-minutes = { $count } mins
 settings-widevine = Widevine module
-settings-widevine-detail = Apple Music tracks are encrypted and need Google's Widevine module. Sonora uses the copy a browser here already has, or one it downloaded from Google with your consent.
+settings-widevine-detail = Apple Music tracks are encrypted and need Google's Widevine module. Sonora uses one it downloaded from Google with your consent, or else the copy a browser here already has.
 settings-widevine-none = Apple Music tracks are encrypted and need Google's Widevine module. No browser here has one, so Sonora can download it from Google with your consent.
 settings-widevine-looking = Looking…
 settings-widevine-asking = Waiting for your answer
@@ -675,6 +698,7 @@ confirm-uninstall-widevine-title = Uninstall the Widevine module?
 confirm-uninstall-widevine = Sonora deletes the copy it downloaded from Google. Apple Music tracks stop playing until it is downloaded again.
 widevine-prompt-title = Widevine module
 widevine-prompt-wanted = Apple Music tracks are encrypted and need Google's Widevine module. No browser on this computer has one. Sonora can download it from Google's servers, the same file Chrome installs, and keep it in its own folder.
+widevine-prompt-replace = Apple Music tracks are encrypted and need Google's Widevine module. A browser on this computer has one, and Sonora can download Google's own copy to use instead, the same file Chrome installs, kept in its own folder.
 widevine-prompt-downloading = Downloading…
 widevine-prompt-terms = Version { $version } is downloaded. Installing it means accepting Google's terms for the module:
 widevine-prompt-installing = Installing…
@@ -714,6 +738,10 @@ settings-fullscreen-lyrics-size-detail = Size of the lyrics text on the fullscre
 settings-lyrics-size-value = { $size }%
 settings-lyrics-for-local-files = Lyrics for local files
 settings-lyrics-for-local-files-detail = Use metadata from local files to fetch lyrics from the internet
+settings-artwork-for-local-files = Artwork for local files
+settings-artwork-for-local-files-detail = Use metadata from local files to find a cover on Deezer for your Discord status
+settings-prefer-local-lyrics = Prefer local lyrics
+settings-prefer-local-lyrics-detail = Use the lyrics stored in a local file's tags or its .lrc file instead of searching the other providers
 settings-karaoke-lyrics = Karaoke lyrics
 settings-karaoke-lyrics-detail = Highlight lyrics word by word when timing is available
 settings-blur-lyrics = Blur inactive lyrics
@@ -727,6 +755,7 @@ settings-lyrics-providers-selected = { $count ->
     [one] { $count } selected
    *[other] { $count } selected
     }
+settings-lyrics-provider-local = Local files
 settings-lyrics-provider-spotify = Spotify
 settings-lyrics-provider-youtube = YouTube Music
 settings-lyrics-provider-apple-music = Apple Music
@@ -764,6 +793,7 @@ settings-provider-current = Playing from this service
 settings-provider-guest = Playing as a guest
 settings-provider-guest-idle = Connected as a guest
 settings-provider-switch = Switch to
+settings-profile-account = { $provider } · { $account }
 settings-sign-out = Sign out
 settings-group-scrobbling = Scrobbling
 settings-lastfm = Last.fm
@@ -822,6 +852,7 @@ theme-ocean = Ocean
 theme-rose = Rose
 theme-lavender = Lavender
 theme-amber = Amber
+theme-unavailable = { $name } (unavailable)
 
 # corners
 corners-square = Square
@@ -870,6 +901,9 @@ toast-queue-failed = That could not be added to the queue
 toast-keys-refused = Spotify is not granting this account playback keys
 toast-sign-in-to-play = { $name } only streams to a signed-in listener
 toast-track-unplayable = { $name } could not be played
+toast-playback-stopped = Playback stopped after several tracks in a row could not be played
+toast-throttled = { $name } is limiting playback for now. Trying again in a moment
+toast-still-throttled = { $name } is still limiting playback. Press play to try again
 toast-library-add-failed = { $name } could not be added to your library
 toast-library-remove-failed = { $name } could not be removed from your library
 toast-library-added = Added to your library
@@ -884,6 +918,7 @@ lyrics-instrumental = This song is instrumental
 lyrics-failed = Could not reach the lyrics service
 lyrics-follow = Follow the song again
 lyrics-source = Lyrics from { $source }
+lyrics-source-local = Lyrics from the local file
 lyrics-writers = Written by { $writers }
 
 update-available = Sonora { $version } is out
@@ -907,6 +942,9 @@ tags-sheet-album = Album
 tags-sheet-details = Details
 tags-title = Title
 tags-artist = Artist
+tags-artists = Artists
+tags-add-artist = Add an artist
+tags-remove-artist = Remove this artist
 tags-track = Track number
 tags-track-total = Tracks on release
 tags-disc = Disc number
@@ -1045,3 +1083,8 @@ settings-jam-name = Jam name
 settings-jam-name-detail = What listeners see when they join
 settings-jam-guests = Listeners can add tracks
 settings-jam-guests-detail = Anyone in a jam can search your providers and add to the queue
+toast-settings-broken = Fix line { $name } of settings.json to save changes
+toast-tray-unavailable = There is no system tray to put the icon in
+
+# power
+wake-reason = Music is playing

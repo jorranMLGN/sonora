@@ -142,16 +142,12 @@ menu-copy = Copia
 menu-paste = Incolla
 menu-select-all = Seleziona tutto
 menu-remove-from-queue = Rimuovi dalla coda
-menu-open-playlist = Apri playlist
-menu-play-playlist = Riproduci playlist
 menu-rename-playlist = Rinomina playlist
 menu-delete-playlist = Elimina playlist
 menu-add-playlist-to-library = Aggiungi alla Libreria
 menu-remove-playlist-from-library = Rimuovi dalla Libreria
 menu-make-playlist-public = Rendi pubblica
 menu-make-playlist-private = Rendi privata
-menu-open-album = Apri album
-menu-play-album = Riproduci album
 menu-play-artist = Riproduci artista
 
 # playlist editor
@@ -285,7 +281,6 @@ login-account-title = Scegli un account
 login-account-detail = Questa sessione ha effettuato l'accesso a più di un account Google. Scegli quello che Sonora deve usare.
 
 # album and playlist pages
-detail-album = Album
 detail-playlist = Playlist
 detail-play-album = Riproduci album
 detail-play-playlist = Riproduci playlist
@@ -293,7 +288,6 @@ detail-play-playlist = Riproduci playlist
 # play button
 play-pause = Pausa
 play-resume = Riprendi
-play-loading = Caricamento…
 play-shuffle = Casuale
 
 # artist page
@@ -453,7 +447,7 @@ settings-theme-detail = Scegli la palette di colori dell'applicazione
 settings-opacity = Opacità
 settings-opacity-detail = Regola l'opacità dello sfondo dell'app
 settings-opacity-value = { $percent }%
-settings-theme-config = Apri configurazione
+settings-theme-folder = Apri configurazione
 settings-adaptive = Tema adattivo
 settings-adaptive-detail = Colora la palette con la copertina dell'album in riproduzione
 settings-visualizer = Visualizzatore
@@ -470,8 +464,10 @@ settings-saver = Risparmio energetico
 settings-saver-detail = Limita il frame rate delle animazioni quando Sonora non è in primo piano, dal prossimo avvio
 settings-corners = Angoli
 settings-corners-detail = Quanto sono arrotondati superfici e controlli
-settings-blur = Sfocatura
-settings-blur-detail = Disegna la finestra sopra una scrivania sfocata. Richiede un'opacità inferiore al 100%
+settings-blur = Sfocatura dell'interfaccia
+settings-blur-detail = Effetto vetro smerigliato su menu e controlli flottanti
+settings-blur-window = Sfoca la finestra
+settings-blur-window-detail = Disegna la finestra sopra una scrivania sfocata. Richiede un'opacità inferiore al 100%
 settings-font = Dimensione carattere
 settings-font-detail = Dimensione base del testo, tutto il resto scala di conseguenza
 settings-font-value = { $size } px

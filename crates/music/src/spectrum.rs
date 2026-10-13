@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::time::Duration;
 
 use rtrb::{PopError, RingBuffer};
@@ -14,9 +14,17 @@ const RING_CAPACITY: usize = FFT_SIZE * 16;
 const MIN_FREQ: f32 = 100.;
 const MAX_FREQ: f32 = 6_000.;
 const GAIN: f32 = 8.;
+/// The level past which a band is compressed towards the ceiling instead of cut at it. Loud
+/// bands that are cut all sit at the same height, and neighbours there draw a flat crest.
+const KNEE: f32 = 0.6;
 const ATTACK: f32 = 0.9;
 const DECAY: f32 = 0.12;
 const IDLE_POLL: Duration = Duration::from_millis(4);
+/// How long the analyzer sleeps on an empty ring once it has been empty for `QUIET_AFTER` polls
+/// in a row. Paused or stopped, the tap stays silent for hours, and waking every few
+/// milliseconds through that buys nothing. The ring holds far more than this much audio.
+const QUIET_POLL: Duration = Duration::from_millis(50);
+const QUIET_AFTER: u32 = 250;
 
 /// The band levels of one channel, published by the analyzer thread and read by the UI.
 #[derive(Clone)]
@@ -49,6 +57,8 @@ impl Lane {
 pub struct Spectrum {
     left: Lane,
     right: Lane,
+    /// Whether the taps hear the track before the user's volume rather than after it.
+    absolute: Arc<AtomicBool>,
 }
 
 impl Spectrum {
@@ -56,7 +66,14 @@ impl Spectrum {
         Self {
             left: Lane::new(),
             right: Lane::new(),
+            absolute: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Makes every tap on this spectrum hear the track before the user's volume, so the levels
+    /// stop following it. The taps pick the change up at the next frame.
+    pub fn set_absolute(&self, absolute: bool) {
+        self.absolute.store(absolute, Ordering::Relaxed);
     }
 
     /// The left channel's bands.
@@ -92,7 +109,11 @@ impl Spectrum {
         if let Err(error) = spawned {
             log::error!("spectrum: cannot spawn analyzer thread: {error}");
         }
-        Tap { producer, format }
+        Tap {
+            producer,
+            format,
+            absolute: self.absolute.clone(),
+        }
     }
 }
 
@@ -123,6 +144,7 @@ impl Format {
 pub struct Tap {
     producer: rtrb::Producer<f32>,
     format: Arc<Format>,
+    absolute: Arc<AtomicBool>,
 }
 
 impl Tap {
@@ -131,6 +153,11 @@ impl Tap {
     pub fn format(&self, rate: u32, channels: u16) {
         self.format.rate.store(rate, Ordering::Release);
         self.format.channels.store(channels, Ordering::Release);
+    }
+
+    /// Whether the tap wants the samples from before the user's volume is applied.
+    pub fn absolute(&self) -> bool {
+        self.absolute.load(Ordering::Relaxed)
     }
 
     pub fn push(&mut self, sample: f32) {
@@ -191,16 +218,22 @@ fn analyze(mut consumer: rtrb::Consumer<f32>, format: Arc<Format>, spectrum: Spe
     let mut frame = vec![0f32; channels];
     let mut lane_index = 0usize;
     let mut buffer = vec![Complex32::default(); FFT_SIZE];
+    let mut empty = 0u32;
 
     loop {
         let sample = match consumer.pop() {
             Ok(sample) => sample,
             Err(PopError::Empty) if consumer.is_abandoned() => return,
             Err(PopError::Empty) => {
-                std::thread::sleep(IDLE_POLL);
+                empty = empty.saturating_add(1);
+                std::thread::sleep(match empty > QUIET_AFTER {
+                    true => QUIET_POLL,
+                    false => IDLE_POLL,
+                });
                 continue;
             }
         };
+        empty = 0;
 
         // A new track can bring a new format. Grouping the samples by the wrong channel
         // count stretches a window over several frames' worth of audio, so the levels move
@@ -253,7 +286,7 @@ fn analyze(mut consumer: rtrb::Consumer<f32>, format: Arc<Format>, spectrum: Spe
                     .iter()
                     .map(|bin| bin.norm())
                     .fold(0f32, f32::max);
-                let target = (magnitude * GAIN / (FFT_SIZE as f32 / 2.)).sqrt().min(1.);
+                let target = soften((magnitude * GAIN / (FFT_SIZE as f32 / 2.)).sqrt());
                 let rate = match target > side.smoothed[band] {
                     true => ATTACK,
                     false => DECAY,
@@ -262,5 +295,14 @@ fn analyze(mut consumer: rtrb::Consumer<f32>, format: Arc<Format>, spectrum: Spe
                 side.lane.set(band, side.smoothed[band]);
             }
         }
+    }
+}
+
+/// A band's level on a curve that is linear up to `KNEE` and eases towards 1 above it without
+/// reaching it, so two loud bands still land at different heights.
+fn soften(level: f32) -> f32 {
+    match level <= KNEE {
+        true => level,
+        false => KNEE + (1. - KNEE) * ((level - KNEE) / (1. - KNEE)).tanh(),
     }
 }

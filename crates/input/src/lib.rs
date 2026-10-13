@@ -107,6 +107,7 @@ fn shared() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-right", SongNext, Some(&away_from_text)),
         KeyBinding::new("f", ToggleFullscreen, Some(&away_from_text)),
         KeyBinding::new("m", ToggleMiniPlayer, Some(&away_from_text)),
+        KeyBinding::new("f11", ToggleWindowFullscreen, None),
         KeyBinding::new("escape", Dismiss, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("backspace", Backspace, editing),
         KeyBinding::new("ctrl-backspace", BackspaceWord, editing),

@@ -14,7 +14,9 @@ use ui::{
 
 use crate::shared::about::{AboutArtist, about_modal};
 use crate::shared::cells;
-use crate::shared::hero::{HeroMetaStrip, HeroPlayButton, PageHero, release_date_label};
+use crate::shared::hero::{
+    HeroMetaStrip, HeroPlayButton, PageHero, copyright_notice, release_date_label,
+};
 use crate::shared::menus::ItemMenu;
 use crate::shared::pins::Pinned as _;
 use crate::shared::trouble;
@@ -84,7 +86,7 @@ impl SongView {
             scrollbar: cx.new(|_| Scrollbar::new(gpui::ScrollHandle::new()).watching(me)),
             about_bar: cx.new(|_| Scrollbar::new(gpui::ScrollHandle::new()).watching(me)),
             about_open: false,
-            track_menu: ItemMenu::new(playlist_scrollbar),
+            track_menu: ItemMenu::new(playlist_scrollbar, cx),
             context_menu: None,
             me: cx.weak_entity(),
         }
@@ -567,17 +569,13 @@ impl Render for SongView {
                                     .and_then(|album| album.album.copyrights.first())
                                     .cloned(),
                                 |this, copyright| {
-                                    let copyright = match copyright.starts_with(['©', '℗']) {
-                                        true => SharedString::from(copyright),
-                                        false => t!("song-copyright", notice = copyright),
-                                    };
                                     this.child(
                                         div()
                                             .pt_5()
                                             .min_w_0()
                                             .text_size(theme.text(Text::Tiny))
                                             .text_color(theme.muted_foreground)
-                                            .child(copyright),
+                                            .child(copyright_notice(&copyright)),
                                     )
                                 },
                             )

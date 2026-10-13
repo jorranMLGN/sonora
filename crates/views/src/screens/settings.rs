@@ -127,6 +127,7 @@ enum Slot {
     Entries,
     Language,
     Tray,
+    TrayIcon,
     Accounts,
     LocalFolder,
     Theme,
@@ -134,11 +135,14 @@ enum Slot {
     Ambient,
     AmbientMotion,
     Spectrum(SpectrumPlace, Knob),
+    VisualizerAbsolute,
     Icons,
     Opacity,
+    WindowBlur,
     Blur,
     Corners,
     FullscreenControlsAutohide,
+    OsFullscreen,
     PanelLyricsSize,
     FullscreenLyricsSize,
     BlurLyrics,
@@ -161,6 +165,7 @@ enum Slot {
     Normalisation,
     Gapless,
     Sleep,
+    StayAwake,
     Widevine,
     Canvas,
     CanvasCodec,
@@ -168,9 +173,11 @@ enum Slot {
     EqualizerPreset,
     EqualizerBands,
     LyricsProviders,
+    PreferLocalLyrics,
     Karaoke,
     Romanized,
     LyricsForLocal,
+    ArtworkForLocal,
     Discord,
     DiscordName,
     DiscordShowPaused,
@@ -325,6 +332,10 @@ pub struct SettingsView {
     /// Whether the header has measured itself at least once. Until then the height is a
     /// zero stand-in, and the page stays hidden rather than flashing unpadded for a frame.
     header_measured: bool,
+    /// How wide the rows measured last. The Widevine row wraps its explanation to this width
+    /// and needs it before the deck is built, so the first frame falls back to the widest the
+    /// column can be.
+    column: Option<Pixels>,
     scrollbar: Entity<Scrollbar>,
     opacity: ScrubberState,
     spectrum_sliders: HashMap<(SpectrumPlace, Knob), ScrubberState>,
@@ -407,6 +418,9 @@ impl SettingsView {
             Input::new("settings-search", cx)
                 .icon("icons/search.svg")
                 .clearable()
+                // the field floats over the rows the page scrolls beneath it, so it frosts
+                // them the way the category bar under it does
+                .blurred()
         });
         cx.observe(&search, |this, input, cx| {
             let query = input.read(cx).text().trim().to_owned();
@@ -431,6 +445,7 @@ impl SettingsView {
             query: String::new(),
             header_height: Pixels::ZERO,
             header_measured: false,
+            column: None,
             scrollbar: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(me)),
             opacity: ScrubberState::new("opacity"),
             spectrum_sliders: [SpectrumPlace::App, SpectrumPlace::Mini]
@@ -497,6 +512,15 @@ impl SettingsView {
         self.scrollbar.update(cx, |bar, cx| {
             bar.set_track_top(height, cx);
         });
+        cx.notify();
+    }
+
+    /// Takes the rows' measured width, which only the Widevine row's height depends on.
+    fn set_column(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.column == Some(width) {
+            return;
+        }
+        self.column = Some(width);
         cx.notify();
     }
 
@@ -574,6 +598,7 @@ impl SettingsView {
                 Slot::Language,
                 Slot::Title("settings-group-window"),
                 Slot::Tray,
+                Slot::TrayIcon,
                 Slot::Title("settings-group-accounts"),
                 Slot::Accounts,
                 Slot::Title("settings-group-library"),
@@ -585,24 +610,32 @@ impl SettingsView {
                 Slot::Adaptive,
                 Slot::Icons,
                 Slot::Opacity,
+            ]
+            .into_iter()
+            .chain(ui::WINDOW_BLUR.then_some(Slot::WindowBlur))
+            .chain([
                 Slot::Blur,
                 Slot::Corners,
                 Slot::Title("settings-group-fullscreen"),
                 Slot::Ambient,
-            ]
-            .into_iter()
+            ])
             .chain(
                 self.settings
                     .read(cx)
                     .ambient()
                     .then_some(Slot::AmbientMotion),
             )
-            .chain([Slot::FullscreenControlsAutohide, Slot::Canvas])
+            .chain([
+                Slot::FullscreenControlsAutohide,
+                Slot::OsFullscreen,
+                Slot::Canvas,
+            ])
             .chain(self.codec.read(cx).supported().then_some(Slot::CanvasCodec))
             .chain([Slot::Title("settings-group-spectrum-app")])
             .chain(self.spectrum_slots(SpectrumPlace::App, cx))
             .chain([Slot::Title("settings-group-spectrum-mini")])
             .chain(self.spectrum_slots(SpectrumPlace::Mini, cx))
+            .chain(self.spectrum_shown(cx).then_some(Slot::VisualizerAbsolute))
             .chain([
                 Slot::Title("settings-group-lyrics"),
                 Slot::PanelLyricsSize,
@@ -625,6 +658,7 @@ impl SettingsView {
                     Slot::Normalisation,
                     Slot::Gapless,
                     Slot::Sleep,
+                    Slot::StayAwake,
                 ];
                 if self.drm.read(cx).shown(cx) {
                     slots.push(Slot::Widevine);
@@ -634,16 +668,24 @@ impl SettingsView {
                     slots.push(Slot::EqualizerPreset);
                     slots.push(Slot::EqualizerBands);
                 }
-                slots.extend([
-                    Slot::Title("settings-group-lyrics"),
-                    Slot::LyricsProviders,
-                    Slot::Karaoke,
-                    Slot::Romanized,
-                ]);
+                slots.extend([Slot::Title("settings-group-lyrics"), Slot::LyricsProviders]);
+                if self
+                    .settings
+                    .read(cx)
+                    .lyrics_provider_enabled(music::lyrics::LOCAL)
+                {
+                    slots.push(Slot::PreferLocalLyrics);
+                }
+                slots.extend([Slot::Karaoke, Slot::Romanized]);
                 slots
             }
             SettingsTab::Privacy => {
-                vec![Slot::Title("settings-group-lyrics"), Slot::LyricsForLocal]
+                vec![
+                    Slot::Title("settings-group-lyrics"),
+                    Slot::LyricsForLocal,
+                    Slot::Title("settings-group-discord"),
+                    Slot::ArtworkForLocal,
+                ]
             }
             SettingsTab::Integrations => self
                 .discord_slots(cx)
@@ -679,6 +721,7 @@ impl SettingsView {
                 t!("settings-close-to-tray"),
                 t!("settings-close-to-tray-detail"),
             ),
+            Slot::TrayIcon => (t!("settings-tray-icon"), t!("settings-tray-icon-detail")),
             Slot::Accounts => {
                 let detail = t!("settings-accounts-detail");
                 let names = self.account_words(cx);
@@ -715,13 +758,25 @@ impl SettingsView {
                     format!("{detail} {group}").into(),
                 )
             }
+            Slot::VisualizerAbsolute => (
+                t!("settings-visualizer-absolute"),
+                t!("settings-visualizer-absolute-detail"),
+            ),
             Slot::Icons => (t!("settings-icons"), t!("settings-icons-detail")),
             Slot::Opacity => (t!("settings-opacity"), t!("settings-opacity-detail")),
+            Slot::WindowBlur => (
+                t!("settings-blur-window"),
+                t!("settings-blur-window-detail"),
+            ),
             Slot::Blur => (t!("settings-blur"), t!("settings-blur-detail")),
             Slot::Corners => (t!("settings-corners"), t!("settings-corners-detail")),
             Slot::FullscreenControlsAutohide => (
                 t!("settings-fullscreen-controls-autohide"),
                 t!("settings-fullscreen-controls-autohide-detail"),
+            ),
+            Slot::OsFullscreen => (
+                t!("settings-os-fullscreen"),
+                t!("settings-os-fullscreen-detail"),
             ),
             Slot::PanelLyricsSize => (
                 i18n::lookup("settings-panel-lyrics-size", None),
@@ -775,6 +830,7 @@ impl SettingsView {
             ),
             Slot::Gapless => (t!("settings-gapless"), t!("settings-gapless-detail")),
             Slot::Sleep => (t!("settings-sleep"), t!("settings-sleep-detail")),
+            Slot::StayAwake => (t!("settings-stay-awake"), t!("settings-stay-awake-detail")),
             Slot::Widevine => {
                 let (detail, _) = widevine_copy(self.drm.read(cx).state());
                 (t!("settings-widevine"), i18n::lookup(detail, None))
@@ -788,6 +844,10 @@ impl SettingsView {
             Slot::LyricsProviders => (
                 t!("settings-lyrics-providers"),
                 t!("settings-lyrics-providers-detail"),
+            ),
+            Slot::PreferLocalLyrics => (
+                t!("settings-prefer-local-lyrics"),
+                t!("settings-prefer-local-lyrics-detail"),
             ),
             Slot::Karaoke => (
                 t!("settings-karaoke-lyrics"),
@@ -813,6 +873,10 @@ impl SettingsView {
             Slot::DiscordBadge => (
                 t!("settings-discord-badge"),
                 t!("settings-discord-badge-detail"),
+            ),
+            Slot::ArtworkForLocal => (
+                t!("settings-artwork-for-local-files"),
+                t!("settings-artwork-for-local-files-detail"),
             ),
             Slot::DiscordAnonymous => (
                 t!("settings-discord-anonymous"),
@@ -868,6 +932,7 @@ impl SettingsView {
                     + SECTION_GAP,
                 window,
             ),
+            Slot::Widevine => snapped(self.widevine_height(&theme, window, cx), window),
             _ => snapped(standard_height(&theme), window),
         }
     }
@@ -884,6 +949,23 @@ impl SettingsView {
             total += SECTION_GAP + card_height(theme, false);
         }
         total + ACCOUNTS_SLACK
+    }
+
+    /// The Widevine row: its title and action over every line its explanation wraps to.
+    fn widevine_height(&self, theme: &Theme, window: &Window, cx: &App) -> Pixels {
+        let (detail, _) = widevine_copy(self.drm.read(cx).state());
+        let width = self.column.unwrap_or(WIDTH);
+        let lines = wrapped_lines(
+            i18n::lookup(detail, None),
+            theme.text(Text::Small),
+            width,
+            window,
+        );
+        SECTION_GAP
+            + widevine_head(theme)
+            + ROW_GAP
+            + line(theme, Text::Small) * lines as f32
+            + SECTION_GAP
     }
 
     /// The local folder block: the header over one line per watched folder.
@@ -921,6 +1003,7 @@ impl SettingsView {
             Slot::Entries => self.entries_row(cx).element,
             Slot::Language => self.language_row(cx).element,
             Slot::Tray => self.tray_row(cx).element,
+            Slot::TrayIcon => self.tray_icon_row(cx).element,
             Slot::Accounts => self.accounts_row(cx).element,
             Slot::LocalFolder => self.local_folder_row(cx).element,
             Slot::Theme => self.theme_row(cx).element,
@@ -930,11 +1013,14 @@ impl SettingsView {
             Slot::CanvasCodec => self.codec_row(cx).element,
             Slot::AmbientMotion => self.ambient_motion_row(cx).element,
             Slot::Spectrum(place, knob) => self.spectrum_row(place, knob, cx).element,
+            Slot::VisualizerAbsolute => self.visualizer_absolute_row(cx).element,
             Slot::Icons => self.icons_row(cx).element,
             Slot::Opacity => self.opacity_row(cx).element,
+            Slot::WindowBlur => self.blur_window_row(cx).element,
             Slot::Blur => self.blur_row(cx).element,
             Slot::Corners => self.corners_row(cx).element,
             Slot::FullscreenControlsAutohide => self.fullscreen_controls_autohide_row(cx).element,
+            Slot::OsFullscreen => self.os_fullscreen_row(cx).element,
             Slot::PanelLyricsSize => self.panel_lyrics_size_row(cx).element,
             Slot::FullscreenLyricsSize => self.fullscreen_lyrics_size_row(cx).element,
             Slot::BlurLyrics => self.blur_lyrics_row(cx).element,
@@ -957,11 +1043,13 @@ impl SettingsView {
             Slot::Normalisation => self.playback_row(cx).element,
             Slot::Gapless => self.gapless_row(cx).element,
             Slot::Sleep => self.sleep_row(cx).element,
+            Slot::StayAwake => self.stay_awake_row(cx).element,
             Slot::Widevine => self.widevine_row(cx).element,
             Slot::Equalizer => self.equalizer_row(cx).element,
             Slot::EqualizerPreset => self.equalizer_preset_row(cx).element,
             Slot::EqualizerBands => self.equalizer_bands_row(cx).element,
             Slot::LyricsProviders => self.lyrics_providers_row(cx).element,
+            Slot::PreferLocalLyrics => self.prefer_local_lyrics_row(cx).element,
             Slot::Karaoke => self.karaoke_lyrics_row(cx).element,
             Slot::Romanized => self.romanized_lyrics_row(cx).element,
             Slot::LyricsForLocal => self.lyrics_for_local_files_row(cx).element,
@@ -969,6 +1057,7 @@ impl SettingsView {
             Slot::DiscordName => self.discord_name_row(cx).element,
             Slot::DiscordShowPaused => self.discord_show_paused_row(cx).element,
             Slot::DiscordBadge => self.discord_badge_row(cx).element,
+            Slot::ArtworkForLocal => self.artwork_for_local_files_row(cx).element,
             Slot::DiscordAnonymous => self.discord_anonymous_row(cx).element,
             Slot::DiscordButtons => self.discord_buttons_row(cx).element,
             Slot::Scrobble(index) => match index < self.scrobbling.read(cx).rows().len() {
@@ -1028,18 +1117,22 @@ impl SettingsView {
         let small = theme.text(Text::Small);
         let chosen = Screen::from_id(self.settings.read(cx).startup()).unwrap_or(Screen::Home);
         let current = i18n::lookup(chosen.key(), None);
+        let guest = !self.session.read(cx).authenticated();
 
         let picker = Picker::new(STARTUP, &self.popovers, current)
             .width(Picker::NARROW)
             .items(Screen::ALL.map(|screen| {
-                MenuItem::new(screen.id(), i18n::lookup(screen.key(), None))
-                    .selected(screen == chosen)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                let item = MenuItem::new(screen.id(), i18n::lookup(screen.key(), None))
+                    .selected(screen == chosen);
+                match guest && screen.needs_account() {
+                    true => item.disabled().tooltip("settings-startup-no-guest"),
+                    false => item.on_click(cx.listener(move |this, _, _, cx| {
                         let stored = screen.stored(this.session.read(cx).provider_slug());
                         this.settings
                             .update(cx, |settings, cx| settings.set_startup(stored, cx));
                         cx.notify();
-                    }))
+                    })),
+                }
             }));
 
         self.row(
@@ -1324,7 +1417,7 @@ impl SettingsView {
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
         let look = self.look(cx);
-        let overrides = self.settings.read(cx).theme_overrides().clone();
+        let overrides = self.settings.read(cx).theme_overrides();
 
         let picker = Picker::new(CORNERS, &self.popovers, look.rounding.label())
             .width(Picker::NARROW)
@@ -1350,21 +1443,22 @@ impl SettingsView {
         )
     }
 
+    /// Turns every frosted treatment in the app on or off at once: the menus, the fields, the
+    /// floating panels and the bands the chrome lays over the page. A backdrop blur is the
+    /// priciest thing the renderer does per frame, which is the whole reason it is a choice.
     fn blur_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
         let look = self.look(cx);
-        let overrides = self.settings.read(cx).theme_overrides().clone();
-        let opaque = !look.transparent;
+        let overrides = self.settings.read(cx).theme_overrides();
 
         self.row(
             t!("settings-blur"),
             t!("settings-blur-detail"),
             muted,
             small,
-            Switch::new("blur", look.blur && !opaque)
-                .disabled(opaque)
+            Switch::new("blur", look.blur)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let blur = !look.blur;
                     this.settings
@@ -1376,12 +1470,47 @@ impl SettingsView {
         )
     }
 
+    /// Asks the platform to blur the desktop behind a see-through window. It needs something to
+    /// show through, so the switch is off and disabled while the window is opaque.
+    fn blur_window_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let look = self.look(cx);
+        let overrides = self.settings.read(cx).theme_overrides();
+        let opaque = !look.transparent;
+
+        self.row(
+            t!("settings-blur-window"),
+            t!("settings-blur-window-detail"),
+            muted,
+            small,
+            Switch::new("blur-window", look.blur_window && !opaque)
+                .disabled(opaque)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let blur_window = !look.blur_window;
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_blur_window(blur_window, cx));
+                    Theme::set(
+                        Look {
+                            blur_window,
+                            ..look
+                        },
+                        &overrides,
+                        cx,
+                    );
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn font_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
         let look = self.look(cx);
-        let overrides = self.settings.read(cx).theme_overrides().clone();
+        let overrides = self.settings.read(cx).theme_overrides();
 
         let step = move |id: &'static str, label: &'static str, delta: f32| {
             let overrides = overrides.clone();
@@ -1556,15 +1685,26 @@ impl SettingsView {
     fn profile(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
+        // The service the account belongs to, named next to the region so the card says which
+        // provider it is rather than a bare country code.
+        let provider = self
+            .session
+            .read(cx)
+            .providers()
+            .find(|info| info.active)
+            .map(|info| info.name.to_string());
 
         div()
             .flex()
             .items_center()
             .gap_4()
             .child(match self.session.read(cx).profile() {
-                Some(profile) => {
-                    Initials::new(profile.display_name.clone(), px(64.)).into_any_element()
-                }
+                Some(profile) => match &profile.avatar {
+                    Some(avatar) => Avatar::new(Some(avatar.clone()))
+                        .size(px(64.))
+                        .into_any_element(),
+                    None => Initials::new(profile.display_name.clone(), px(64.)).into_any_element(),
+                },
                 None => Skeleton::new().size(px(64.)).circle().into_any_element(),
             })
             .child(
@@ -1582,7 +1722,14 @@ impl SettingsView {
                     })
                     .child(match self.session.read(cx).profile() {
                         Some(profile) => div()
-                            .child(music::tag::untag(&profile.id).to_owned())
+                            .child(match &provider {
+                                Some(provider) => t!(
+                                    "settings-profile-account",
+                                    provider = provider,
+                                    account = music::tag::untag(&profile.id)
+                                ),
+                                None => music::tag::untag(&profile.id).to_owned().into(),
+                            })
                             .text_color(muted)
                             .text_size(theme.text(Text::Small))
                             .into_any_element(),
@@ -1596,30 +1743,86 @@ impl SettingsView {
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
         let look = self.look(cx);
-        let current = look.kind;
-        let adaptive = self.settings.read(cx).adaptive_theme();
-        let overrides = self.settings.read(cx).theme_overrides().clone();
+        let (selected, adaptive, custom) = {
+            let settings = self.settings.read(cx);
+            (
+                settings.theme().to_owned(),
+                settings.adaptive_theme(),
+                settings
+                    .custom_themes()
+                    .map(|(id, name)| (id.to_owned(), name.to_owned()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let built_in = ThemeKind::ALL
+            .into_iter()
+            .find(|kind| kind.id() == selected);
+        let custom_selected = custom.iter().any(|(id, _)| id == &selected);
+        let current = custom
+            .iter()
+            .find(|(id, _)| id == &selected)
+            .map(|(_, name)| SharedString::from(name.clone()))
+            .or_else(|| built_in.map(ThemeKind::label))
+            .unwrap_or_else(|| t!("theme-unavailable", name = selected.clone()));
 
-        let picker = Picker::new(THEMES, &self.popovers, current.label())
-            .width(Picker::NARROW)
-            .items(ThemeKind::ALL.into_iter().map(|kind| {
-                let item = MenuItem::new(kind.id(), kind.label()).selected(current == kind);
+        let mut items = ThemeKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let item = MenuItem::new(kind.id(), kind.label()).selected(selected == kind.id());
                 match adaptive
                     && !matches!(kind, ThemeKind::System | ThemeKind::Dark | ThemeKind::Light)
                 {
-                    true => item.disabled(),
-                    false => {
-                        let overrides = overrides.clone();
-                        item.on_click(cx.listener(move |this, _, _, cx| {
-                            this.settings.update(cx, |settings, cx| {
-                                settings.set_theme(kind.id(), cx);
-                            });
-                            Theme::fade(Look { kind, ..look }, &overrides, cx);
-                            cx.notify();
-                        }))
-                    }
+                    true => item.disabled().tooltip("settings-theme-unavailable"),
+                    false => item.on_click(cx.listener(move |this, _, _, cx| {
+                        let overrides = this.settings.update(cx, |settings, cx| {
+                            settings.set_theme(kind.id(), cx);
+                            settings.theme_overrides()
+                        });
+                        Theme::fade(Look { kind, ..look }, &overrides, cx);
+                        cx.notify();
+                    })),
                 }
-            }));
+            })
+            .collect::<Vec<_>>();
+
+        if !custom.is_empty() || built_in.is_none() {
+            items.push(MenuItem::separator(("custom-themes", 0usize)));
+        }
+        items.extend(custom.into_iter().map(|(id, name)| {
+            let item = MenuItem::new(format!("custom-theme:{id}"), name).selected(selected == id);
+            match adaptive {
+                true => item.disabled().tooltip("settings-theme-unavailable"),
+                false => item.on_click(cx.listener(move |this, _, _, cx| {
+                    let overrides = this.settings.update(cx, |settings, cx| {
+                        settings.set_theme(id.clone(), cx);
+                        settings.theme_overrides()
+                    });
+                    Theme::fade(
+                        Look {
+                            kind: ThemeKind::Dark,
+                            ..look
+                        },
+                        &overrides,
+                        cx,
+                    );
+                    cx.notify();
+                })),
+            }
+        }));
+        if built_in.is_none() && !custom_selected {
+            items.push(
+                MenuItem::new(
+                    "unavailable-theme",
+                    t!("theme-unavailable", name = selected.clone()),
+                )
+                .selected(true)
+                .disabled(),
+            );
+        }
+
+        let picker = Picker::new(THEMES, &self.popovers, current)
+            .width(Picker::REGULAR)
+            .items(items);
 
         let settings = self.settings.clone();
         let actions = div()
@@ -1627,12 +1830,13 @@ impl SettingsView {
             .items_center()
             .gap_2()
             .child(
-                Button::new("open-theme-config")
-                    .label(t!("settings-theme-config"))
+                Button::new("open-theme-folder")
+                    .label(t!("settings-theme-folder"))
                     .small()
                     .outline()
                     .on_click(move |_, _, cx| {
-                        let path = settings.update(cx, |settings, _| settings.ensure_file());
+                        let path =
+                            settings.update(cx, |settings, _| settings.ensure_themes_directory());
                         if let Err(error) = open_path(&path) {
                             log::warn!("settings: cannot open {}: {error}", path.display());
                         }
@@ -1683,7 +1887,7 @@ impl SettingsView {
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
         let look = self.look(cx);
-        let overrides = self.settings.read(cx).theme_overrides().clone();
+        let overrides = self.settings.read(cx).theme_overrides();
         let transparency = match look.transparent {
             true => look.transparency,
             false => 0.,
@@ -1740,9 +1944,17 @@ impl SettingsView {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
-        let on = self.settings.read(cx).adaptive_theme();
+        let (on, neutral) = {
+            let settings = self.settings.read(cx);
+            let theme = settings.theme();
+            (
+                settings.adaptive_theme(),
+                [ThemeKind::System, ThemeKind::Dark, ThemeKind::Light]
+                    .into_iter()
+                    .any(|kind| kind.id() == theme),
+            )
+        };
         let look = self.look(cx);
-        let overrides = self.settings.read(cx).theme_overrides().clone();
 
         self.row(
             t!("settings-adaptive"),
@@ -1752,21 +1964,19 @@ impl SettingsView {
             Switch::new("adaptive-theme", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let adaptive = !on;
-                    let kind = match adaptive
-                        && !matches!(
-                            look.kind,
-                            ThemeKind::System | ThemeKind::Dark | ThemeKind::Light
-                        ) {
+                    let reset = adaptive && !neutral;
+                    let kind = match reset {
                         true => ThemeKind::Dark,
                         false => look.kind,
                     };
-                    this.settings.update(cx, |settings, cx| {
+                    let overrides = this.settings.update(cx, |settings, cx| {
                         settings.set_adaptive_theme(adaptive, cx);
-                        if kind != look.kind {
+                        if reset {
                             settings.set_theme(kind.id(), cx);
                         }
+                        settings.theme_overrides()
                     });
-                    if kind != look.kind {
+                    if reset {
                         Theme::fade(Look { kind, ..look }, &overrides, cx);
                     }
                 }))
@@ -1879,6 +2089,15 @@ impl SettingsView {
     /// How the spectrum is drawn behind the fullscreen artwork, off included.
     /// The rows one place's spectrum shows. The style comes first and switches it off; the rest
     /// only while it is drawn, and the bar options only for a style made of bars.
+    /// Whether either spectrum is drawn at all, so the setting shared by both has something to
+    /// change.
+    fn spectrum_shown(&self, cx: &App) -> bool {
+        let spectrum = self.settings.read(cx).spectrum();
+        [SpectrumPlace::App, SpectrumPlace::Mini]
+            .into_iter()
+            .any(|place| spectrum.profile(place).style().shown())
+    }
+
     fn spectrum_slots(&self, place: SpectrumPlace, cx: &App) -> Vec<Slot> {
         let spectrum = self.settings.read(cx).spectrum();
         let style = spectrum.profile(place).style();
@@ -2090,6 +2309,26 @@ impl SettingsView {
         cx.notify();
     }
 
+    fn visualizer_absolute_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).visualizer_absolute();
+
+        self.row(
+            t!("settings-visualizer-absolute"),
+            t!("settings-visualizer-absolute-detail"),
+            muted,
+            small,
+            Switch::new("visualizer-absolute", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_visualizer_absolute(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn fullscreen_controls_autohide_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -2119,6 +2358,26 @@ impl SettingsView {
             muted,
             small,
             picker.into_any_element(),
+        )
+    }
+
+    fn os_fullscreen_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).os_fullscreen();
+
+        self.row(
+            t!("settings-os-fullscreen"),
+            t!("settings-os-fullscreen-detail"),
+            muted,
+            small,
+            Switch::new("os-fullscreen", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_os_fullscreen(!on, cx));
+                }))
+                .into_any_element(),
         )
     }
 
@@ -2264,6 +2523,26 @@ impl SettingsView {
         )
     }
 
+    fn tray_icon_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).tray_icon();
+
+        self.row(
+            t!("settings-tray-icon"),
+            t!("settings-tray-icon-detail"),
+            muted,
+            small,
+            Switch::new("tray-icon", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_tray_icon(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn gapless_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -2279,6 +2558,26 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
                         .update(cx, |playback, cx| playback.set_gapless(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn stay_awake_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).stay_awake();
+
+        self.row(
+            t!("settings-stay-awake"),
+            t!("settings-stay-awake-detail"),
+            muted,
+            small,
+            Switch::new("stay-awake", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_stay_awake(!on, cx));
                 }))
                 .into_any_element(),
         )
@@ -2501,57 +2800,97 @@ impl SettingsView {
     /// The Widevine module row, which only appears while the current provider is one whose
     /// tracks need the module and this build has a host for one. Sonora uses a browser's copy
     /// when one is here and otherwise offers Google's download, so the row says where that
-    /// stands and offers the download by hand when the user said no or nothing asked yet.
+    /// stands. The download is offered by hand whenever Google's copy is not the one in use,
+    /// because a browser's copy can be one this host cannot open. The explanation wraps below
+    /// the title rather than truncating, to the height `widevine_height` measured.
     fn widevine_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
         let state = self.drm.read(cx).state().clone();
         let (detail, note) = widevine_copy(&state);
-        let offerable = matches!(state, CdmState::Declined | CdmState::Missing);
+        let offerable = matches!(
+            state,
+            CdmState::Declined | CdmState::Missing | CdmState::Ready(Origin::Installed)
+        );
         let removable = matches!(state, CdmState::Ready(Origin::Fetched));
+        let title = t!("settings-widevine");
+        let detail = i18n::lookup(detail, None);
 
-        self.row(
-            t!("settings-widevine"),
-            i18n::lookup(detail, None),
-            muted,
-            small,
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_color(muted)
-                .text_size(small)
-                .child(i18n::lookup(note, None))
-                .when(offerable, |row| {
-                    row.child(
-                        Button::new("fetch-widevine")
-                            .label(t!("settings-widevine-fetch"))
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.drm.update(cx, |drm, cx| drm.download(cx));
-                            })),
+        let action = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .text_color(muted)
+            .text_size(small)
+            .child(i18n::lookup(note, None))
+            .when(offerable, |row| {
+                row.child(
+                    Button::new("fetch-widevine")
+                        .label(t!("settings-widevine-fetch"))
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.drm.update(cx, |drm, cx| drm.download(cx));
+                        })),
+                )
+            })
+            .when(removable, |row| {
+                row.child(
+                    Button::new("uninstall-widevine")
+                        .label(t!("settings-widevine-uninstall"))
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let drm = this.drm.clone();
+                            Confirm::ask(
+                                Kind::Widevine,
+                                move |cx| drm.update(cx, |drm, cx| drm.uninstall(cx)),
+                                cx,
+                            );
+                        })),
+                )
+            });
+
+        let element = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .py_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .h(widevine_head(&theme))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .line_height(relative(LEADING))
+                            .child(title.clone()),
                     )
-                })
-                .when(removable, |row| {
-                    row.child(
-                        Button::new("uninstall-widevine")
-                            .label(t!("settings-widevine-uninstall"))
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let drm = this.drm.clone();
-                                Confirm::ask(
-                                    Kind::Widevine,
-                                    move |cx| drm.update(cx, |drm, cx| drm.uninstall(cx)),
-                                    cx,
-                                );
-                            })),
-                    )
-                })
-                .into_any_element(),
-        )
+                    .child(action),
+            )
+            .child(
+                div()
+                    .overflow_hidden()
+                    .line_height(relative(LEADING))
+                    .text_color(muted)
+                    .text_size(small)
+                    .child(detail.clone()),
+            )
+            .into_any_element();
+
+        Setting {
+            title,
+            detail,
+            element,
+        }
     }
 
     fn updates_row(&self, cx: &mut Context<Self>) -> Setting {
@@ -2777,6 +3116,27 @@ impl SettingsView {
         )
     }
 
+    fn artwork_for_local_files_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).artwork_for_local_files();
+
+        self.row(
+            t!("settings-artwork-for-local-files"),
+            t!("settings-artwork-for-local-files-detail"),
+            muted,
+            small,
+            Switch::new("artwork-for-local-files", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.update(cx, |settings, cx| {
+                        settings.set_artwork_for_local_files(!on, cx)
+                    });
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn discord_anonymous_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -2871,6 +3231,7 @@ impl SettingsView {
         let theme = *cx.theme();
         let settings = self.settings.read(cx);
         let providers = [
+            (music::lyrics::LOCAL, "settings-lyrics-provider-local"),
             ("Spotify", "settings-lyrics-provider-spotify"),
             ("YouTube Music", "settings-lyrics-provider-youtube"),
             ("Apple Music", "settings-lyrics-provider-apple-music"),
@@ -2905,6 +3266,26 @@ impl SettingsView {
             theme.muted_foreground,
             theme.text(Text::Small),
             picker.into_any_element(),
+        )
+    }
+
+    fn prefer_local_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).prefer_local_lyrics();
+
+        self.row(
+            t!("settings-prefer-local-lyrics"),
+            t!("settings-prefer-local-lyrics-detail"),
+            muted,
+            small,
+            Switch::new("prefer-local-lyrics", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_prefer_local_lyrics(!on, cx));
+                }))
+                .into_any_element(),
         )
     }
 
@@ -4288,6 +4669,28 @@ fn widevine_copy(state: &CdmState) -> (&'static str, &'static str) {
     }
 }
 
+/// How tall the Widevine row's top line stands: the title, or the small button beside it
+/// when that is taller.
+fn widevine_head(theme: &Theme) -> Pixels {
+    line(theme, Text::Body).max(theme.metrics.control_small)
+}
+
+/// How many lines `text` wraps to at `width` in the window's font at `size`. Falls back to
+/// one when the text cannot be shaped.
+fn wrapped_lines(text: SharedString, size: Pixels, width: Pixels, window: &Window) -> usize {
+    let run = window.text_style().to_run(text.len());
+    window
+        .text_system()
+        .shape_text(text, size, &[run], Some(width), None)
+        .map(|lines| {
+            lines
+                .iter()
+                .map(|line| line.wrap_boundaries().len() + 1)
+                .sum()
+        })
+        .unwrap_or(1)
+}
+
 /// Hands a file to the system's default application for it, without waiting on that program.
 fn open_path(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
@@ -4399,6 +4802,7 @@ impl Render for SettingsView {
 
         let general = self.tab == SettingsTab::General && !searching;
         let about = self.tab == SettingsTab::About && !searching;
+        let view = cx.entity().downgrade();
 
         div()
             .relative()
@@ -4433,6 +4837,18 @@ impl Render for SettingsView {
                             .px_6()
                             .pb_6()
                             .pt(self.header_height)
+                            // every child stretches across the column, so the widest is the
+                            // width the rows are laid out at
+                            .on_children_prepainted(move |bounds, _, cx| {
+                                let Some(width) = bounds
+                                    .iter()
+                                    .map(|bounds| bounds.size.width)
+                                    .reduce(Pixels::max)
+                                else {
+                                    return;
+                                };
+                                view.update(cx, |view, cx| view.set_column(width, cx)).ok();
+                            })
                             .when(general, |this| {
                                 this.child(self.profile(cx))
                                     .child(Separator::horizontal().w_full())
@@ -4492,29 +4908,29 @@ impl Render for SettingsHeader {
 
         // a search lights no category, since its rows come from all of them, and picking
         // one ends the search
-        let categories =
-            TabBar::new("settings-categories")
-                .max_w_full()
-                .items(SettingsTab::ALL.map(|tab| {
-                    Button::new(tab.id())
-                        .label(i18n::lookup(tab.key(), None))
-                        .icon(tab.icon())
-                        .small()
-                        .ghost()
-                        .selected(!searching && tab == chosen)
-                        .when(calm == Some(tab), Button::hoverless)
-                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                            if !hovered && this.calm == Some(tab) {
-                                this.calm = None;
-                                cx.notify();
-                            }
-                        }))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.calm = Some(tab);
-                            this.view.update(cx, |view, cx| view.select(tab, cx));
-                            navigate(Destination::Settings(tab), cx);
-                        }))
-                }));
+        let categories = TabBar::new("settings-categories")
+            .max_w_full()
+            .blurred()
+            .items(SettingsTab::ALL.map(|tab| {
+                Button::new(tab.id())
+                    .label(i18n::lookup(tab.key(), None))
+                    .icon(tab.icon())
+                    .small()
+                    .ghost()
+                    .selected(!searching && tab == chosen)
+                    .when(calm == Some(tab), Button::hoverless)
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if !hovered && this.calm == Some(tab) {
+                            this.calm = None;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.calm = Some(tab);
+                        this.view.update(cx, |view, cx| view.select(tab, cx));
+                        navigate(Destination::Settings(tab), cx);
+                    }))
+            }));
 
         div()
             .relative()
@@ -4529,12 +4945,16 @@ impl Render for SettingsHeader {
                 };
                 view.update(cx, |view, cx| view.set_header_height(height, cx));
             })
-            .when(!theme.transparent, |this| {
+            // The haze follows the window: a see-through page has content of its own passing
+            // under the header and reads worse without it. Only the flat fallback is dropped
+            // there, since a solid band over a see-through page is a slab.
+            .when(effects() || !theme.transparent, |this| {
                 this.child(veil(
                     Edge::Top,
                     height,
                     HEADER_BLUR,
                     theme.background,
+                    None,
                     window,
                 ))
             })

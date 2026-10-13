@@ -142,16 +142,12 @@ menu-copy = Copiar
 menu-paste = Colar
 menu-select-all = Selecionar tudo
 menu-remove-from-queue = Remover da fila
-menu-open-playlist = Abrir playlist
-menu-play-playlist = Tocar playlist
 menu-rename-playlist = Renomear playlist
 menu-delete-playlist = Excluir playlist
 menu-add-playlist-to-library = Adicionar à Biblioteca
 menu-remove-playlist-from-library = Remover da Biblioteca
 menu-make-playlist-public = Tornar pública
 menu-make-playlist-private = Tornar privada
-menu-open-album = Abrir álbum
-menu-play-album = Tocar álbum
 menu-play-artist = Tocar artista
 
 # playlist editor
@@ -285,7 +281,6 @@ login-account-title = Escolha uma conta
 login-account-detail = Esta sessão está conectada a mais de uma conta Google. Escolha qual o Sonora deve usar.
 
 # album and playlist pages
-detail-album = Álbum
 detail-playlist = Playlist
 detail-play-album = Tocar álbum
 detail-play-playlist = Tocar playlist
@@ -293,7 +288,6 @@ detail-play-playlist = Tocar playlist
 # play button
 play-pause = Pausar
 play-resume = Retomar
-play-loading = Carregando…
 play-shuffle = Aleatório
 
 # artist page
@@ -452,7 +446,7 @@ settings-theme-detail = Escolha a paleta de cores do aplicativo
 settings-opacity = Opacidade
 settings-opacity-detail = Ajuste a opacidade do fundo do aplicativo
 settings-opacity-value = { $percent }%
-settings-theme-config = Abrir configuração
+settings-theme-folder = Abrir configuração
 settings-adaptive = Tema adaptável
 settings-adaptive-detail = Tingir a paleta com a capa do álbum em reprodução
 settings-visualizer = Visualizador
@@ -469,8 +463,10 @@ settings-saver = Economia de bateria
 settings-saver-detail = Limitar a taxa de quadros das animações quando o Sonora não está em foco, aplicado a partir da próxima inicialização
 settings-corners = Cantos
 settings-corners-detail = O quão arredondados são as superfícies e os controles
-settings-blur = Desfoque
-settings-blur-detail = Desenhar a janela sobre uma área de trabalho desfocada. Precisa de opacidade abaixo de 100%
+settings-blur = Desfoque da interface
+settings-blur-detail = Aplicar vidro fosco a menus e controles flutuantes
+settings-blur-window = Desfocar a janela
+settings-blur-window-detail = Desenhar a janela sobre uma área de trabalho desfocada. Precisa de opacidade abaixo de 100%
 settings-font = Tamanho da fonte
 settings-font-detail = Tamanho base do texto, tudo o mais escala junto
 settings-font-value = { $size } px

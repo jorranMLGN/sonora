@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{AnyView, App, Context, Entity, FocusHandle, Render, StyleRefinement};
@@ -6,8 +6,8 @@ use gpui::{Window, div};
 use input::WORKSPACE_CONTEXT;
 use state::{Playback, Queue, SideTab};
 use ui::{
-    Activate, ActiveTheme as _, Deselect, Remove, SelectNext, SelectPrevious, ease_out_expo,
-    entering, entrance_span, shown_listing, veiled,
+    Activate, ActiveTheme as _, Deselect, Entrance, Remove, SelectNext, SelectPrevious, entering,
+    shown_listing, veiled,
 };
 
 use crate::chrome::{
@@ -16,31 +16,11 @@ use crate::chrome::{
 };
 use crate::shared::codec::CodecPrompt;
 use crate::shared::confirm::Confirm;
+use crate::shared::menus::CardMenu;
 use crate::shared::playlist_editor::PlaylistEditor;
 use crate::shared::tag_editor::TagEditor;
 use crate::shared::widevine::WidevinePrompt;
 use crate::shells::Shell;
-
-#[derive(Clone, Copy)]
-struct ContentTransition {
-    started: Instant,
-    span: Duration,
-}
-
-impl ContentTransition {
-    fn hidden(self) -> f32 {
-        if self.span.is_zero() {
-            return 0.;
-        }
-        let elapsed = self.started.elapsed().as_secs_f32();
-        let progress = (elapsed / self.span.as_secs_f32()).clamp(0., 1.);
-        1. - ease_out_expo(progress)
-    }
-
-    fn running(self) -> bool {
-        self.started.elapsed() < self.span
-    }
-}
 
 pub(crate) struct Workspace {
     sidebar: Entity<SidebarLeft>,
@@ -50,6 +30,7 @@ pub(crate) struct Workspace {
     playlist_editor: Entity<PlaylistEditor>,
     tag_editor: Entity<TagEditor>,
     confirm: Entity<Confirm>,
+    card_menu: Entity<CardMenu>,
     widevine: Entity<WidevinePrompt>,
     codec: Entity<CodecPrompt>,
     toasts: Entity<ToastStack>,
@@ -58,7 +39,7 @@ pub(crate) struct Workspace {
     /// A screen's own header, floated over the top of the page and outside its transition.
     /// The page pads itself to start beneath it.
     header: Option<AnyView>,
-    transition: Option<ContentTransition>,
+    transition: Option<Entrance>,
     focus: FocusHandle,
 }
 
@@ -82,6 +63,7 @@ impl Workspace {
             playlist_editor: PlaylistEditor::entity(cx),
             tag_editor: TagEditor::entity(cx),
             confirm: Confirm::entity(cx),
+            card_menu: CardMenu::entity(cx),
             widevine: cx.new(WidevinePrompt::new),
             codec: cx.new(CodecPrompt::new),
             toasts: cx.new(ToastStack::new),
@@ -134,13 +116,10 @@ impl Workspace {
             return Duration::ZERO;
         }
 
-        let span = entrance_span();
-        self.transition = Some(ContentTransition {
-            started: Instant::now(),
-            span,
-        });
+        let entrance = Entrance::start();
+        self.transition = Some(entrance);
         cx.notify();
-        span
+        entrance.span()
     }
 
     pub fn finish_transition(&mut self, cx: &mut Context<Self>) {
@@ -188,11 +167,12 @@ impl Shell for Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let right = self.sidebar_right.read(cx).occupied_width(window);
+        let reserved = self.sidebar_right.read(cx).reserved_width();
         self.sidebar
-            .update(cx, |sidebar, cx| sidebar.adapt(right, window, cx));
+            .update(cx, |sidebar, cx| sidebar.adapt(reserved, window, cx));
         let left = self.sidebar.read(cx).occupied_width();
         let overlay_width = self.sidebar.read(cx).overlay_width();
-        Chrome::publish(left, right, cx);
+        Chrome::publish(left, right, reserved, cx);
         let covered = self.sidebar_right.read(cx).covers_content(window);
         let overlay = self.sidebar.read(cx).overlays();
         let bar_height = PlayerBar::height(window, cx);
@@ -371,6 +351,7 @@ impl Render for Workspace {
                     )
                     .child(self.toasts.clone()),
             )
+            .child(self.card_menu.clone())
             .child(self.playlist_editor.clone())
             .child(self.tag_editor.clone())
             .child(self.confirm.clone())

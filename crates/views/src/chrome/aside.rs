@@ -374,7 +374,7 @@ impl Aside {
             verse_take: 0,
             placing: false,
             context_menu: None,
-            track_menu: ItemMenu::new(playlist_scrollbar),
+            track_menu: ItemMenu::new(playlist_scrollbar, cx),
             drop_gap: None,
             scroll,
             scrollbar,
@@ -1486,7 +1486,10 @@ impl Aside {
                 .flex_col()
                 .text_size(theme.text(Text::Small))
                 .text_color(theme.muted_foreground)
-                .child(t!("lyrics-source", source = *source))
+                .child(match *source == music::lyrics::LOCAL {
+                    true => t!("lyrics-source-local"),
+                    false => t!("lyrics-source", source = *source),
+                })
                 .when(!writers.is_empty(), |this| {
                     let writers = writers.join(", ");
                     this.child(t!("lyrics-writers", writers = writers.as_str()))
@@ -1676,9 +1679,10 @@ impl Aside {
         Some(goal.clamp(Pixels::ZERO, handle.max_offset().y))
     }
 
-    // unnamed origins stay unlabelled
+    /// The name and page of the collection the current track was queued from. `None` for a track
+    /// added on its own or an origin without a name, so the header shows no source.
     fn playing_from(&self, cx: &App) -> Option<(SharedString, Destination)> {
-        let origin = self.playback.read(cx).origin()?;
+        let origin = self.playback.read(cx).origin(cx)?;
         let id = SharedString::from(origin.id.clone());
         let shelf = |slug: &str| match slug == router::LOCAL && origin.id.is_empty() {
             true => LibraryTab::Songs,
@@ -1713,7 +1717,8 @@ impl Aside {
                     Shape::Catalog => t!("nav-songs"),
                 }
             }
-            _ => origin.name.clone()?,
+            Whence::Radio => t!("queue-from-radio", name = origin.name.as_deref()?),
+            Whence::Album | Whence::Playlist | Whence::Artist => origin.name.clone()?,
         };
 
         Some((name, place))

@@ -32,6 +32,8 @@ pub(crate) const GUEST_ID: &str = "soundcloud-guest";
 struct Me {
     id: i64,
     username: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
 }
 
 pub struct SoundCloudProvider {
@@ -103,6 +105,7 @@ impl SoundCloudProvider {
             profile: UserProfile {
                 id: GUEST_ID.to_string(),
                 display_name: "SoundCloud".to_string(),
+                avatar: None,
             },
             playback: Arc::new(playback::Factory::new(http.clone())),
             api: Arc::new(SoundCloudClient::new(http)),
@@ -161,6 +164,7 @@ pub(crate) async fn fetch_profile(http: &Http) -> Result<UserProfile> {
     Ok(UserProfile {
         id: me.id.to_string(),
         display_name: me.username,
+        avatar: wire::artwork(me.avatar_url.as_deref(), "t500x500"),
     })
 }
 

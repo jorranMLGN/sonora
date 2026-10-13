@@ -802,9 +802,10 @@ impl Jam {
             return;
         };
 
+        let origin = crate::Origin::playlist(pack.clone()).named(name.clone());
         self.playback.update(cx, |this, cx| match next {
-            true => this.play_playlist_next(&pack, cx),
-            false => this.enqueue_playlist(&pack, cx),
+            true => this.play_playlist_next(origin, cx),
+            false => this.enqueue_playlist(origin, cx),
         });
         reply.send(Ok(name)).ok();
     }

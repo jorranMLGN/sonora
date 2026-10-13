@@ -39,7 +39,9 @@ impl Render for SpectrumStrip {
         let sounding = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
         let wanted =
             spectrum.in_strip && look.style.shown() && sounding && ui::motion::animates(cx);
-        let bands = wanted.then(|| self.playback.read(cx).spectrum()).flatten();
+        let bands = wanted
+            .then(|| self.playback.read(cx).spectrum(cx))
+            .flatten();
         let showing = bands.is_some();
         match bands {
             Some(bands) => self

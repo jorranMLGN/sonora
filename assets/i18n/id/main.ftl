@@ -142,16 +142,12 @@ menu-copy = Salin
 menu-paste = Tempel
 menu-select-all = Pilih semua
 menu-remove-from-queue = Hapus dari antrean
-menu-open-playlist = Buka playlist
-menu-play-playlist = Putar playlist
 menu-rename-playlist = Ganti nama playlist
 menu-delete-playlist = Hapus playlist
 menu-add-playlist-to-library = Simpan ke Koleksi
 menu-remove-playlist-from-library = Hapus dari Koleksi
 menu-make-playlist-public = Jadikan publik
 menu-make-playlist-private = Jadikan privat
-menu-open-album = Buka album
-menu-play-album = Putar album
 menu-play-artist = Putar artis
 
 # playlist editor
@@ -285,7 +281,6 @@ login-account-title = Pilih akun
 login-account-detail = Sesi ini terhubung ke lebih dari satu akun Google. Pilih akun yang ingin digunakan Sonora.
 
 # album and playlist pages
-detail-album = Album
 detail-playlist = Playlist
 detail-play-album = Putar album
 detail-play-playlist = Putar playlist
@@ -293,7 +288,6 @@ detail-play-playlist = Putar playlist
 # play button
 play-pause = Jeda
 play-resume = Lanjutkan
-play-loading = Memuat…
 play-shuffle = Acak
 
 # artist page
@@ -452,7 +446,7 @@ settings-theme-detail = Pilih palet warna aplikasi
 settings-opacity = Opasitas
 settings-opacity-detail = Atur tingkat transparansi latar belakang aplikasi
 settings-opacity-value = { $percent }%
-settings-theme-config = Buka konfigurasi
+settings-theme-folder = Buka konfigurasi
 settings-adaptive = Tema adaptif
 settings-adaptive-detail = Sesuaikan aksen warna tema dengan gambar sampul album yang sedang diputar
 settings-visualizer = Visualizer
@@ -469,8 +463,10 @@ settings-saver = Penghemat baterai
 settings-saver-detail = Batasi frame rate animasi saat Sonora tidak sedang aktif (berlaku mulai peluncuran berikutnya)
 settings-corners = Kelengkungan sudut
 settings-corners-detail = Atur kelengkungan sudut permukaan dan tombol pada aplikasi
-settings-blur = Efek buram (Blur)
-settings-blur-detail = Tampilkan jendela di atas efek buram desktop. Memerlukan opasitas di bawah 100%
+settings-blur = Buramkan antarmuka
+settings-blur-detail = Beri efek kaca buram pada menu dan kontrol mengambang
+settings-blur-window = Buramkan jendela
+settings-blur-window-detail = Tampilkan jendela di atas efek buram desktop. Memerlukan opasitas di bawah 100%
 settings-font = Ukuran font
 settings-font-detail = Ukuran teks dasar, elemen antarmuka lainnya akan menyesuaikan
 settings-font-value = { $size } px

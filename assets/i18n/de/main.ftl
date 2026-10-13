@@ -142,16 +142,12 @@ menu-copy = Kopieren
 menu-paste = Einfügen
 menu-select-all = Alle auswählen
 menu-remove-from-queue = Aus der Warteschlange entfernen
-menu-open-playlist = Playlist öffnen
-menu-play-playlist = Playlist abspielen
 menu-rename-playlist = Playlist umbenennen
 menu-delete-playlist = Playlist löschen
 menu-add-playlist-to-library = Zur Bibliothek hinzufügen
 menu-remove-playlist-from-library = Aus der Bibliothek entfernen
 menu-make-playlist-public = Öffentlich machen
 menu-make-playlist-private = Privat machen
-menu-open-album = Album öffnen
-menu-play-album = Album abspielen
 menu-play-artist = Künstler abspielen
 
 # playlist editor
@@ -285,7 +281,6 @@ login-account-title = Konto auswählen
 login-account-detail = Diese Sitzung ist bei mehreren Google-Konten angemeldet. Wähle das Konto, das Sonora verwenden soll.
 
 # album and playlist pages
-detail-album = Album
 detail-playlist = Playlist
 detail-play-album = Album abspielen
 detail-play-playlist = Playlist abspielen
@@ -293,7 +288,6 @@ detail-play-playlist = Playlist abspielen
 # play button
 play-pause = Pause
 play-resume = Fortsetzen
-play-loading = Wird geladen…
 play-shuffle = Zufallswiedergabe
 
 # artist page
@@ -452,7 +446,7 @@ settings-theme-detail = Wähle die Farbpalette der Anwendung
 settings-opacity = Deckkraft
 settings-opacity-detail = Deckkraft des App-Hintergrunds anpassen
 settings-opacity-value = { $percent } %
-settings-theme-config = Konfiguration öffnen
+settings-theme-folder = Ordner öffnen
 settings-adaptive = Adaptives Design
 settings-adaptive-detail = Färbt die Palette nach dem Cover des laufenden Albums
 settings-visualizer = Visualizer
@@ -467,8 +461,10 @@ settings-saver = Energiesparen
 settings-saver-detail = Bildrate der Animationen begrenzen, wenn Sonora nicht im Fokus ist, ab dem nächsten Start
 settings-corners = Ecken
 settings-corners-detail = Wie stark Flächen und Bedienelemente abgerundet sind
-settings-blur = Weichzeichnen
-settings-blur-detail = Das Fenster über einen weichgezeichneten Desktop zeichnen. Braucht eine Deckkraft unter 100 %
+settings-blur = Oberfläche weichzeichnen
+settings-blur-detail = Menüs und schwebende Bedienelemente mattieren
+settings-blur-window = Fenster weichzeichnen
+settings-blur-window-detail = Das Fenster über einen weichgezeichneten Desktop zeichnen. Braucht eine Deckkraft unter 100 %
 settings-font = Schriftgröße
 settings-font-detail = Basisgröße des Textes, alles andere skaliert mit
 settings-font-value = { $size } px
@@ -654,6 +650,7 @@ theme-ocean = Ozean
 theme-rose = Rosé
 theme-lavender = Lavendel
 theme-amber = Bernstein
+theme-unavailable = { $name } (nicht verfügbar)
 
 # corners
 corners-square = Eckig

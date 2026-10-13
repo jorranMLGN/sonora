@@ -121,16 +121,12 @@ menu-copy = Kopyala
 menu-paste = Yapıştır
 menu-select-all = Tümünü seç
 menu-remove-from-queue = Sıradan çıkar
-menu-open-playlist = Çalma listesini aç
-menu-play-playlist = Çalma listesini çal
 menu-rename-playlist = Çalma listesini yeniden adlandır
 menu-delete-playlist = Çalma listesini sil
 menu-add-playlist-to-library = Kitaplığa ekle
 menu-remove-playlist-from-library = Kitaplıktan çıkar
 menu-make-playlist-public = Herkese açık yap
 menu-make-playlist-private = Gizli yap
-menu-open-album = Albümü aç
-menu-play-album = Albümü çal
 menu-play-artist = Sanatçıyı çal
 
 # playlist editor
@@ -270,7 +266,6 @@ login-account-title = Bir hesap seç
 login-account-detail = Bu oturumda birden çok Google hesabı açık. Sonora'nın kullanacağı hesabı seç.
 
 # album and playlist pages
-detail-album = Albüm
 detail-playlist = Çalma listesi
 detail-play-album = Albümü çal
 detail-play-playlist = Çalma listesini çal
@@ -278,7 +273,6 @@ detail-play-playlist = Çalma listesini çal
 # play button
 play-pause = Duraklat
 play-resume = Sürdür
-play-loading = Yükleniyor…
 play-shuffle = Karıştır
 
 # artist page
@@ -435,7 +429,7 @@ settings-theme-detail = Uygulamanın renk paletini seç
 settings-opacity = Saydamlık
 settings-opacity-detail = Uygulama arka planının saydamlığını ayarla
 settings-opacity-value = { $percent }%
-settings-theme-config = Yapılandırmayı aç
+settings-theme-folder = Yapılandırmayı aç
 settings-adaptive = Uyarlanabilir tema
 settings-adaptive-detail = Paleti, çalan albümün kapağıyla renklendir
 settings-visualizer = Görselleştirici
@@ -452,8 +446,10 @@ settings-saver = Pil tasarrufu
 settings-saver-detail = Sonora odakta değilken animasyonların kare hızını sınırla, sonraki açılıştan başlayarak uygulanır
 settings-corners = Köşeler
 settings-corners-detail = Yüzeylerin ve denetimlerin ne kadar yuvarlak olduğu
-settings-blur = Bulanıklık
-settings-blur-detail = Pencereyi bulanık bir masaüstünün üzerine çizer. %100'ün altında bir saydamlık gerekir
+settings-blur = Arayüz bulanıklığı
+settings-blur-detail = Menüleri ve yüzen denetimleri buzlu cam gibi göster
+settings-blur-window = Pencereyi bulanıklaştır
+settings-blur-window-detail = Pencereyi bulanık bir masaüstünün üzerine çizer. %100'ün altında bir saydamlık gerekir
 settings-font = Yazı boyutu
 settings-font-detail = Temel metin boyutu, diğer her şey buna göre ölçeklenir
 settings-font-value = { $size } px

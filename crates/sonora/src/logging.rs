@@ -11,6 +11,13 @@ const FILTER: &str = "SONORA_LOG";
 const PREVIOUS: &str = "sonora.log.1";
 const LIMIT: u64 = 16 * 1024 * 1024;
 
+/// Logs to stderr only, for a process that is not the app, such as the Widevine host.
+pub fn console() {
+    env_logger::Builder::from_env(Env::default().default_filter_or(CONSOLE))
+        .format_timestamp(None)
+        .init();
+}
+
 pub fn init() {
     let console = env_logger::Builder::from_env(Env::default().default_filter_or(CONSOLE))
         .format_timestamp(None)
@@ -34,8 +41,30 @@ pub fn init() {
     if log::set_boxed_logger(logger).is_ok() {
         log::set_max_level(level);
     }
+    catch_panics();
 
     log::debug!("logging: sonora {} started", env!("CARGO_PKG_VERSION"));
+}
+
+/// Writes a panic to the log before the default hook prints it. A Sonora started from a
+/// desktop entry or a tray has no terminal to lose it to, so this is the only place a crash
+/// leaves a trace. `RUST_BACKTRACE` still decides whether there is a backtrace to write.
+fn catch_panics() {
+    let default = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |panic| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed");
+        let backtrace = std::backtrace::Backtrace::capture();
+        match backtrace.status() {
+            std::backtrace::BacktraceStatus::Captured => {
+                log::error!("panic: {panic} on the {name} thread\n{backtrace}")
+            }
+            _ => log::error!("panic: {panic} on the {name} thread"),
+        }
+        log::logger().flush();
+        default(panic);
+    }));
 }
 
 /// The log file under the size limit: a write that would carry it past `LIMIT` rotates it

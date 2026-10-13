@@ -51,6 +51,7 @@ impl MusicApi for SoundCloudClient {
             Ok(UserProfile {
                 id: GUEST_ID.to_string(),
                 display_name: "SoundCloud".to_string(),
+                avatar: None,
             })
         }
     }
@@ -175,8 +176,12 @@ impl MusicApi for SoundCloudClient {
         playlists::playlist_covers(&self.http, playlist_id, wanted).await
     }
 
-    async fn track_radio(&self, track_id: &str) -> Result<Vec<Track>> {
-        users::related(&self.http, track_id).await
+    async fn track_radio(
+        &self,
+        track_id: &str,
+        _from: Option<&str>,
+    ) -> Result<(Vec<Track>, Option<String>)> {
+        Ok((users::related(&self.http, track_id).await?, None))
     }
 
     async fn search(&self, query: &str) -> Result<Vec<Track>> {

@@ -13,7 +13,7 @@ use input::{ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleMiniPlayer, ToggleQ
 use state::{AppSettings, Playback, Queue, SideTab, Sonora};
 use ui::{
     Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Popup, Room, Scrollbar, Scrubber,
-    ScrubberState, clock,
+    ScrubberState, clock, tabular,
 };
 
 use crate::chrome::SidebarRight;
@@ -57,7 +57,7 @@ impl PlayerBar {
             playback,
             queue,
             settings,
-            track_menu: ItemMenu::new(playlist_scrollbar),
+            track_menu: ItemMenu::new(playlist_scrollbar, cx),
             context_menu: None,
             seek: ScrubberState::new("seek"),
             volume: ScrubberState::new("volume"),
@@ -411,6 +411,7 @@ impl Render for PlayerBar {
                 .flex_none()
                 .whitespace_nowrap()
                 .text_size(clock_text)
+                .font_features(tabular())
                 .text_color(muted)
                 .when_else(align_end, |this| this.text_right(), |this| this.text_left())
         };
@@ -440,7 +441,7 @@ impl Render for PlayerBar {
             .into_any_element();
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let radius = crate::chrome::window_radius(self.settings.read(cx));
+        let radius = crate::chrome::window_radius(self.settings.read(cx), cx, window);
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let radius: Option<Pixels> = None;
 

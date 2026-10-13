@@ -1,4 +1,5 @@
 pub mod apple;
+pub mod artwork;
 mod audio;
 pub mod binimum;
 pub mod cast;
@@ -7,6 +8,7 @@ pub mod deezer;
 pub mod drm;
 pub mod engine;
 pub mod equalizer;
+pub mod escape;
 pub mod kugou;
 #[cfg(test)]
 mod live_tests;
@@ -16,6 +18,7 @@ pub mod lyrics;
 mod models;
 pub mod musixmatch;
 pub mod netease;
+pub mod potoken;
 pub mod progress;
 pub mod scrobble;
 mod sink;
@@ -32,19 +35,23 @@ pub mod video;
 pub mod youtube;
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use async_trait::async_trait;
+use time::format_description::well_known::Iso8601;
+use time::parsing::Parsed;
+use time::{Month, OffsetDateTime};
 
 pub use equalizer::Equalizer;
 pub use models::{
-    Album, AlbumDetail, Artist, ArtistProfile, ArtistRef, Contributor, Credit, Genre, GenreDetail,
-    GenreItem, GenreSection, HomeFeed, LibraryItem, LibraryItemKind, LibraryOrder,
-    LibraryPinResult, Lyrics, LyricsHit, LyricsLane, LyricsLine, LyricsQuery, LyricsWord, Playlist,
-    PlaylistDetail, ReleaseType, RomanizedText, SavedArtist, Track, TrackKey, TrackTags,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, ArtistRef,
+    Contributor, Credit, Genre, GenreDetail, GenreItem, GenreSection, HomeFeed, Lyrics, LyricsHit,
+    LyricsLane, LyricsLine, LyricsQuery, LyricsWord, PinOutcome, PinTarget, PinTargetKind,
+    Playlist, PlaylistDetail, ReleaseType, RomanizedText, SavedArtist, Track, TrackKey, TrackTags,
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use spectrum::Spectrum;
@@ -53,6 +60,10 @@ pub const LOCAL_TRACK_PREFIX: &str = "local:";
 pub const LOCAL_ALBUM_PREFIX: &str = "local-album:";
 pub const LOCAL_ARTIST_PREFIX: &str = "local-artist:";
 pub const LOCAL_PLAYLIST_PREFIX: &str = "local-playlist:";
+
+/// The most recommendations a provider hands one list of an album or artist page, so a
+/// rail never asks for or draws more than this many releases or artists.
+pub const SUGGESTIONS: usize = 10;
 
 pub fn is_local_id(id: &str) -> bool {
     tag::slug_of(id) == Some("local")
@@ -80,6 +91,14 @@ pub enum MediaKind {
     Playlist,
 }
 
+/// What `MusicApi::report` tells the provider's server about the current track.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Report {
+    Playing,
+    Paused,
+    Stopped,
+}
+
 #[async_trait]
 pub trait MusicApi: Send + Sync {
     fn alive(&self) -> bool {
@@ -94,6 +113,20 @@ pub trait MusicApi: Send + Sync {
     }
 
     async fn artist(&self, artist_id: &str) -> Result<Artist>;
+
+    /// The rest of an artist page, fetched once `artist` has put the overview up: the whole
+    /// discography and the popular tracks that only the discography can rank. `known` is the
+    /// top tracks already on the page, so the provider can rank around them. A provider whose
+    /// `artist` already answers with everything leaves the default, which is nothing more to
+    /// fetch.
+    async fn artist_catalogue(
+        &self,
+        _artist_id: &str,
+        _known: &[Track],
+    ) -> Result<ArtistCatalogue> {
+        Ok(ArtistCatalogue::default())
+    }
+
     async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfile>;
     async fn artist_images(&self, ids: Vec<String>) -> Result<HashMap<String, String>>;
 
@@ -143,27 +176,56 @@ pub trait MusicApi: Send + Sync {
     }
     async fn track(&self, track_id: &str) -> Result<Track>;
 
-    /// Reads an arbitrary file on disk as a track, for a provider whose tracks are files. Used
-    /// by file-association opens, which may point outside any scanned folder.
-    async fn track_from_path(&self, _path: &Path) -> Result<Track> {
-        anyhow::bail!("cannot open arbitrary files")
-    }
-
     /// Delete a track file from disk (only for local provider)
     async fn delete_track_file(&self, _track_id: &str) -> Result<()> {
         anyhow::bail!("this provider does not support file deletion")
     }
     async fn track_playcount(&self, track_id: &str) -> Result<Option<u64>>;
-    async fn playlists(&self) -> Result<Vec<Playlist>>;
-    /// Change a provider's own library pin, rather than a local sidebar shortcut.
-    async fn set_library_item_pinned(&self, _uri: &str, _pinned: bool) -> Result<LibraryPinResult> {
-        anyhow::bail!("library pinning is not supported")
+
+    /// Tells the provider's own server whether a track is playing and where it is. It is sent on
+    /// every start, pause, seek and stop, and never counts as a listen. A provider that keeps no
+    /// listening record keeps the default and makes no request.
+    async fn report(&self, _track_id: &str, _report: Report, _position: Duration) -> Result<()> {
+        Ok(())
     }
 
-    /// The provider's mixed library, including pins and its recent-play ordering.
-    /// None means this provider exposes only the separate saved collections.
-    async fn library_items(&self, _order: LibraryOrder) -> Result<Option<Vec<LibraryItem>>> {
+    /// Records a finished listen that started at `at` on the provider's own server. It is sent
+    /// at the same moment and under the same rules as a scrobble. A provider that keeps no
+    /// listening record keeps the default and makes no request.
+    async fn played(&self, _track_id: &str, _at: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
+    /// Tells the provider a track has started playing, so the play counts on the provider's
+    /// own side. A provider that keeps no history keeps the default and makes no request.
+    async fn report_play(&self, _track_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// The tracks the account has recently played, newest first, across every device. A provider
+    /// that keeps no cross-device history keeps the default and answers with nothing.
+    async fn recently_played(&self) -> Result<Vec<Track>> {
+        Ok(Vec::new())
+    }
+
+    async fn playlists(&self) -> Result<Vec<Playlist>>;
+    /// Changes the provider's own pin for `uri`, one of the uris `pin_targets` lists or
+    /// `pin_uri` builds.
+    async fn set_pinned(&self, _uri: &str, _pinned: bool) -> Result<PinOutcome> {
+        anyhow::bail!("pinning is not supported")
+    }
+
+    /// What the provider can pin, each saying whether it is pinned now. A provider may list
+    /// only its pinned items and answer `pin_uri` for the rest. `None` means the provider
+    /// keeps no pins of its own.
+    async fn pin_targets(&self) -> Result<Option<Vec<PinTarget>>> {
         Ok(None)
+    }
+
+    /// The uri `set_pinned` takes for an item `pin_targets` does not list. `None` means only
+    /// a listed item can be pinned on the provider's side.
+    fn pin_uri(&self, _kind: PinTargetKind, _id: &str) -> Option<String> {
+        None
     }
     async fn create_playlist(&self, name: &str) -> Result<String>;
     async fn rename_playlist(&self, playlist_id: &str, name: &str) -> Result<()>;
@@ -214,6 +276,20 @@ pub trait MusicApi: Send + Sync {
     async fn set_artist_saved(&self, artist_id: &str, saved: bool) -> Result<()>;
     async fn album(&self, album_id: &str) -> Result<AlbumDetail>;
     async fn album_tracks(&self, album_id: &str) -> Result<Vec<Track>>;
+
+    /// The rest of an album page, fetched once `album` has put the tracks up: the releases
+    /// the provider lists as related, with more from the same artist first and similar
+    /// artists' releases topping the rail up. `artist_id` is
+    /// the page's artist when the album names one the app can follow. A provider whose
+    /// `album` already answers with everything leaves the default, which is nothing more
+    /// to fetch.
+    async fn album_catalogue(
+        &self,
+        _album_id: &str,
+        _artist_id: Option<&str>,
+    ) -> Result<AlbumCatalogue> {
+        Ok(AlbumCatalogue::default())
+    }
     async fn playlist(&self, playlist_id: &str) -> Result<PlaylistDetail>;
     async fn playlist_continuation(
         &self,
@@ -224,7 +300,16 @@ pub trait MusicApi: Send + Sync {
 
     async fn playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>>;
     async fn playlist_covers(&self, playlist_id: &str, wanted: usize) -> Result<Vec<String>>;
-    async fn track_radio(&self, track_id: &str) -> Result<Vec<Track>>;
+    /// The station seeded by `track_id`, from its start or from `from`, a continuation an
+    /// earlier call answered with. The continuation that comes back fetches the next stretch,
+    /// and `None` means the provider has no more. A provider that serves a station in one go
+    /// ignores `from` and answers `None`, which it is then never handed.
+    async fn track_radio(
+        &self,
+        track_id: &str,
+        from: Option<&str>,
+    ) -> Result<(Vec<Track>, Option<String>)>;
+
     async fn search(&self, query: &str) -> Result<Vec<Track>>;
 
     async fn search_albums(&self, _query: &str) -> Result<Vec<Album>> {
@@ -307,10 +392,20 @@ pub enum PlaybackEvent {
         id: Option<String>,
         duration: Duration,
     },
+    /// The whole of the current track has arrived, so fetching the next one takes nothing from
+    /// it. Engines that cannot tell never send this.
+    Downloaded {
+        id: Option<String>,
+    },
     Ended {
         id: Option<String>,
     },
     Unavailable {
+        id: Option<String>,
+    },
+    /// The provider turned the load down for now, as it does under a rate limit, so the same
+    /// track may play after a wait.
+    Throttled {
         id: Option<String>,
     },
     Refused,
@@ -327,8 +422,10 @@ impl PlaybackEvent {
             | Self::Position { id, .. }
             | Self::Seeked { id, .. }
             | Self::Length { id, .. }
+            | Self::Downloaded { id }
             | Self::Ended { id, .. }
-            | Self::Unavailable { id, .. } => id.as_deref(),
+            | Self::Unavailable { id, .. }
+            | Self::Throttled { id } => id.as_deref(),
             _ => None,
         }
     }
@@ -403,15 +500,15 @@ pub struct Capabilities {
     /// put into and taken out of through `set_in_library`. Off where the library is the
     /// favorites, as on Spotify, and where it is fixed, as on a self-hosted server.
     pub library: bool,
-    /// The provider keeps sidebar pins of its own, listed by `library_items` and changed
-    /// through `set_library_item_pinned`. Off, a pin lives in Sonora's settings alone.
+    /// The provider keeps sidebar pins of its own, listed by `pin_targets` and changed
+    /// through `set_pinned`. Off, a pin lives in Sonora's settings alone.
     pub pins: bool,
 }
 
 impl Capabilities {
     /// What a full streaming service offers. A library apart from favorites is not among
     /// them: on most services the two are one thing. We love Apple Music. Pins of the
-    /// provider's own are not either, since only Spotify keeps any.
+    /// provider's own are not either, since only Spotify and Apple Music keep any.
     pub const ALL: Self = Self {
         follow_artists: true,
         radio: true,
@@ -567,6 +664,17 @@ pub trait MusicProvider: Send + Sync {
     /// everything again. Only a provider that scans files has anything to forget, and only a
     /// rescan the user asked for should ask it to.
     fn forget_scan(&self) {}
+    /// A factory for the provider's playback engine that can work without sign-in and scan,
+    /// so playback can start before the library has loaded. Only for a provider whose tracks
+    /// are files.
+    fn playback_factory(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        None
+    }
+    /// Reads an arbitrary file on disk as a track, for a provider whose tracks are files. Used
+    /// by file-association opens, which may point outside any scanned folder.
+    fn track_from_path(&self, _path: &Path) -> Option<Track> {
+        None
+    }
     fn sign_in_options(&self) -> Vec<SignIn>;
     fn stored(&self) -> bool;
     /// Whether what is stored is an anonymous session rather than an account, so a caller
@@ -618,6 +726,76 @@ pub trait MusicProvider: Send + Sync {
     /// sign-in, and the app offers no `Secret` option for it.
     fn web_sign_in(&self) -> Option<WebSignIn> {
         None
+    }
+}
+
+/// Leniently convert an ISO8601 timestamp to unix epoch seconds. Accepts only
+/// the date portion, date and time portions, or full date and time with offset.
+pub fn iso_8601_to_epoch(value: Option<&str>) -> Option<i64> {
+    let time_str = value?.as_bytes();
+    let defaults = Parsed::new()
+        .with_month(Month::January)
+        .and_then(|d| d.with_day(NonZero::<u8>::new(1)?))
+        .and_then(|d| d.with_hour_24(0))
+        .and_then(|d| d.with_minute(0))
+        .and_then(|d| d.with_second(0))
+        .and_then(|d| d.with_subsecond(0))
+        .and_then(|d| d.with_offset_hour(0))
+        .and_then(|d| d.with_offset_minute_signed(0))
+        .and_then(|d| d.with_offset_second_signed(0))?;
+    let timestamp = OffsetDateTime::parse_with_defaults(time_str, &Iso8601::PARSING, defaults)
+        .ok()?
+        .unix_timestamp();
+    Some(timestamp)
+}
+
+#[cfg(test)]
+mod tests {
+    use time::macros::datetime;
+
+    use super::*;
+
+    #[test]
+    fn iso_8601_to_epoch_parses_correctly() {
+        // None and malformed input
+        assert_eq!(iso_8601_to_epoch(None), None);
+        assert_eq!(iso_8601_to_epoch(Some("")), None);
+        assert_eq!(iso_8601_to_epoch(Some("malformed")), None);
+
+        // Basic epoch format
+        assert_eq!(iso_8601_to_epoch(Some("1970-01-01")), Some(0));
+        assert_eq!(iso_8601_to_epoch(Some("1970-01-01T00:00:00")), Some(0));
+        assert_eq!(iso_8601_to_epoch(Some("1970-01-01T00:00:00Z")), Some(0));
+        assert_eq!(
+            iso_8601_to_epoch(Some("1970-01-01T00:00:00+00:00")),
+            Some(0)
+        );
+
+        // A specific date with/without time/offset
+        assert_eq!(
+            iso_8601_to_epoch(Some("2021-03-20")),
+            Some(datetime!(2021-03-20 00:00:00 UTC).unix_timestamp())
+        );
+        assert_eq!(
+            iso_8601_to_epoch(Some("2021-03-20T13:45:07")),
+            Some(datetime!(2021-03-20 13:45:07 UTC).unix_timestamp())
+        );
+        assert_eq!(
+            iso_8601_to_epoch(Some("2021-03-20T13:45:07.123456")),
+            Some(datetime!(2021-03-20 13:45:07 UTC).unix_timestamp())
+        );
+        assert_eq!(
+            iso_8601_to_epoch(Some("2021-03-20T13:45:07Z")),
+            Some(datetime!(2021-03-20 13:45:07 UTC).unix_timestamp())
+        );
+        assert_eq!(
+            iso_8601_to_epoch(Some("2021-03-20T13:45:07+00:00")),
+            Some(datetime!(2021-03-20 13:45:07 UTC).unix_timestamp())
+        );
+        assert_eq!(
+            iso_8601_to_epoch(Some("2021-03-20T10:45:07-03:00")),
+            Some(datetime!(2021-03-20 13:45:07 UTC).unix_timestamp())
+        );
     }
 }
 

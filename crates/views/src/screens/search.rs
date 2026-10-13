@@ -175,7 +175,7 @@ impl SearchView {
                 .collect(),
             mixed: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(me)),
             browsing: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(me)),
-            track_menu: ItemMenu::new(playlist_scrollbar),
+            track_menu: ItemMenu::new(playlist_scrollbar, cx),
             context_menu: None,
             focus: cx.focus_handle(),
             cursor: None,
@@ -430,7 +430,7 @@ impl SearchView {
                 format!("album-artist-{place}"),
                 album.year,
                 None,
-                album.artist_refs.clone(),
+                &album.artist_refs,
                 album.artists.clone(),
                 theme,
             )
@@ -553,8 +553,7 @@ impl SearchView {
         let origin = match hit {
             Hit::Song(track) => {
                 let current = track.id.is_some() && track.id == self.playback_status.0;
-                let playing =
-                    current && matches!(self.playback_status.1, state::PlaybackState::Playing);
+                let playing = current && self.playback_status.1 == Some(true);
                 let track = track.clone();
                 let play: Play = Box::new(move |_, _, cx| {
                     me.update(cx, |this, cx| {
@@ -575,8 +574,7 @@ impl SearchView {
                 state::Origin::playlist(list.id.clone()).named(list.name.clone())
             }
         };
-        let playing =
-            self.playback.read(cx).playing_from(&origin) == Some(state::PlaybackState::Playing);
+        let playing = self.playback.read(cx).playing_from(&origin, cx) == Some(true);
         let play: Play = Box::new(move |_, _, cx| {
             me.update(cx, |this, cx| {
                 this.playback
@@ -1068,11 +1066,14 @@ impl Render for SearchView {
         let context_menu = self.context_menu.clone().map(|(target, position)| {
             let menu = match target {
                 HitMenu::Song(track) => self.track_menu.for_track(&track, cx),
-                HitMenu::Album(hit) => {
-                    album_menu(album_of(&hit, cx), self.playback.clone(), false, cx)
-                }
+                HitMenu::Album(hit) => album_menu(
+                    album_of(&hit, cx),
+                    self.playback.clone(),
+                    &self.track_menu,
+                    cx,
+                ),
                 HitMenu::Playlist(hit) => {
-                    playlist_menu(playlist_of(&hit, cx), self.playback.clone(), false, cx)
+                    playlist_menu(playlist_of(&hit, cx), self.playback.clone(), cx)
                 }
                 HitMenu::Artist(hit) => {
                     artist_menu(artist_of(&hit, cx), self.playback.clone(), false, cx)

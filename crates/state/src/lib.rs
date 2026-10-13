@@ -18,6 +18,7 @@ mod mosaic;
 mod network;
 mod pins;
 mod playback;
+mod potoken;
 mod profile;
 mod queue;
 mod remote;
@@ -33,9 +34,10 @@ mod tags;
 mod toast;
 mod updates;
 mod usage;
+mod wake;
 mod window_shape;
 
-pub use artist::ArtistDetail;
+pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use canvas::Canvas;
 pub use codec::{Codec, CodecState};
 pub use cover::Cover;
@@ -46,7 +48,9 @@ pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
 pub use jam::{Cap, Caps, Jam, JamEvent, JamRole, Listener};
-pub use library::{Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready, Shelf};
+pub use library::{
+    Addition, Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready, Shelf,
+};
 pub use logging::log_file;
 pub use lyrics::{Lyrics, LyricsState};
 pub use network::{Network, Reconnected};
@@ -60,7 +64,7 @@ pub use scrobble::{ScrobbleRow, ScrobbleState, Scrobbling};
 pub use search::{AlbumHit, ArtistHit, Found, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
-    AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, MiniCorner,
+    AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, MiniCorner, Reloaded,
     RomanizationScripts, SYSTEM_FONT, SideTab, SpectrumPlace, SpectrumProfile, SpectrumSettings,
     remember_window, window_placement,
 };
@@ -69,10 +73,12 @@ pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, Toasts};
 pub use updates::{Release, UpdateState, Updates};
 pub use usage::Usage;
+pub use wake::Wake;
 pub use window_shape::{apply_window_rounding, install_rounded_window_hook};
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{App, AppContext as _, Entity, Global};
@@ -89,15 +95,20 @@ impl Global for Io {}
 /// answer with, never a long computation, so the default of one worker per core buys nothing
 /// and costs a stack and an allocator arena each.
 const WORKERS: usize = 4;
-/// The ceiling on blocking threads, which is where the sqlite reads and the tag writes go. The
-/// default is 512, far past anything Sonora queues at once.
-const BLOCKING: usize = 16;
+/// The ceiling on blocking threads, which is where the sqlite reads, the artwork disk cache and
+/// DNS lookups go. The artwork cache sits behind one lock, so threads past a handful only queue
+/// on it while each holds a stack and an allocator arena. The default is 512.
+const BLOCKING: usize = 8;
+/// How long an idle blocking thread lingers before it exits. A burst of cover reads should not
+/// leave its threads parked for the default ten seconds.
+const LINGER: Duration = Duration::from_secs(2);
 
 impl Io {
     pub fn new() -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(WORKERS)
             .max_blocking_threads(BLOCKING)
+            .thread_keep_alive(LINGER)
             .thread_name("sonora-io")
             .enable_all()
             .build()?;
@@ -173,12 +184,16 @@ pub struct Sonora {
     pub network: Entity<Network>,
     pub pins: Entity<Pins>,
     pub playback: Entity<Playback>,
+    /// The window that mints YouTube's proof-of-origin token. Nothing reads it; it is held so
+    /// that it keeps ticking.
+    pub potoken: Entity<potoken::PoToken>,
     pub queue: Entity<Queue>,
     pub scan: Entity<Scan>,
     pub scrobbling: Entity<Scrobbling>,
     pub settings: Entity<AppSettings>,
     pub updates: Entity<Updates>,
     pub usage: Entity<Usage>,
+    pub wake: Entity<Wake>,
 }
 
 impl Global for Sonora {}
@@ -198,7 +213,12 @@ pub fn init(
     lyrics_providers: Vec<Arc<dyn LyricsProvider>>,
 ) {
     cx.set_global(io.clone());
-    let settings = cx.new(|_| AppSettings::load(database.clone()));
+    let settings = cx.new(|cx| {
+        let mut settings = AppSettings::load(database.clone());
+        settings.watch_files(cx);
+        settings.report_broken(cx);
+        settings
+    });
     let session =
         cx.new(|cx| Session::new(providers, local_provider, settings.clone(), io.clone(), cx));
     let network = cx.new(|_| Network::new(session.clone(), io.clone()));
@@ -224,8 +244,15 @@ pub fn init(
         )
     });
     let scan = cx.new(|cx| Scan::new(session.clone(), cx));
-    let scrobbling =
-        cx.new(|cx| Scrobbling::new(playback.clone(), settings.clone(), io.clone(), cx));
+    let scrobbling = cx.new(|cx| {
+        Scrobbling::new(
+            playback.clone(),
+            session.clone(),
+            settings.clone(),
+            io.clone(),
+            cx,
+        )
+    });
     let lyrics = cx.new(|cx| {
         Lyrics::new(
             playback.clone(),
@@ -264,6 +291,8 @@ pub fn init(
     jam.update(cx, |jam, cx| jam.autostart(cx));
     let usage = cx.new(|cx| Usage::new(session.clone(), database, io.clone(), cx));
     let pins = cx.new(|cx| Pins::new(settings.clone(), library.clone(), session.clone(), cx));
+    let potoken = potoken::attach(cx);
+    let wake = cx.new(|cx| Wake::new(settings.clone(), playback.clone(), io.clone(), cx));
     discord::attach(
         playback.clone(),
         settings.clone(),
@@ -286,11 +315,13 @@ pub fn init(
         network,
         pins,
         playback,
+        potoken,
         queue,
         scan,
         scrobbling,
         settings,
         updates,
         usage,
+        wake,
     });
 }

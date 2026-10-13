@@ -142,16 +142,12 @@ menu-copy = 复制
 menu-paste = 粘贴
 menu-select-all = 全选
 menu-remove-from-queue = 从播放队列中移除
-menu-open-playlist = 打开播放列表
-menu-play-playlist = 播放该列表
 menu-rename-playlist = 重命名播放列表
 menu-delete-playlist = 删除播放列表
 menu-add-playlist-to-library = 添加到音乐库
 menu-remove-playlist-from-library = 从音乐库中移除
 menu-make-playlist-public = 设为公开
 menu-make-playlist-private = 设为私密
-menu-open-album = 打开专辑
-menu-play-album = 播放专辑
 menu-play-artist = 播放歌手
 
 # playlist editor
@@ -285,7 +281,6 @@ login-account-title = 选择一个账户
 login-account-detail = 此会话登录了多个 Google 账户。请选择 Sonora 应使用的账户。
 
 # album and playlist pages
-detail-album = 专辑
 detail-playlist = 播放列表
 detail-play-album = 播放专辑
 detail-play-playlist = 播放该列表
@@ -293,7 +288,6 @@ detail-play-playlist = 播放该列表
 # play button
 play-pause = 暂停
 play-resume = 继续播放
-play-loading = 加载中…
 play-shuffle = 随机播放
 
 # artist page
@@ -452,7 +446,7 @@ settings-theme-detail = 选择应用的配色方案
 settings-opacity = 不透明度
 settings-opacity-detail = 调整应用背景的不透明度
 settings-opacity-value = { $percent }%
-settings-theme-config = 打开配置
+settings-theme-folder = 打开配置
 settings-adaptive = 自适应主题
 settings-adaptive-detail = 使用正在播放专辑的封面为配色方案着色
 settings-visualizer = 可视化效果
@@ -469,8 +463,10 @@ settings-saver = 省电模式
 settings-saver-detail = 当 Sonora 未聚焦时限制动画帧率，从下次启动起生效
 settings-corners = 圆角
 settings-corners-detail = 界面和控件的圆角程度
-settings-blur = 模糊
-settings-blur-detail = 在模糊的桌面上绘制窗口。需要不透明度低于 100%
+settings-blur = 界面模糊
+settings-blur-detail = 为菜单和浮动控件启用毛玻璃效果
+settings-blur-window = 窗口模糊
+settings-blur-window-detail = 在模糊的桌面上绘制窗口。需要不透明度低于 100%
 settings-font = 字体大小
 settings-font-detail = 基础文字大小，其他所有内容随之缩放
 settings-font-value = { $size } px

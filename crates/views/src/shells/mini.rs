@@ -139,7 +139,7 @@ impl Render for MiniPlayer {
         let look = profile.look();
         let sounding = matches!(held.state(), PlaybackState::Playing);
         let bands = (look.style.shown() && sounding && ui::motion::animates(cx))
-            .then(|| held.spectrum())
+            .then(|| held.spectrum(cx))
             .flatten();
         let spectrum_on = bands.is_some();
         let rise = (window.viewport_size().height - theme.radius).max(px(0.));

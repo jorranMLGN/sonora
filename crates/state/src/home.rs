@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::Duration;
-
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{App, Context, Entity, Task};
 use music::{GenreItem, GenreSection, HomeFeed, MusicApi, Track};
@@ -26,6 +25,10 @@ const RETRIES: [Duration; 3] = [
 const PICKS_LIMIT: usize = 30;
 /// How many items Jump back in shows.
 const RESUME: usize = 8;
+
+/// How many of the provider's recent items lead Quick picks at most, whatever the provider
+/// lists.
+const RECENT_LIMIT: usize = 10;
 
 pub struct Home {
     library: Entity<Library>,
@@ -72,27 +75,19 @@ impl Home {
         let picks_seed = fastrand::u64(..);
 
         cx.subscribe(&session, |this, _, event, cx| match event {
-            SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
-                this.task = None;
-                this.naming = None;
-                this.recent = Rc::new(Vec::new());
-                this.picks = Rc::new(Vec::new());
-                this.quick_picks = Rc::new(Vec::new());
-                this.sections = Rc::new(Vec::new());
-                this.feeding = false;
-                this.error = None;
-                this.failures = 0;
-                this.pending = None;
-                this.feeds.clear();
-                this.feed(cx);
-                cx.notify();
-            }
+            SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => this.reload(cx),
             SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
         .detach();
 
         cx.observe(&library, |this, _, cx| this.mix(cx)).detach();
         cx.observe(&history, |_, _, cx| cx.notify()).detach();
+        // A restore that ends offline sends no event of its own, and Quick picks wait for it.
+        cx.observe(&session, |this, _, cx| {
+            this.mix(cx);
+            cx.notify();
+        })
+        .detach();
 
         let mut home = Self {
             library,
@@ -141,6 +136,43 @@ impl Home {
         self.failures = 0;
         self.task = None;
         self.feed(cx);
+    }
+
+    /// The shelf Quick picks are mixed from when no provider sent any: the local files while
+    /// the streaming provider is only a guest session, the streaming library otherwise.
+    fn shelf(&self, cx: &App) -> Shelf {
+        let session = self.session.read(cx);
+        if session.guest() {
+            Shelf::Local
+        } else {
+            Shelf::Streaming
+        }
+    }
+
+    /// Whether Quick picks come from the local files rather than an account.
+    pub fn is_local(&self, cx: &App) -> bool {
+        self.shelf(cx) == Shelf::Local
+    }
+
+    fn clear(&mut self) {
+        self.task = None;
+        self.naming = None;
+        self.recent = Rc::new(Vec::new());
+        self.picks = Rc::new(Vec::new());
+        self.quick_picks = Rc::new(Vec::new());
+        self.sections = Rc::new(Vec::new());
+        self.feeding = false;
+        self.error = None;
+        self.failures = 0;
+        self.pending = None;
+        self.feeds.clear();
+    }
+
+    /// Drops the page and asks every signed-in provider for its feed afresh.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.clear();
+        self.feed(cx);
+        cx.notify();
     }
 
     pub fn feed(&mut self, cx: &mut Context<Self>) {
@@ -333,7 +365,9 @@ impl Home {
 
     /// Puts a lot on the page as it is.
     fn take(&mut self, feed: HomeFeed, cx: &mut Context<Self>) {
-        self.recent = Rc::new(feed.listen_again);
+        let mut recent = feed.listen_again;
+        recent.truncate(RECENT_LIMIT);
+        self.recent = Rc::new(recent);
         if let Some(quick_picks) = feed.quick_picks {
             self.picks = Rc::new(quick_picks);
         }
@@ -489,31 +523,29 @@ impl Home {
         )
     }
 
-    /// Whether Quick picks are still on their way: the feed is in flight and nothing of it has
-    /// landed yet, or the library the picks would otherwise be mixed from is.
+    /// Whether Quick picks are still on their way: the account is still being restored, the
+    /// feed is in flight and nothing of it has landed yet, or the library the picks would
+    /// otherwise be mixed from is.
     pub fn is_loading(&self, cx: &App) -> bool {
-        (self.feeding && self.quick_picks.is_empty())
-            || self
-                .library
-                .read(cx)
-                .loading(Shelf::Streaming, LibraryPart::Tracks)
+        let shelf = self.shelf(cx);
+        self.session.read(cx).is_pending()
+            || (self.feeding && self.quick_picks.is_empty())
+            || self.library.read(cx).loading(shelf, LibraryPart::Tracks)
     }
 
     /// Mixes picks from the library, but only in place of a provider's that never came: not
-    /// while the feed is still in flight, and never over picks already there. A signed-out
-    /// run has no feed, so it mixes as soon as the library is ready.
+    /// while the account is still being restored or the feed is in flight, and never over picks
+    /// already there. A signed-out run has no feed, so it mixes as soon as the library is ready.
     fn mix(&mut self, cx: &mut Context<Self>) {
-        if self.feeding || !self.picks.is_empty() {
+        if self.feeding || !self.picks.is_empty() || self.session.read(cx).is_pending() {
             return;
         }
-        let ready = matches!(
-            self.library.read(cx).state(Shelf::Streaming),
-            LibraryState::Ready(_)
-        );
+        let shelf = self.shelf(cx);
+        let ready = matches!(self.library.read(cx).state(shelf), LibraryState::Ready(_));
         if !ready {
             return;
         }
-        self.picks = picks(&self.library, self.picks_seed, cx);
+        self.picks = picks(&self.library, shelf, self.picks_seed, cx);
         self.merge();
         cx.notify();
     }
@@ -581,8 +613,8 @@ fn pruned(sections: &[GenreSection]) -> Vec<GenreSection> {
         .collect()
 }
 
-fn picks(library: &Entity<Library>, seed: u64, cx: &App) -> Rc<Vec<Track>> {
-    let tracks = library.read(cx).state(Shelf::Streaming).tracks();
+fn picks(library: &Entity<Library>, shelf: Shelf, seed: u64, cx: &App) -> Rc<Vec<Track>> {
+    let tracks = library.read(cx).state(shelf).tracks();
     Rc::new(mixed_tracks(tracks, seed))
 }
 

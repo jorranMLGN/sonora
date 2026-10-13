@@ -26,6 +26,7 @@ input.workspace = true
 router.workspace = true
 ui.workspace = true
 views.workspace = true
+webview.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 sha2.workspace = true
@@ -38,6 +39,7 @@ libc.workspace = true
 ksni.workspace = true
 raw-window-handle.workspace = true
 x11rb.workspace = true
+zbus.workspace = true
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 tray-icon.workspace = true
@@ -53,10 +55,6 @@ state = { workspace = true, features = ["bundled-sqlite"] }
 widestring.workspace = true
 windows.workspace = true
 windows-sys.workspace = true
-
-[dev-dependencies]
-# only the apple-login example, which puts up a sign-in window without the app around it
-webview.workspace = true
 
 [build-dependencies]
 embed.workspace = true

@@ -242,12 +242,16 @@ impl MusicApi for Tagged {
             .await
     }
 
-    async fn track_radio(&self, track_id: &str) -> Result<Vec<Track>> {
-        let mut values = self.inner.track_radio(tag::untag(track_id)).await?;
+    async fn track_radio(
+        &self,
+        track_id: &str,
+        from: Option<&str>,
+    ) -> Result<(Vec<Track>, Option<String>)> {
+        let (mut values, next) = self.inner.track_radio(tag::untag(track_id), from).await?;
         for value in &mut values {
             models::track(self.slug, value);
         }
-        Ok(values)
+        Ok((values, next))
     }
 
     async fn search(&self, query: &str) -> Result<Vec<Track>> {

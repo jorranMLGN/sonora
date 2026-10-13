@@ -414,8 +414,8 @@ impl Discover {
                 let mut any = false;
                 for (seed, client) in asked {
                     let id = seed.id.clone().unwrap_or_default();
-                    match client.track_radio(&id).await {
-                        Ok(radio) => {
+                    match client.track_radio(&id, None).await {
+                        Ok((radio, _)) => {
                             any = true;
                             answered.push((seed, radio));
                         }
