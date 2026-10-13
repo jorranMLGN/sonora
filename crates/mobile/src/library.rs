@@ -470,6 +470,13 @@ pub async fn artist(core: Arc<Core>, id: &str) -> Result<ArtistDetail> {
     })
 }
 
+/// The url of the Canvas of the track `id`, the short looping MP4 Spotify shows for it, or
+/// `None` when it has none. Every provider but Spotify answers `None`.
+pub async fn canvas(core: Arc<Core>, id: &str) -> Result<Option<String>> {
+    let (_, api) = api(&core, id)?;
+    api.canvas(id).await.context("cannot read the canvas")
+}
+
 /// A saved artist as the phone draws it.
 pub fn artist_item(artist: &SavedArtist) -> Item {
     Item {
