@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,10 +9,19 @@ import { useStore } from '../store';
 import { colors, sizes, spacing, typography } from '../theme';
 import { MiniPlayer } from './MiniPlayer';
 
+/** How long an error stays up before it goes by itself. */
+const ERROR_SHOWN_MS = 6000;
+
 /** Dismissible error banner fed by the store. */
 export function ErrorBanner() {
   const error = useStore((s) => s.error);
   const clear = useStore((s) => s.clearError);
+  // A toast: it goes by itself after a while, or at once on a tap.
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(clear, ERROR_SHOWN_MS);
+    return () => clearTimeout(timer);
+  }, [error, clear]);
   if (!error) return null;
   return (
     <Pressable style={styles.error} onPress={clear} accessibilityLabel={t('mobile-dismiss')}>

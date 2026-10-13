@@ -59,9 +59,9 @@ function remember(tracks: Track[]): Track[] {
 }
 
 const providerList: ProviderInfo[] = [
-  { slug: 'soundcloud', name: 'SoundCloud', signedIn: false, account: null, session: { kind: 'guest' } },
-  { slug: 'spotify', name: 'Spotify', signedIn: false, account: null, session: { kind: 'signedOut' } },
-  { slug: 'youtube', name: 'YouTube Music', signedIn: false, account: null, session: { kind: 'signedOut' } },
+  { slug: 'spotify', name: 'Spotify', signedIn: false, account: null, session: { kind: 'signedOut' }, options: ['account'] },
+  { slug: 'youtube', name: 'YouTube Music', signedIn: false, account: null, session: { kind: 'signedOut' }, options: ['guest', 'web'] },
+  { slug: 'soundcloud', name: 'SoundCloud', signedIn: false, account: null, session: { kind: 'guest' }, options: ['guest', 'web', 'paste'] },
 ];
 
 const saved = new Set<string>();
@@ -160,13 +160,17 @@ export const mockBridge: Bridge = {
   async signIn(slug, option) {
     setSession(slug, { kind: 'connecting' });
     await delay(300);
-    switch (slug) {
-      case 'spotify':
+    if (option === 'guest') {
+      setSession(slug, { kind: 'guest' });
+      return;
+    }
+    switch (option) {
+      case 'account':
         emit('onPrompt', { slug, prompt: { kind: 'url', url: 'https://accounts.spotify.com/' } });
         setTimeout(() => setSession(slug, { kind: 'signedIn', account: 'mock@spotify' }, 'mock@spotify'), 3000);
         break;
-      case 'youtube':
-        emit('onPrompt', { slug, prompt: { kind: 'secret' } });
+      case 'paste':
+        emit('onPrompt', { slug, prompt: { kind: 'secret', web: null } });
         break;
       default:
         emit('onPrompt', {
@@ -174,7 +178,7 @@ export const mockBridge: Bridge = {
           prompt: {
             kind: 'accounts',
             choices: [
-              { id: option ?? 'a', name: 'Mock account', detail: 'mock@example.com' },
+              { id: 'a', name: 'Mock account', detail: 'mock@example.com' },
               { id: 'b', name: 'Other account', detail: null },
             ],
           },
@@ -184,6 +188,10 @@ export const mockBridge: Bridge = {
   async answer(slug, input) {
     await delay(300);
     setSession(slug, { kind: 'signedIn', account: input.length > 12 ? 'mock account' : input }, 'mock account');
+  },
+  async cancelSignIn(slug) {
+    const info = providerList.find((provider) => provider.slug === slug);
+    setSession(slug, slug === 'soundcloud' ? { kind: 'guest' } : { kind: 'signedOut' }, info?.account ?? null);
   },
   async signOut(slug) {
     setSession(slug, { kind: slug === 'soundcloud' ? 'guest' : 'signedOut' });

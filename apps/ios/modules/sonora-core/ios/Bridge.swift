@@ -80,7 +80,8 @@ enum Bridge {
     case .guest: return ["kind": "guest"]
     case .signedIn(let account): return ["kind": "signedIn", "account": account]
     case .expired: return ["kind": "expired"]
-    case .failed(let message): return ["kind": "failed", "message": message]
+    case .failed(let message, let problem):
+      return ["kind": "failed", "message": message, "problem": optional(problem.map(Bridge.problem))]
     }
   }
 
@@ -91,6 +92,50 @@ enum Bridge {
       "signedIn": info.signedIn,
       "account": optional(info.account),
       "session": session(info.session),
+      "options": info.options.map(option),
+    ]
+  }
+
+  static func option(_ option: SignInOption) -> String {
+    switch option {
+    case .account: return "account"
+    case .guest: return "guest"
+    case .web: return "web"
+    case .paste: return "paste"
+    }
+  }
+
+  /// The option JS names, or nil for a name the core does not know.
+  static func option(named name: String) -> SignInOption? {
+    switch name {
+    case "account": return .account
+    case "guest": return .guest
+    case "web": return .web
+    case "paste": return .paste
+    default: return nil
+    }
+  }
+
+  /// A sign-in problem as JS sees it, the suffix of the desktop's `login-problem-*` keys.
+  static func problem(_ problem: Problem) -> String {
+    switch problem {
+    case .premium: return "premium"
+    case .region: return "region"
+    case .credentials: return "credentials"
+    case .secret: return "secret"
+    case .network: return "network"
+    case .cancelled: return "cancelled"
+    case .refused: return "refused"
+    }
+  }
+
+  static func web(_ web: WebSignIn) -> [String: Any] {
+    [
+      "url": web.url,
+      "landing": web.landing,
+      "domain": web.domain,
+      "proof": web.proof,
+      "agent": optional(web.agent),
     ]
   }
 
@@ -98,7 +143,7 @@ enum Bridge {
     switch prompt {
     case .url(let url): return ["kind": "url", "url": url]
     case .code(let code, let url): return ["kind": "code", "code": code, "url": url]
-    case .secret: return ["kind": "secret"]
+    case .secret(let web): return ["kind": "secret", "web": optional(web.map(Bridge.web))]
     case .accounts(let choices):
       return [
         "kind": "accounts",
@@ -109,8 +154,10 @@ enum Bridge {
 
   /// The words of a core failure, for a rejected promise.
   static func message(_ error: Error) -> String {
-    if case CoreError.Failed(let message) = error {
-      return message
+    switch error {
+    case CoreError.Failed(let message): return message
+    case CoreError.SignIn(_, let message): return message
+    default: break
     }
     return error.localizedDescription
   }
@@ -141,10 +188,14 @@ final class Listener: EventListener, @unchecked Sendable {
 
   func onSession(slug: String, state: SessionState) {
     module?.sendEvent("onSession", ["slug": slug, "state": Bridge.session(state)])
+    DispatchQueue.main.async { SignInPresenter.shared.session(slug, state) }
   }
 
+  /// Every prompt goes to JS, which shows what is asked; the ones that need a browser are also
+  /// answered here.
   func onPrompt(slug: String, prompt: Prompt) {
     module?.sendEvent("onPrompt", ["slug": slug, "prompt": Bridge.prompt(prompt)])
+    DispatchQueue.main.async { SignInPresenter.shared.prompt(slug, prompt) }
   }
 
   func onError(message: String) {

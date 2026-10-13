@@ -9,7 +9,6 @@ import type {
   Track,
   Unsubscribe,
 } from './bridge';
-import { t } from './i18n';
 import { mockBridge } from './mockBridge';
 
 /** A record standing in for an album, playlist or artist whose page the core cannot load yet. */
@@ -43,10 +42,10 @@ function nativeBridge(core: SonoraCoreModule): Bridge {
     // The core keeps its files under Application Support; Swift picks the folder.
     init: () => core.start(),
     providers: () => core.providers(),
-    // TODO(milestone 3): sign_in / answer / sign_out on the core.
-    signIn: () => Promise.reject(new Error(t('mobile-sign-in-unavailable'))),
-    answer: () => Promise.resolve(),
-    signOut: () => Promise.resolve(),
+    signIn: (slug, option) => core.signIn(slug, option),
+    answer: (slug, input) => core.answer(slug, input),
+    cancelSignIn: (slug) => core.cancelSignIn(slug),
+    signOut: (slug) => core.signOut(slug),
     // TODO(milestone 4): home, library, album, playlist, artist and set_saved on the core.
     home: () => Promise.resolve<Section[]>([]),
     search: (query) => core.search(query),

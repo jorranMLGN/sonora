@@ -77,7 +77,10 @@ export type SessionState =
   | { kind: 'guest' }
   | { kind: 'signedIn'; account: string }
   | { kind: 'expired' }
-  | { kind: 'failed'; message: string };
+  | { kind: 'failed'; message: string; problem: string | null };
+
+/** How to sign in: the provider's account page, as a guest, in the app's browser, or by pasting. */
+export type SignInOption = 'account' | 'guest' | 'web' | 'paste';
 
 export type ProviderInfo = {
   slug: string;
@@ -85,6 +88,16 @@ export type ProviderInfo = {
   signedIn: boolean;
   account: string | null;
   session: SessionState;
+  options: SignInOption[];
+};
+
+/** A cookie sign-in the native side runs in its own browser. */
+export type WebSignIn = {
+  url: string;
+  landing: string;
+  domain: string;
+  proof: string[];
+  agent: string | null;
 };
 
 export type PromptChoice = { id: string; name: string; detail: string | null };
@@ -92,7 +105,7 @@ export type PromptChoice = { id: string; name: string; detail: string | null };
 export type Prompt =
   | { kind: 'url'; url: string }
   | { kind: 'code'; code: string; url: string }
-  | { kind: 'secret' }
+  | { kind: 'secret'; web: WebSignIn | null }
   | { kind: 'accounts'; choices: PromptChoice[] };
 
 /** Event payloads, keyed by the native event names. */
@@ -111,8 +124,16 @@ export interface Bridge {
   /** Starts the core; it answers at once with the queue, the player and the sessions. */
   init(dataDir: string): Promise<void>;
   providers(): Promise<ProviderInfo[]>;
-  signIn(slug: string, option: string | null): Promise<void>;
+  /**
+   * Signs in and settles when that is done. A provider's refusal rejects with an error whose
+   * `code` is `ERR_SIGN_IN_<PROBLEM>`; a sign-in called off resolves.
+   */
+  signIn(slug: string, option: SignInOption): Promise<void>;
+  /** Answers the prompt the sign-in of `slug` waits on. */
   answer(slug: string, input: string): Promise<void>;
+  /** Calls the sign-in of `slug` off and puts its session back. */
+  cancelSignIn(slug: string): Promise<void>;
+  /** Drops the account, its tracks in the queue and its snapshots. */
   signOut(slug: string): Promise<void>;
   home(): Promise<Section[]>;
   search(query: string): Promise<SearchResults>;

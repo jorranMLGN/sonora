@@ -19,7 +19,10 @@ public class SonoraCoreModule: Module {
 
     // The audio session, Now Playing and the remote commands live as long as the process.
     OnCreate {
-      DispatchQueue.main.async { Platform.shared.start() }
+      DispatchQueue.main.async {
+        Platform.shared.start()
+        PoTokenMinter.shared.start()
+      }
     }
 
     // Registers this module as the listener; the core answers with the providers, the queue and
@@ -30,6 +33,33 @@ public class SonoraCoreModule: Module {
 
     AsyncFunction("providers") { () throws -> [[String: Any]] in
       try SonoraCore.providers().map(Bridge.provider)
+    }
+
+    // Signing in. `signIn` settles when the sign-in does; a provider's refusal rejects with the
+    // code `ERR_SIGN_IN_<PROBLEM>`, which JS words with the desktop's `login-problem-*` keys.
+    AsyncFunction("signIn") { (slug: String, option: String) async throws in
+      guard let chosen = Bridge.option(named: option) else {
+        throw Exception(name: "UnknownOption", description: "no sign-in option is called \(option)")
+      }
+      do {
+        try await SonoraCore.signIn(slug: slug, option: chosen)
+      } catch CoreError.SignIn(let problem, let message) {
+        throw Exception(
+          name: "SignInFailed", description: message,
+          code: "ERR_SIGN_IN_\(Bridge.problem(problem).uppercased())")
+      }
+    }
+
+    AsyncFunction("answer") { (slug: String, input: String) throws in
+      try SonoraCore.answer(slug: slug, input: input)
+    }
+
+    AsyncFunction("cancelSignIn") { (slug: String) throws in
+      try SonoraCore.cancelSignIn(slug: slug)
+    }
+
+    AsyncFunction("signOut") { (slug: String) throws in
+      try SonoraCore.signOut(slug: slug)
     }
 
     AsyncFunction("search") { (query: String) async throws -> [String: Any] in

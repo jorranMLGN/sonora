@@ -1,11 +1,20 @@
 import { useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
-import type { Prompt, ProviderInfo } from '../src/bridge';
+import type { Prompt, ProviderInfo, SignInOption } from '../src/bridge';
 import { bridge } from '../src/bridgeImpl';
 import { Screen } from '../src/components/Screen';
 import { t } from '../src/i18n';
-import { attempt, useStore } from '../src/store';
+import { attempt, signIn, useStore } from '../src/store';
 import { colors, radii, spacing, typography } from '../src/theme';
 
 /** The status line under a provider's name. */
@@ -21,105 +30,194 @@ function status(provider: ProviderInfo): string {
     case 'expired':
       return t('mobile-account-expired');
     case 'failed':
-      return t('mobile-account-failed', { message: session.message });
+      return session.problem
+        ? t(`login-problem-${session.problem}`, { provider: provider.name })
+        : t('mobile-account-failed', { message: session.message });
     default:
       return t('mobile-account-signed-out');
   }
 }
 
-/** The card a sign-in prompt asks the user to answer. */
-function PromptCard({ slug, prompt }: { slug: string; prompt: Prompt }) {
+/** The words on the button for one way of signing in. */
+function optionLabel(provider: ProviderInfo, option: SignInOption): string {
+  switch (option) {
+    case 'guest':
+      return t('login-guest-use');
+    case 'paste':
+      return t('login-connect-token');
+    default:
+      return t('login-sign-in', { provider: provider.name });
+  }
+}
+
+/** The ways to sign in worth offering now: guest mode is left out while it is what runs. */
+function offered(provider: ProviderInfo): SignInOption[] {
+  return provider.options.filter(
+    (option) => !(option === 'guest' && provider.session.kind === 'guest'),
+  );
+}
+
+/** Asks before signing out, since the provider's songs leave the queue. */
+function confirmSignOut(provider: ProviderInfo) {
+  Alert.alert(
+    t('mobile-sign-out-title', { provider: provider.name }),
+    t('mobile-sign-out-detail'),
+    [
+      { text: t('mobile-cancel'), style: 'cancel' },
+      {
+        text: t('mobile-sign-out'),
+        style: 'destructive',
+        onPress: () => attempt(bridge.signOut(provider.slug)),
+      },
+    ],
+  );
+}
+
+/** A text field with a submit button, for a pasted answer. */
+function PasteField({
+  placeholder,
+  secure,
+  onSubmit,
+}: {
+  placeholder: string;
+  secure: boolean;
+  onSubmit: (text: string) => void;
+}) {
   const [text, setText] = useState('');
-  const clear = useStore((s) => s.clearPrompt);
+  return (
+    <>
+      <TextInput
+        style={styles.field}
+        value={text}
+        onChangeText={setText}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry={secure}
+        placeholder={placeholder}
+        placeholderTextColor={colors.textDim}
+      />
+      <Button
+        label={t('mobile-prompt-submit')}
+        disabled={text.trim() === ''}
+        onPress={() => onSubmit(text.trim())}
+      />
+    </>
+  );
+}
+
+/** What a sign-in prompt asks of the user. Browser prompts are opened by the native side. */
+function PromptBody({ slug, prompt }: { slug: string; prompt: Prompt }) {
+  const answer = (input: string) => attempt(bridge.answer(slug, input));
   switch (prompt.kind) {
     case 'url':
       return (
-        <View style={styles.prompt}>
+        <>
           <Text style={styles.body}>{t('mobile-prompt-url')}</Text>
-          <Button label={t('mobile-prompt-open')} onPress={() => attempt(Linking.openURL(prompt.url))} />
-        </View>
+          <Text style={styles.detail}>{t('mobile-prompt-url-paste')}</Text>
+          <PasteField placeholder={t('mobile-prompt-url-placeholder')} secure={false} onSubmit={answer} />
+        </>
       );
     case 'code':
       return (
-        <View style={styles.prompt}>
+        <>
           <Text style={styles.body}>{t('mobile-prompt-code')}</Text>
           <Text style={styles.code}>{prompt.code}</Text>
-          <Button label={t('mobile-prompt-open')} onPress={() => attempt(Linking.openURL(prompt.url))} />
-        </View>
+          <Button
+            label={t('mobile-prompt-open')}
+            onPress={() => attempt(Linking.openURL(prompt.url))}
+          />
+        </>
       );
     case 'secret':
-      return (
-        <View style={styles.prompt}>
+      return prompt.web ? (
+        <Text style={styles.body}>{t('mobile-prompt-web')}</Text>
+      ) : (
+        <>
           <Text style={styles.body}>{t('mobile-prompt-secret')}</Text>
-          <TextInput
-            style={styles.field}
-            value={text}
-            onChangeText={setText}
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-            placeholder={t('mobile-prompt-secret-placeholder')}
-            placeholderTextColor={colors.textDim}
-          />
-          <Button label={t('mobile-prompt-submit')} onPress={() => attempt(bridge.answer(slug, text))} />
-        </View>
+          <PasteField placeholder={t('mobile-prompt-secret-placeholder')} secure onSubmit={answer} />
+        </>
       );
     case 'accounts':
       return (
-        <View style={styles.prompt}>
+        <>
           <Text style={styles.body}>{t('mobile-prompt-accounts')}</Text>
           {prompt.choices.map((choice) => (
-            <Pressable
-              key={choice.id}
-              style={styles.choice}
-              onPress={() => attempt(bridge.answer(slug, choice.id))}
-            >
+            <Pressable key={choice.id} style={styles.choice} onPress={() => answer(choice.id)}>
               <Text style={styles.name}>{choice.name}</Text>
               {choice.detail && <Text style={styles.detail}>{choice.detail}</Text>}
             </Pressable>
           ))}
-          <Button label={t('mobile-cancel')} onPress={() => clear(slug)} />
-        </View>
+        </>
       );
   }
 }
 
-function Button({ label, onPress }: { label: string; onPress: () => void }) {
+function Button({
+  label,
+  onPress,
+  quiet = false,
+  disabled = false,
+}: {
+  label: string;
+  onPress: () => void;
+  quiet?: boolean;
+  disabled?: boolean;
+}) {
   return (
-    <Pressable style={styles.button} onPress={onPress}>
-      <Text style={styles.buttonText}>{label}</Text>
+    <Pressable
+      style={[styles.button, quiet && styles.quiet, disabled && styles.disabled]}
+      onPress={onPress}
+      disabled={disabled}
+    >
+      <Text style={[styles.buttonText, quiet && styles.quietText]}>{label}</Text>
     </Pressable>
+  );
+}
+
+/** One provider: its status, and the prompt of a sign-in under way or the ways to sign in. */
+function ProviderCard({ provider }: { provider: ProviderInfo }) {
+  const prompt = useStore((s) => s.prompts[provider.slug]);
+  const busy = useStore((s) => s.signingIn[provider.slug] ?? false);
+  const signedIn = provider.session.kind === 'signedIn';
+  return (
+    <View style={styles.card}>
+      <Text style={styles.name}>{provider.name}</Text>
+      <Text style={styles.detail}>{status(provider)}</Text>
+      {busy ? (
+        <View style={styles.prompt}>
+          {prompt && <PromptBody slug={provider.slug} prompt={prompt} />}
+          <Button
+            quiet
+            label={t('mobile-cancel')}
+            onPress={() => attempt(bridge.cancelSignIn(provider.slug))}
+          />
+        </View>
+      ) : signedIn ? (
+        <Button label={t('mobile-sign-out')} onPress={() => confirmSignOut(provider)} />
+      ) : (
+        <View style={styles.options}>
+          {offered(provider).map((option) => (
+            <Button
+              key={option}
+              quiet={option === 'guest' || option === 'paste'}
+              label={optionLabel(provider, option)}
+              onPress={() => signIn(provider, option)}
+            />
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 
 export default function Accounts() {
   const providers = useStore((s) => s.providers);
-  const prompts = useStore((s) => s.prompts);
   return (
     <Screen back title={t('mobile-accounts')} miniPlayer>
-      <ScrollView contentContainerStyle={styles.content}>
-        {providers.map((provider) => {
-          const prompt = prompts[provider.slug];
-          const signedIn = provider.session.kind === 'signedIn';
-          return (
-            <View key={provider.slug} style={styles.card}>
-              <Text style={styles.name}>{provider.name}</Text>
-              <Text style={styles.detail}>{status(provider)}</Text>
-              {prompt ? (
-                <PromptCard slug={provider.slug} prompt={prompt} />
-              ) : (
-                <Button
-                  label={t(signedIn ? 'mobile-sign-out' : 'mobile-sign-in')}
-                  onPress={() =>
-                    attempt(
-                      signedIn ? bridge.signOut(provider.slug) : bridge.signIn(provider.slug, null),
-                    )
-                  }
-                />
-              )}
-            </View>
-          );
-        })}
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {providers.map((provider) => (
+          <ProviderCard key={provider.slug} provider={provider} />
+        ))}
       </ScrollView>
     </Screen>
   );
@@ -138,6 +236,7 @@ const styles = StyleSheet.create({
   body: { color: colors.text, fontSize: typography.body },
   code: { color: colors.accent, fontSize: typography.display, fontWeight: '700' },
   prompt: { gap: spacing.sm, marginTop: spacing.sm },
+  options: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   choice: {
     backgroundColor: colors.surfaceRaised,
     borderRadius: radii.medium,
@@ -158,5 +257,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     marginTop: spacing.xs,
   },
+  quiet: { backgroundColor: colors.surfaceRaised },
+  disabled: { backgroundColor: colors.surfaceRaised },
   buttonText: { color: colors.onAccent, fontWeight: '600', fontSize: typography.body },
+  quietText: { color: colors.text },
 });

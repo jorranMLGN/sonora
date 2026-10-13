@@ -1115,10 +1115,13 @@ mobile-account-failed = Failed: { $message }
 mobile-account-guest = Guest
 mobile-account-signed-in = Signed in as { $account }
 mobile-account-signed-out = Signed out
-mobile-sign-in = Sign in
 mobile-sign-out = Sign out
-mobile-sign-in-unavailable = Signing in comes in a later version of the app
+mobile-sign-out-title = Sign out of { $provider }?
+mobile-sign-out-detail = Its songs leave your queue, and you sign in again to play them.
 mobile-prompt-url = Continue in the browser to sign in.
+mobile-prompt-url-paste = If the browser could not get back to Sonora, paste the address it ended up on.
+mobile-prompt-url-placeholder = http://127.0.0.1:8989/login?code=…
+mobile-prompt-web = Sign in on the page that opened. It closes by itself once you are in.
 mobile-prompt-code = Enter this code on the page that opens.
 mobile-prompt-open = Open
 mobile-prompt-secret = Paste the value the sign-in asks for.
