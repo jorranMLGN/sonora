@@ -3,6 +3,10 @@
 A native music streaming client, built with Rust and [GPUI](https://github.com/zed-industries/zed)
 (Zed's UI framework). Cargo workspace, edition 2024, resolver 3.
 
+In-depth notes per subsystem (Widevine and OpenH264 stores, local scanning, library snapshots,
+shelves, settings page, jam, tray, icons, localization) live in `docs/architecture.md`. Read the
+section for a subsystem before changing it.
+
 ## Crate layout
 
 ```
