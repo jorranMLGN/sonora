@@ -30,3 +30,6 @@ uniffi.workspace = true
 # iOS has no libsqlite3 to link against, so SQLite is compiled in there, as on Windows.
 [target.'cfg(target_os = "ios")'.dependencies]
 music = { path = "../music", default-features = false, features = ["bundled-sqlite"] }
+# QuickJS, which YouTube runs its player script in, ships no prebuilt bindings for iOS, so they
+# are generated at build time.
+rquickjs = { workspace = true, features = ["bindgen"] }
