@@ -1,1 +1,3 @@
+# Built by CI: the Rust core as an XCFramework.
+*.xcframework
 libmobile.a

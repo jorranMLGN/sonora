@@ -1,5 +1,5 @@
 {
-  "name": "sonora-spike",
+  "name": "sonora",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {

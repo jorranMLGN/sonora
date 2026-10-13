@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Sonora Spike",
-    "slug": "sonora-spike",
+    "name": "Sonora",
+    "slug": "sonora",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "dev.sonora.spike",
+      "bundleIdentifier": "dev.sonora.app",
       "infoPlist": {
         "UIBackgroundModes": [
           "audio"
@@ -23,7 +23,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "dev.sonora.spike"
+      "package": "dev.sonora.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"

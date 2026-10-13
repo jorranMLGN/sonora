@@ -1,8 +1,8 @@
 Pod::Spec.new do |s|
   s.name           = 'SonoraCore'
   s.version        = '0.0.1'
-  s.summary        = 'Sonora Rust core for the iOS spike'
-  s.description    = 'Calls the sonora mobile static library through a C ABI'
+  s.summary        = 'The Sonora Rust core for iOS'
+  s.description    = 'Calls the sonora mobile library through its generated UniFFI bindings'
   s.author         = ''
   s.homepage       = 'https://github.com/jorranMLGN/sonora'
   s.license        = 'GPL-3.0-or-later'
@@ -12,15 +12,17 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
 
-  s.source_files = '*.swift'
+  # `generated/` holds what uniffi-bindgen writes (mobile.swift, mobileFFI.h) and
+  # `rust/SonoraRust.xcframework` the static library; CI puts both in place before `pod install`.
+  s.source_files = '*.swift', 'generated/*.{swift,h}'
+  s.public_header_files = 'generated/*.h'
   s.preserve_paths = 'rust/**/*'
-  s.vendored_libraries = 'rust/libmobile.a'
+  s.vendored_frameworks = 'rust/SonoraRust.xcframework'
   s.frameworks = 'AudioToolbox', 'CoreAudio', 'AVFoundation', 'AVFAudio', 'CoreFoundation', 'Foundation',
                  'Security', 'SystemConfiguration'
   s.libraries = 'c++', 'resolv', 'iconv', 'objc'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'SWIFT_INCLUDE_PATHS' => '$(inherited) "$(PODS_TARGET_SRCROOT)/rust"',
   }
 end

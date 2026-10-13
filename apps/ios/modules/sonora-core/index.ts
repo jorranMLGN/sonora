@@ -1,54 +1,94 @@
-import { requireNativeModule } from 'expo';
+import { NativeModule, requireNativeModule } from 'expo';
 
-type Native = {
-  version(): string;
-  playTone(seconds: number): number;
-  init(): Promise<string>;
-  search(query: string): Promise<string>;
-  play(id: string): Promise<string>;
-  toggle(): string;
-  nowPlaying(): string;
-};
-
-export type Hit = {
+/** A track, album, playlist or artist. Its id carries its provider, as `soundcloud:123`. */
+export type Item = {
   id: string;
   title: string;
-  artist: string;
+  subtitle: string;
   artwork: string | null;
-  duration: number;
+  durationMs: number;
+  explicit: boolean;
+  provider: string;
   playable: boolean;
 };
 
-export type NowPlaying = {
-  id: string | null;
-  title: string | null;
-  artist: string | null;
-  artwork: string | null;
-  playing: boolean;
-  loading: boolean;
-  position: number;
-  duration: number;
-  error: string | null;
+export type SearchResults = {
+  tracks: Item[];
+  albums: Item[];
+  artists: Item[];
+  playlists: Item[];
 };
 
-const native = requireNativeModule<Native>('SonoraCore');
+export type Status = 'idle' | 'loading' | 'playing' | 'paused';
+export type Repeat = 'off' | 'all' | 'one';
 
-/** Parses an answer from the core, throwing its `error` when it carries one. */
-function parse<T>(text: string): T {
-  const value = JSON.parse(text);
-  // A failure is an object holding `error` and nothing else.
-  if (value && !Array.isArray(value) && Object.keys(value).length === 1 && value.error) {
-    throw new Error(value.error);
-  }
-  return value as T;
+export type PlayerState = {
+  track: Item | null;
+  status: Status;
+  positionMs: number;
+  durationMs: number;
+  shuffle: boolean;
+  repeat: Repeat;
+};
+
+export type QueueSnapshot = {
+  items: Item[];
+  current: number | null;
+  origin: string | null;
+  shuffle: boolean;
+  repeat: Repeat;
+};
+
+export type SessionState =
+  | { kind: 'signedOut' }
+  | { kind: 'connecting' }
+  | { kind: 'guest' }
+  | { kind: 'signedIn'; account: string }
+  | { kind: 'expired' }
+  | { kind: 'failed'; message: string };
+
+export type ProviderInfo = {
+  slug: string;
+  name: string;
+  signedIn: boolean;
+  account: string | null;
+  session: SessionState;
+};
+
+export type Prompt =
+  | { kind: 'url'; url: string }
+  | { kind: 'code'; code: string; url: string }
+  | { kind: 'secret' }
+  | { kind: 'accounts'; choices: { id: string; name: string; detail: string | null }[] };
+
+type Events = {
+  onState(state: PlayerState): void;
+  onPosition(event: { positionMs: number }): void;
+  onQueue(queue: QueueSnapshot): void;
+  onSession(event: { slug: string; state: SessionState }): void;
+  onPrompt(event: { slug: string; prompt: Prompt }): void;
+  onError(event: { message: string }): void;
+};
+
+declare class SonoraCoreModule extends NativeModule<Events> {
+  /** Starts the core, which answers at once with the queue, the player and the sessions. */
+  start(): Promise<void>;
+  providers(): Promise<ProviderInfo[]>;
+  search(query: string): Promise<SearchResults>;
+  /** Replaces the queue with `ids` and plays the one at `index`. */
+  play(ids: string[], index: number, origin: string | null): Promise<void>;
+  toggle(): Promise<void>;
+  next(): Promise<void>;
+  previous(): Promise<void>;
+  seek(positionMs: number): Promise<void>;
+  setShuffle(on: boolean): Promise<void>;
+  cycleRepeat(): Promise<void>;
+  enqueueNext(ids: string[]): Promise<void>;
+  enqueueLast(ids: string[]): Promise<void>;
+  /** Takes the entry at `index` of the queue out; the current track cannot be removed. */
+  remove(index: number): Promise<void>;
+  playerState(): Promise<PlayerState>;
+  queue(): Promise<QueueSnapshot>;
 }
 
-export default {
-  version: () => native.version(),
-  playTone: (seconds: number) => native.playTone(seconds),
-  init: async () => parse<{ ok: boolean }>(await native.init()),
-  search: async (query: string) => parse<Hit[]>(await native.search(query)),
-  play: async (id: string) => parse<{ ok: boolean }>(await native.play(id)),
-  toggle: () => parse<{ playing: boolean }>(native.toggle()),
-  nowPlaying: () => parse<NowPlaying>(native.nowPlaying()),
-};
+export default requireNativeModule<SonoraCoreModule>('SonoraCore');

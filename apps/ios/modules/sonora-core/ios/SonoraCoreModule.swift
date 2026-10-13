@@ -1,13 +1,5 @@
 import AVFoundation
 import ExpoModulesCore
-@_implementationOnly import SonoraRust
-
-/// Takes an owned JSON string from the Rust core and releases it.
-private func take(_ raw: UnsafeMutablePointer<CChar>?) -> String {
-  guard let raw else { return "{\"error\":\"the core answered nothing\"}" }
-  defer { sonora_free(raw) }
-  return String(cString: raw)
-}
 
 /// The app's own Application Support folder, where the core keeps its files.
 private func dataDir() -> String {
@@ -17,9 +9,14 @@ private func dataDir() -> String {
   return base.path
 }
 
+/// The Rust core as an Expo module. Every function hands an intent to the core; what happens
+/// next arrives as one of the events. Generated functions are named through the module
+/// (`SonoraCore.next()`), so they never resolve to something of `Module`'s.
 public class SonoraCoreModule: Module {
   public func definition() -> ModuleDefinition {
     Name("SonoraCore")
+
+    Events("onState", "onPosition", "onQueue", "onSession", "onPrompt", "onError")
 
     OnCreate {
       let session = AVAudioSession.sharedInstance()
@@ -31,33 +28,66 @@ public class SonoraCoreModule: Module {
       }
     }
 
-    Function("version") { () -> String in
-      String(cString: sonora_version())
+    // Registers this module as the listener; the core answers with the providers, the queue and
+    // the player state at once.
+    AsyncFunction("start") { () throws in
+      try startCore(dataDir: dataDir(), listener: Listener(module: self))
     }
 
-    Function("playTone") { (seconds: Int) -> Int in
-      Int(sonora_play_tone(UInt32(max(0, seconds))))
+    AsyncFunction("providers") { () throws -> [[String: Any]] in
+      try SonoraCore.providers().map(Bridge.provider)
     }
 
-    // These block on the network, so they run as async functions, off the JS thread.
-    AsyncFunction("init") { () -> String in
-      take(sonora_init(dataDir()))
+    AsyncFunction("search") { (query: String) async throws -> [String: Any] in
+      Bridge.search(try await SonoraCore.search(query: query))
     }
 
-    AsyncFunction("search") { (query: String) -> String in
-      take(sonora_search(query))
+    AsyncFunction("play") { (ids: [String], index: Int, origin: String?) async throws in
+      try await SonoraCore.play(ids: ids, index: UInt32(max(0, index)), origin: origin)
     }
 
-    AsyncFunction("play") { (id: String) -> String in
-      take(sonora_play(id))
+    AsyncFunction("toggle") { () throws in
+      try SonoraCore.toggle()
     }
 
-    Function("toggle") { () -> String in
-      take(sonora_toggle())
+    AsyncFunction("next") { () throws in
+      try SonoraCore.next()
     }
 
-    Function("nowPlaying") { () -> String in
-      take(sonora_now_playing())
+    AsyncFunction("previous") { () throws in
+      try SonoraCore.previous()
+    }
+
+    AsyncFunction("seek") { (positionMs: Double) throws in
+      try SonoraCore.seek(positionMs: UInt64(max(0, positionMs)))
+    }
+
+    AsyncFunction("setShuffle") { (on: Bool) throws in
+      try SonoraCore.setShuffle(on: on)
+    }
+
+    AsyncFunction("cycleRepeat") { () throws in
+      try SonoraCore.cycleRepeat()
+    }
+
+    AsyncFunction("enqueueNext") { (ids: [String]) async throws in
+      try await SonoraCore.enqueueNext(ids: ids)
+    }
+
+    AsyncFunction("enqueueLast") { (ids: [String]) async throws in
+      try await SonoraCore.enqueueLast(ids: ids)
+    }
+
+    AsyncFunction("remove") { (index: Int) throws in
+      try SonoraCore.remove(index: UInt32(max(0, index)))
+    }
+
+    AsyncFunction("playerState") { () throws -> [String: Any] in
+      Bridge.state(try SonoraCore.playerState())
+    }
+
+    AsyncFunction("queue") { () throws -> [String: Any] in
+      Bridge.queue(try SonoraCore.queue())
     }
   }
 }
