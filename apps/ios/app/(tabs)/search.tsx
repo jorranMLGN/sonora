@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput } from 'react-native';
+import { ActivityIndicator, FlatList, Text, TextInput } from 'react-native';
 
 import type { SearchResults, Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
@@ -9,8 +9,10 @@ import { SettingsButton } from '../../src/components/SettingsButton';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
+import { useSettings, visible } from '../../src/settings';
 import { attempt, useStore } from '../../src/store';
-import { colors, radii, spacing, typography } from '../../src/theme';
+import { makeStyles, useTheme } from '../../src/styles';
+import { spacing } from '../../src/theme';
 
 type Row =
   | { type: 'header'; key: string; title: string }
@@ -42,6 +44,10 @@ export default function Search() {
   const [results, setResults] = useState<SearchResults | null>(null);
   const [searching, setSearching] = useState(false);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
+  const hideExplicit = useSettings((s) => s.hideExplicit);
+  const tracks = visible(results?.tracks ?? [], hideExplicit);
+  const { colors } = useTheme();
+  const styles = useStyles();
 
   const submit = () => {
     const text = query.trim();
@@ -70,7 +76,7 @@ export default function Search() {
       />
       {searching && <ActivityIndicator color={colors.textDim} />}
       <FlatList
-        data={results ? rows(results) : []}
+        data={results ? rows({ ...results, tracks }) : []}
         keyExtractor={(row) => row.key}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -89,7 +95,7 @@ export default function Search() {
                   onPress={() =>
                     attempt(
                       bridge.play(
-                        (results?.tracks ?? []).map((track) => track.id),
+                        tracks.map((track) => track.id),
                         row.index,
                         `search:${query.trim()}`,
                       ),
@@ -106,7 +112,7 @@ export default function Search() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   field: {
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
@@ -125,4 +131,4 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   empty: { color: colors.textDim, textAlign: 'center', marginTop: spacing.xxl },
-});
+}));

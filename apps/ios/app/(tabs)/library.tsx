@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { FlatList, Pressable, ScrollView, Text } from 'react-native';
 
 import type { LibraryPart, Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
@@ -9,8 +9,10 @@ import { SettingsButton } from '../../src/components/SettingsButton';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
+import { useSettings, visible } from '../../src/settings';
 import { attempt, markSaved, reason, useStore } from '../../src/store';
-import { colors, radii, spacing, typography } from '../../src/theme';
+import { makeStyles } from '../../src/styles';
+import { spacing } from '../../src/theme';
 
 const PARTS: LibraryPart[] = ['tracks', 'albums', 'artists', 'playlists'];
 
@@ -22,6 +24,7 @@ const KINDS: Record<Exclude<LibraryPart, 'tracks'>, Kind> = {
 
 export default function Library() {
   const providers = useStore((s) => s.providers);
+  const styles = useStyles();
   const currentId = useStore((s) => s.player?.track?.id ?? null);
   // A guest session has no library, so only accounts get a chip.
   const usable = providers.filter((p) => p.session.kind === 'signedIn');
@@ -30,7 +33,11 @@ export default function Library() {
   const slug = usable.find((p) => p.slug === chosen)?.slug ?? usable[0]?.slug ?? null;
   // Signing in to another account of the same provider lists the library again.
   const account = usable.find((p) => p.slug === slug)?.account ?? null;
-  const [part, setPart] = useState<LibraryPart>('tracks');
+  const opening = useSettings((s) => s.libraryTab);
+  const [part, setPart] = useState<LibraryPart>(opening);
+  // Choosing another part to open on in Settings switches to it at once.
+  useEffect(() => setPart(opening), [opening]);
+  const hideExplicit = useSettings((s) => s.hideExplicit);
   const [items, setItems] = useState<Track[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -81,6 +88,8 @@ export default function Library() {
 
   useEffect(() => restart(true), [restart]);
 
+  const shown = part === 'tracks' ? visible(items, hideExplicit) : items;
+
   return (
     <Screen
       title={t('mobile-tab-library')}
@@ -105,7 +114,7 @@ export default function Library() {
         <Text style={styles.empty}>{t('mobile-library-sign-in')}</Text>
       ) : (
         <FlatList
-          data={items}
+          data={shown}
           keyExtractor={(item, index) => `${index}:${item.id}`}
           refreshing={loading && page.current === 0 && items.length > 0}
           onRefresh={() => restart(false)}
@@ -122,7 +131,7 @@ export default function Library() {
                 onPress={() =>
                   attempt(
                     bridge.play(
-                      items.map((track) => track.id),
+                      shown.map((track) => track.id),
                       index,
                       `library:${slug}`,
                     ),
@@ -140,6 +149,7 @@ export default function Library() {
 }
 
 function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const styles = useStyles();
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress}>
       <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
@@ -147,7 +157,7 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   chips: { flexGrow: 0, marginBottom: spacing.sm },
   chipsContent: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   chip: {
@@ -160,4 +170,4 @@ const styles = StyleSheet.create({
   chipText: { color: colors.text, fontSize: typography.body },
   chipTextOn: { color: colors.onAccent, fontWeight: '600' },
   empty: { color: colors.textDim, textAlign: 'center', marginTop: spacing.xxl },
-});
+}));

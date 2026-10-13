@@ -3,11 +3,13 @@ import { useRouter } from 'expo-router';
 import { Pressable } from 'react-native';
 
 import { t } from '../i18n';
-import { colors, sizes, spacing } from '../theme';
+import { useTheme } from '../styles';
+import { sizes, spacing } from '../theme';
 
 /** The gear at the top right of every tab, opening Settings. */
 export function SettingsButton() {
   const router = useRouter();
+  const { colors } = useTheme();
   return (
     <Pressable
       hitSlop={spacing.md}

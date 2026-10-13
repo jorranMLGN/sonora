@@ -1,13 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, Text, View } from 'react-native';
 
 import type { Track } from '../bridge';
 import { bridge } from '../bridgeImpl';
 import { clock } from '../format';
 import { t } from '../i18n';
 import { attempt, savedKey, toggleSaved, useSaved, useStore } from '../store';
-import { colors, sizes, spacing, typography } from '../theme';
+import { makeStyles, useTheme } from '../styles';
+import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
+import { ProviderBadge } from './ProviderBadge';
 
 /** Opens the action sheet for a track: play next, add to the queue, save or unsave. */
 export function trackActions(track: Track) {
@@ -26,6 +28,7 @@ export function trackActions(track: Track) {
 /** The heart beside a track, filled while the track is in its provider's library. */
 function Heart({ id }: { id: string }) {
   const saved = useSaved('tracks', id);
+  const { colors } = useTheme();
   return (
     <Pressable
       hitSlop={spacing.sm}
@@ -60,6 +63,7 @@ export function TrackRow({
   /** Whether the row shows the save toggle; the queue leaves it out. */
   heart?: boolean;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       style={[styles.row, current && styles.current]}
@@ -75,6 +79,7 @@ export function TrackRow({
           {track.explicit ? `${t('mobile-explicit')} · ` : ''}
           {track.subtitle}
         </Text>
+        <ProviderBadge slug={track.provider} />
       </View>
       {track.durationMs > 0 && <Text style={styles.subtitle}>{clock(track.durationMs)}</Text>}
       {heart && <Heart id={track.id} />}
@@ -82,7 +87,7 @@ export function TrackRow({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -96,4 +101,4 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.textDim, fontSize: typography.caption },
   accent: { color: colors.accent },
   dim: { color: colors.textDim },
-});
+}));

@@ -1,24 +1,30 @@
 import { useLocalSearchParams } from 'expo-router';
 import { FlatList } from 'react-native';
 
+import type { Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
 import { DetailHeader, Loading, useCurrentId } from '../../src/components/Detail';
 import { Screen } from '../../src/components/Screen';
 import { TrackRow } from '../../src/components/TrackRow';
+import { useVisible } from '../../src/settings';
 import { attempt } from '../../src/store';
 import { useLoad } from '../../src/useLoad';
+
+/** The tracks of a page still loading, the same array each time so a memo holds. */
+const NONE: Track[] = [];
 
 export default function AlbumPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data, loading, reload } = useLoad(() => bridge.album(id), [id]);
   const currentId = useCurrentId();
+  const tracks = useVisible(data?.tracks ?? NONE);
   return (
     <Screen back miniPlayer>
       {!data ? (
         <Loading />
       ) : (
         <FlatList
-          data={data.tracks}
+          data={tracks}
           keyExtractor={(track, index) => `${index}:${track.id}`}
           refreshing={loading}
           onRefresh={reload}
@@ -26,7 +32,7 @@ export default function AlbumPage() {
             <DetailHeader
               item={data.album}
               kind="albums"
-              tracks={data.tracks}
+              tracks={tracks}
               origin={`album:${id}`}
             />
           }
@@ -37,7 +43,7 @@ export default function AlbumPage() {
               onPress={() =>
                 attempt(
                   bridge.play(
-                    data.tracks.map((track) => track.id),
+                    tracks.map((track) => track.id),
                     index,
                     `album:${id}`,
                   ),

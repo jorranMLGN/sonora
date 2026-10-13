@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Pressable, Text, TextInput, View } from 'react-native';
 
 import type { Prompt, ProviderInfo, SignInOption } from '../bridge';
 import { bridge } from '../bridgeImpl';
 import { t } from '../i18n';
 import { attempt, signIn, useStore } from '../store';
-import { colors, radii, spacing, typography } from '../theme';
+import { makeStyles, useTheme } from '../styles';
+import { spacing } from '../theme';
 
 /** The status line under a provider's name. */
 function status(provider: ProviderInfo): string {
@@ -74,6 +75,8 @@ function PasteField({
   onSubmit: (text: string) => void;
 }) {
   const [text, setText] = useState('');
+  const { colors } = useTheme();
+  const styles = useStyles();
   return (
     <>
       <TextInput
@@ -97,6 +100,7 @@ function PasteField({
 
 /** What a sign-in prompt asks of the user. Browser prompts are opened by the native side. */
 function PromptBody({ slug, prompt }: { slug: string; prompt: Prompt }) {
+  const styles = useStyles();
   const answer = (input: string) => attempt(bridge.answer(slug, input));
   switch (prompt.kind) {
     case 'url':
@@ -153,6 +157,7 @@ function Button({
   quiet?: boolean;
   disabled?: boolean;
 }) {
+  const styles = useStyles();
   return (
     <Pressable
       style={[styles.button, quiet && styles.quiet, disabled && styles.disabled]}
@@ -171,6 +176,7 @@ function Button({
 export function ProviderCard({ provider }: { provider: ProviderInfo }) {
   const prompt = useStore((s) => s.prompts[provider.slug]);
   const busy = useStore((s) => s.signingIn[provider.slug] ?? false);
+  const styles = useStyles();
   const signedIn = provider.session.kind === 'signedIn';
   return (
     <View style={styles.card}>
@@ -203,7 +209,7 @@ export function ProviderCard({ provider }: { provider: ProviderInfo }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   card: {
     backgroundColor: colors.surface,
     borderRadius: radii.large,
@@ -240,4 +246,4 @@ const styles = StyleSheet.create({
   disabled: { backgroundColor: colors.surfaceRaised },
   buttonText: { color: colors.onAccent, fontWeight: '600', fontSize: typography.body },
   quietText: { color: colors.text },
-});
+}));

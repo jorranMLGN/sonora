@@ -117,6 +117,10 @@ export declare class SonoraCoreModule extends NativeModule<Events> {
   /** A switch the app keeps for itself in the user defaults; false until it is set. */
   flag(key: string): boolean;
   setFlag(key: string, on: boolean): void;
+  /** A setting the app keeps for itself in the user defaults, as a string; null until it is set. */
+  preference(key: string): string | null;
+  /** Stores a setting; null removes it, so it reads as unset again. */
+  setPreference(key: string, value: string | null): void;
   providers(): Promise<ProviderInfo[]>;
   /**
    * Signs in and settles when that is done. A provider's refusal rejects with the code

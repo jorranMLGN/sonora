@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { processColor, StyleSheet, Text, View } from 'react-native';
+import { processColor, Text, View } from 'react-native';
 
 import route, { NativeRoutePicker, type OutputRoute } from '../../modules/sonora-core/route';
 import { t } from '../i18n';
-import { colors, sizes, spacing, typography } from '../theme';
+import { makeStyles, useTheme } from '../styles';
+import { sizes, spacing } from '../theme';
 
 /** The output the sound goes to now, kept up as it changes; null without the native module. */
 export function useOutputRoute(): OutputRoute | null {
@@ -23,6 +24,7 @@ export function useOutputRoute(): OutputRoute | null {
  * module.
  */
 export function OutputButton({ size = sizes.icon }: { size?: number }) {
+  const { colors } = useTheme();
   if (NativeRoutePicker === null) return null;
   return (
     <View onStartShouldSetResponder={() => true}>
@@ -38,6 +40,7 @@ export function OutputButton({ size = sizes.icon }: { size?: number }) {
 /** The player's output line: where the sound goes when it is not the phone, and the picker. */
 export function OutputRow() {
   const output = useOutputRoute();
+  const styles = useStyles();
   if (NativeRoutePicker === null) return null;
   const device = output !== null && output.kind !== 'phone' ? output.name : '';
   return (
@@ -50,7 +53,7 @@ export function OutputRow() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   row: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   label: { flex: 1, color: colors.accent, fontSize: typography.caption, fontWeight: '600' },
-});
+}));

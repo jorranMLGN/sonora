@@ -4,7 +4,8 @@ import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { CanvasView } from '../../modules/sonora-core';
 import { largestArtwork } from '../artwork';
 import type { Track } from '../bridge';
-import { radii } from '../theme';
+import type { ArtworkShape } from '../settings';
+import { useTheme } from '../styles';
 import { useCanvas } from '../useCanvas';
 import { Artwork } from './Artwork';
 
@@ -14,17 +15,23 @@ const FADE_MS = 600;
 /**
  * The full player's artwork at its largest, with the track's Canvas faded in over it once the
  * video can draw. A track change fades the old Canvas out before the next one mounts, and a
- * Canvas that cannot play fades back to the artwork. The video runs only while `playing`.
+ * Canvas that cannot play fades back to the artwork. The video runs only while `playing`, and is
+ * cut to the same `shape` as the artwork.
  */
 export function CanvasArt({
   track,
   size,
   playing,
+  shape,
 }: {
   track: Track | null;
   size: number;
   playing: boolean;
+  shape?: ArtworkShape;
 }) {
+  const { radii } = useTheme();
+  const corner =
+    shape === 'circle' ? size / 2 : shape === 'rounded' ? radii.large : radii.small;
   const original = track?.artwork ?? null;
   const large = largestArtwork(original);
   // A large url its host refused, so the artwork falls back to the url the core gave.
@@ -73,10 +80,13 @@ export function CanvasArt({
       <Artwork
         uri={artwork}
         size={size}
+        shape={shape}
         onError={() => large !== null && large !== original && setBroken(large)}
       />
       {CanvasView !== null && shown !== null && (
-        <Animated.View style={[StyleSheet.absoluteFill, styles.clip, { opacity: fade }]}>
+        <Animated.View
+          style={[StyleSheet.absoluteFill, styles.clip, { borderRadius: corner, opacity: fade }]}
+        >
           <CanvasView
             key={shown}
             url={shown}
@@ -98,5 +108,5 @@ export function CanvasArt({
 }
 
 const styles = StyleSheet.create({
-  clip: { borderRadius: radii.small, overflow: 'hidden', pointerEvents: 'none' },
+  clip: { overflow: 'hidden', pointerEvents: 'none' },
 });

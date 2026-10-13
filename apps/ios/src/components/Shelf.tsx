@@ -1,8 +1,9 @@
 import { useRouter } from 'expo-router';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, Text, View } from 'react-native';
 
 import type { Track } from '../bridge';
-import { colors, sizes, spacing, typography } from '../theme';
+import { makeStyles } from '../styles';
+import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
 
 export type Kind = 'album' | 'playlist' | 'artist';
@@ -16,6 +17,7 @@ export function useOpen() {
 /** A tile in a horizontal shelf; artists are round. */
 export function Tile({ item, kind }: { item: Track; kind: Kind }) {
   const open = useOpen();
+  const styles = useStyles();
   return (
     <Pressable style={styles.tile} onPress={() => open(kind, item.id)}>
       <Artwork uri={item.artwork} size={sizes.tileArtwork} round={kind === 'artist'} />
@@ -31,6 +33,7 @@ export function Tile({ item, kind }: { item: Track; kind: Kind }) {
 
 /** A titled horizontal list of albums, playlists or artists. */
 export function Shelf({ title, items, kind }: { title: string; items: Track[]; kind: Kind }) {
+  const styles = useStyles();
   if (items.length === 0) return null;
   return (
     <View style={styles.shelf}>
@@ -47,7 +50,7 @@ export function Shelf({ title, items, kind }: { title: string; items: Track[]; k
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   shelf: { marginBottom: spacing.xl },
   heading: {
     color: colors.text,
@@ -60,4 +63,4 @@ const styles = StyleSheet.create({
   tile: { width: sizes.tileArtwork },
   title: { color: colors.text, fontSize: typography.body, marginTop: spacing.sm },
   subtitle: { color: colors.textDim, fontSize: typography.caption },
-});
+}));

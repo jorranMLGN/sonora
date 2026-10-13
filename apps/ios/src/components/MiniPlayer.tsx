@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { bridge } from '../bridgeImpl';
 import { t } from '../i18n';
 import { attempt, useStore } from '../store';
-import { colors, sizes, spacing, typography } from '../theme';
+import { makeStyles, useTheme } from '../styles';
+import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
 import { OutputButton } from './Output';
 
@@ -14,6 +15,8 @@ export function MiniPlayer() {
   const router = useRouter();
   const player = useStore((s) => s.player);
   const positionMs = useStore((s) => s.positionMs);
+  const { colors } = useTheme();
+  const styles = useStyles();
   if (!player?.track) return null;
   const fraction = player.durationMs > 0 ? Math.min(1, positionMs / player.durationMs) : 0;
   return (
@@ -61,7 +64,7 @@ export function MiniPlayer() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   bar: {
     height: sizes.miniPlayer,
     flexDirection: 'row',
@@ -81,4 +84,4 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: typography.body, fontWeight: '600' },
   subtitle: { color: colors.textDim, fontSize: typography.caption },
   button: { padding: spacing.xs },
-});
+}));
