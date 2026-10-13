@@ -103,6 +103,9 @@ export function signIn(provider: ProviderInfo, option: SignInOption): void {
     .signIn(provider.slug, option)
     .catch((error: Error & { code?: string }) => {
       const code = error.code ?? '';
+      // The toast words the problem; the core's own message goes to the log, for whoever
+      // follows a sign-in from the dev server.
+      console.warn(`sign-in to ${provider.slug} failed (${code || 'no code'}): ${error.message}`);
       const message = code.startsWith(SIGN_IN)
         ? t(`login-problem-${code.slice(SIGN_IN.length).toLowerCase()}`, { provider: provider.name })
         : reason(error);
