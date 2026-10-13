@@ -29,7 +29,7 @@ export default function TabsLayout() {
   const insets = useSafeAreaInsets();
   return (
     <Tabs style={styles.root}>
-      <TabSlot />
+      <TabSlot style={styles.slot} />
       <MiniPlayer />
       <TabList style={[styles.bar, { paddingBottom: insets.bottom }]}>
         <TabTrigger name="home" href="/" asChild>
@@ -47,7 +47,8 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
-  root: { backgroundColor: colors.background },
+  root: { flex: 1, backgroundColor: colors.background },
+  slot: { flex: 1 },
   bar: {
     backgroundColor: colors.surface,
     borderTopWidth: sizes.hairline,
