@@ -41,6 +41,16 @@ public class SonoraCoreModule: Module {
       UserDefaults.standard.set(on, forKey: "sonora.\(key)")
     }
 
+    // The app's other settings, such as the accent colour, as strings beside the flags. Setting
+    // nil removes one, so it reads as its default again.
+    Function("preference") { (key: String) -> String? in
+      UserDefaults.standard.string(forKey: "sonora.\(key)")
+    }
+
+    Function("setPreference") { (key: String, value: String?) in
+      UserDefaults.standard.set(value, forKey: "sonora.\(key)")
+    }
+
     AsyncFunction("providers") { () throws -> [[String: Any]] in
       try SonoraCore.providers().map(Bridge.provider)
     }
