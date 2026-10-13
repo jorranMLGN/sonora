@@ -31,6 +31,16 @@ public class SonoraCoreModule: Module {
       try startCore(dataDir: dataDir(), listener: Listener(module: self))
     }
 
+    // A few switches the app keeps for itself, such as whether the intro was seen. They live in
+    // the app's user defaults, apart from the core's files.
+    Function("flag") { (key: String) -> Bool in
+      UserDefaults.standard.bool(forKey: "sonora.\(key)")
+    }
+
+    Function("setFlag") { (key: String, on: Bool) in
+      UserDefaults.standard.set(on, forKey: "sonora.\(key)")
+    }
+
     AsyncFunction("providers") { () throws -> [[String: Any]] in
       try SonoraCore.providers().map(Bridge.provider)
     }

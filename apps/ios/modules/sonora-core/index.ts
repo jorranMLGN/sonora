@@ -112,6 +112,9 @@ type Events = {
 export declare class SonoraCoreModule extends NativeModule<Events> {
   /** Starts the core, which answers at once with the queue, the player and the sessions. */
   start(): Promise<void>;
+  /** A switch the app keeps for itself in the user defaults; false until it is set. */
+  flag(key: string): boolean;
+  setFlag(key: string, on: boolean): void;
   providers(): Promise<ProviderInfo[]>;
   /**
    * Signs in and settles when that is done. A provider's refusal rejects with the code

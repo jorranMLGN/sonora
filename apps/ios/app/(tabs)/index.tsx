@@ -4,6 +4,7 @@ import type { Section } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
 import { Loading } from '../../src/components/Detail';
 import { Screen } from '../../src/components/Screen';
+import { SettingsButton } from '../../src/components/SettingsButton';
 import { Shelf } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
@@ -37,7 +38,7 @@ export default function Home() {
   const { data, loading, reload } = useLoad(() => bridge.home(), [live]);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
   return (
-    <Screen title={t('mobile-tab-home')}>
+    <Screen title={t('mobile-tab-home')} right={<SettingsButton />}>
       {loading && !data && <Loading />}
       <FlatList
         data={data ?? []}

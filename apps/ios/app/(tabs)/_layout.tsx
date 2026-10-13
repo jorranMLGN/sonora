@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Redirect } from 'expo-router';
 import { TabList, TabSlot, TabTrigger, Tabs } from 'expo-router/ui';
 import { forwardRef } from 'react';
 import { Pressable, type PressableProps, StyleSheet, Text, View } from 'react-native';
@@ -6,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MiniPlayer } from '../../src/components/MiniPlayer';
 import { t } from '../../src/i18n';
+import { flag } from '../../src/preferences';
 import { colors, sizes, spacing, typography } from '../../src/theme';
 
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -27,6 +29,8 @@ const TabButton = forwardRef<View, ButtonProps>(function TabButton(
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
+  // A first launch walks through the intro before anything else.
+  if (!flag('introSeen')) return <Redirect href="/intro" />;
   return (
     <Tabs style={styles.root}>
       <TabSlot style={styles.slot} />

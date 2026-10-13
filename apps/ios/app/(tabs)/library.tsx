@@ -1,5 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 
@@ -7,11 +5,12 @@ import type { LibraryPart, Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
 import { EntityRow } from '../../src/components/EntityRow';
 import { Screen } from '../../src/components/Screen';
+import { SettingsButton } from '../../src/components/SettingsButton';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
 import { attempt, markSaved, reason, useStore } from '../../src/store';
-import { colors, radii, sizes, spacing, typography } from '../../src/theme';
+import { colors, radii, spacing, typography } from '../../src/theme';
 
 const PARTS: LibraryPart[] = ['tracks', 'albums', 'artists', 'playlists'];
 
@@ -22,7 +21,6 @@ const KINDS: Record<Exclude<LibraryPart, 'tracks'>, Kind> = {
 };
 
 export default function Library() {
-  const router = useRouter();
   const providers = useStore((s) => s.providers);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
   // A guest session has no library, so only accounts get a chip.
@@ -86,15 +84,7 @@ export default function Library() {
   return (
     <Screen
       title={t('mobile-tab-library')}
-      right={
-        <Pressable
-          hitSlop={spacing.md}
-          onPress={() => router.push('/accounts')}
-          accessibilityLabel={t('mobile-accounts')}
-        >
-          <Ionicons name="person-circle-outline" size={sizes.iconLarge} color={colors.text} />
-        </Pressable>
-      }
+      right={<SettingsButton />}
     >
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chips} contentContainerStyle={styles.chipsContent}>
         {usable.map((p) => (

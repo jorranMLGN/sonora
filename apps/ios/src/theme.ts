@@ -7,6 +7,10 @@ export const colors = {
   text: '#f4f4f6',
   textDim: '#9a9aa5',
   accent: '#ff5500',
+  /** The accent as a soft wash, for the glows and rings behind it. */
+  accentSoft: 'rgba(255, 85, 0, 0.16)',
+  accentFaint: 'rgba(255, 85, 0, 0.06)',
+  success: '#3ddc84',
   onAccent: '#ffffff',
   danger: '#ff5a5f',
   overlay: 'rgba(0, 0, 0, 0.6)',
@@ -45,6 +49,15 @@ export const sizes = {
   scrubberThumb: 14,
   scrubberHit: 32,
   hairline: 1,
+  /** The intro: its equalizer mark, the rings that pulse out of it, the glow behind a page. */
+  introMark: 120,
+  introBar: 14,
+  introRing: 160,
+  introGlow: 420,
+  introCheck: 96,
+  dot: 8,
+  dotActive: 24,
+  button: 52,
 } as const;
 
 export const typography = {

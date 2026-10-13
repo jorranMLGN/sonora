@@ -1150,3 +1150,26 @@ mobile-back = Back
 mobile-close = Close
 mobile-dismiss = Dismiss
 mobile-cancel = Cancel
+mobile-settings = Settings
+mobile-settings-accounts = Accounts
+mobile-settings-accounts-detail = Spotify, YouTube Music and SoundCloud
+mobile-settings-intro = Show the intro again
+mobile-settings-about = About
+mobile-build-version = Version { $version }
+mobile-build-number = Build { $number }
+mobile-build-dev = Development build
+mobile-intro-skip = Skip
+mobile-intro-welcome-title = Welcome to Sonora
+mobile-intro-welcome-body = All your music in one place. Spotify, YouTube Music and SoundCloud, side by side.
+mobile-intro-start = Get started
+mobile-intro-connect-title = Bring your music
+mobile-intro-connect-body = Sign in to the services you use. You can always add more later under Settings.
+mobile-intro-continue = Continue
+mobile-intro-later = Maybe later
+mobile-intro-done-title = You're all set
+mobile-intro-done-body = { $count ->
+    [0] Nothing connected yet. Sign in under Settings whenever you like.
+    [one] One service is connected. Enjoy the music.
+   *[other] { $count } services are connected. Enjoy the music.
+}
+mobile-intro-finish = Start listening

@@ -5,6 +5,7 @@ import type { SearchResults, Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
 import { EntityRow } from '../../src/components/EntityRow';
 import { Screen } from '../../src/components/Screen';
+import { SettingsButton } from '../../src/components/SettingsButton';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
@@ -54,7 +55,7 @@ export default function Search() {
   };
 
   return (
-    <Screen title={t('mobile-tab-search')}>
+    <Screen title={t('mobile-tab-search')} right={<SettingsButton />}>
       <TextInput
         style={styles.field}
         placeholder={t('mobile-search-placeholder')}
