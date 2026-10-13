@@ -1,0 +1,13 @@
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Its own workspace, so the desktop workspace never builds the bindings generator.
+[workspace]
+
+[dependencies]
+# Must match the `uniffi` the `mobile` crate is built with.
+uniffi = { version = "=0.32.2", features = ["cli"] }

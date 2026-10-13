@@ -1,0 +1,526 @@
+//! The deck: one task that owns the queue and the providers' engines, takes every intent and
+//! every engine event in turn, and reports what happened.
+//!
+//! One engine sounds at a time. Starting a track of another provider pauses the one before,
+//! and an engine that loses its output is dropped and rebuilt on the next play.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use music::{Equalizer, PlaybackConfig, PlaybackEvent, Player, tag};
+use tokio::sync::mpsc;
+
+use crate::core::{Events, Sessions};
+use crate::queue::Queue;
+use crate::store::{self, Store};
+use crate::{Item, PlayerState, QueueSnapshot, SessionState, Status};
+
+/// How often an engine reports where it is.
+const TICK: Duration = Duration::from_millis(500);
+/// How long before the end the next track is fetched.
+const PRELOAD: Duration = Duration::from_secs(20);
+/// How far into a track `previous` restarts it rather than going back.
+const RESTART: Duration = Duration::from_secs(3);
+/// How often the position is saved while playing.
+const SAVE: Duration = Duration::from_secs(5);
+/// How many tracks in a row may fail before playback stops.
+const FAILURES: u32 = 3;
+
+/// An intent from the app, or an event from an engine.
+pub enum Command {
+    Play {
+        items: Vec<Item>,
+        index: usize,
+        origin: Option<String>,
+    },
+    Toggle,
+    Next,
+    Previous,
+    Seek(Duration),
+    Shuffle(bool),
+    CycleRepeat,
+    EnqueueNext(Vec<Item>),
+    EnqueueLast(Vec<Item>),
+    Remove(usize),
+    Engine {
+        slug: &'static str,
+        generation: u64,
+        event: PlaybackEvent,
+    },
+}
+
+/// One provider's running engine. `generation` tells its events from those of an engine it
+/// replaced.
+struct Engine {
+    player: Box<dyn Player>,
+    generation: u64,
+}
+
+/// The state the deck task owns.
+pub struct Deck {
+    queue: Queue,
+    store: Store,
+    sessions: Arc<Sessions>,
+    events: Arc<Events>,
+    commands: mpsc::UnboundedSender<Command>,
+    engines: HashMap<&'static str, Engine>,
+    generations: u64,
+    /// The provider whose engine has the current track, if any engine has it.
+    active: Option<&'static str>,
+    status: Status,
+    position: Duration,
+    duration: Duration,
+    preloaded: Option<String>,
+    failures: u32,
+    saved_at: Instant,
+    published: Arc<Mutex<(PlayerState, QueueSnapshot)>>,
+}
+
+impl Deck {
+    /// A deck holding the queue saved last time, paused where it was. Nothing is fetched until
+    /// the listener presses play.
+    pub fn restore(
+        store: Store,
+        sessions: Arc<Sessions>,
+        events: Arc<Events>,
+        commands: mpsc::UnboundedSender<Command>,
+    ) -> Self {
+        let queue: Queue = store.load(store::QUEUE).unwrap_or_default();
+        let position = Duration::from_millis(store.load(store::POSITION).unwrap_or(0));
+        let duration = queue.current().map_or(Duration::ZERO, |item| {
+            Duration::from_millis(item.duration_ms)
+        });
+        let status = match queue.current() {
+            Some(_) => Status::Paused,
+            None => Status::Idle,
+        };
+        let deck = Self {
+            published: Arc::new(Mutex::new((empty_state(), queue.snapshot()))),
+            queue,
+            store,
+            sessions,
+            events,
+            commands,
+            engines: HashMap::new(),
+            generations: 0,
+            active: None,
+            status,
+            position,
+            duration,
+            preloaded: None,
+            failures: 0,
+            saved_at: Instant::now(),
+        };
+        let state = deck.state();
+        if let Ok(mut published) = deck.published.lock() {
+            published.0 = state;
+        }
+        deck
+    }
+
+    /// What was last reported, shared with the core for its synchronous getters.
+    pub fn published(&self) -> Arc<Mutex<(PlayerState, QueueSnapshot)>> {
+        self.published.clone()
+    }
+
+    /// Takes commands until the core goes away.
+    pub async fn run(mut self, mut commands: mpsc::UnboundedReceiver<Command>) {
+        while let Some(command) = commands.recv().await {
+            self.handle(command);
+        }
+    }
+
+    fn handle(&mut self, command: Command) {
+        match command {
+            Command::Play {
+                items,
+                index,
+                origin,
+            } => {
+                if items.is_empty() {
+                    self.events
+                        .error("nothing in that list can be played".into());
+                    return;
+                }
+                self.queue.replace(items, index, origin);
+                self.failures = 0;
+                self.queue_changed();
+                self.start(Duration::ZERO, true);
+            }
+            Command::Toggle => self.toggle(),
+            Command::Next => match self.queue.advance(false).is_some() {
+                true => {
+                    self.queue_changed();
+                    self.start(Duration::ZERO, true);
+                }
+                false => self.stop(),
+            },
+            Command::Previous => self.previous(),
+            Command::Seek(at) => self.seek(at),
+            Command::Shuffle(on) => {
+                self.queue.set_shuffle(on);
+                self.preloaded = None;
+                self.queue_changed();
+                self.publish();
+            }
+            Command::CycleRepeat => {
+                self.queue.cycle_repeat();
+                self.queue_changed();
+                self.publish();
+            }
+            Command::EnqueueNext(items) => {
+                let was_empty = self.queue.current().is_none();
+                self.queue.insert_next(items);
+                self.preloaded = None;
+                self.queue_changed();
+                if was_empty {
+                    self.start(Duration::ZERO, false);
+                }
+            }
+            Command::EnqueueLast(items) => {
+                let was_empty = self.queue.current().is_none();
+                self.queue.push(items);
+                self.queue_changed();
+                if was_empty {
+                    self.start(Duration::ZERO, false);
+                }
+            }
+            Command::Remove(index) => {
+                if self.queue.remove(index) {
+                    self.preloaded = None;
+                    self.queue_changed();
+                }
+            }
+            Command::Engine {
+                slug,
+                generation,
+                event,
+            } => self.engine_event(slug, generation, event),
+        }
+    }
+
+    /// Loads the current track into its provider's engine at `at`, playing it or leaving it
+    /// paused there.
+    fn start(&mut self, at: Duration, play: bool) {
+        let Some(item) = self.queue.current().cloned() else {
+            self.status = Status::Idle;
+            self.publish();
+            return;
+        };
+        self.position = at;
+        self.duration = Duration::from_millis(item.duration_ms);
+        self.preloaded = None;
+        self.save_position();
+        let Some(slug) = tag::slug_of(&item.id).and_then(slug) else {
+            self.failed(&item, "it names no provider this app knows");
+            return;
+        };
+        if let Some(active) = self.active
+            && active != slug
+            && let Some(engine) = self.engines.get(active)
+        {
+            engine.player.pause();
+        }
+        if self.sessions.state(slug) == SessionState::Connecting {
+            // The session is still being restored: stay put rather than skip, and let the
+            // listener press play again in a moment.
+            self.status = Status::Paused;
+            self.publish();
+            self.events
+                .error(format!("still connecting to {slug}, try again in a moment"));
+            return;
+        }
+        let Some(engine) = self.engine(slug) else {
+            self.failed(&item, "its provider is not signed in");
+            return;
+        };
+        let bare = tag::untag(&item.id);
+        let loaded = match play {
+            true => engine.player.load(bare, at, false),
+            false => engine.player.load_paused_at(bare, at),
+        };
+        if let Err(error) = loaded {
+            self.failed(&item, &format!("{error:#}"));
+            return;
+        }
+        self.active = Some(slug);
+        self.status = match play {
+            true => Status::Loading,
+            false => Status::Paused,
+        };
+        self.publish();
+    }
+
+    fn toggle(&mut self) {
+        match (self.status, self.current_engine()) {
+            (Status::Playing | Status::Loading, Some(engine)) => {
+                engine.player.pause();
+                self.status = Status::Paused;
+                self.save_position();
+                self.publish();
+            }
+            (Status::Paused, Some(engine)) => {
+                engine.player.play();
+                self.status = Status::Loading;
+                self.publish();
+            }
+            // Nothing is loaded: a restored queue, a lost output or a finished queue.
+            (_, None) => {
+                if self.queue.current().is_some() {
+                    let at = self.position;
+                    self.start(at, true);
+                }
+            }
+            (Status::Idle, Some(_)) => {}
+        }
+    }
+
+    fn previous(&mut self) {
+        if self.position > RESTART || self.queue.back().is_none() {
+            self.seek(Duration::ZERO);
+            return;
+        }
+        self.queue_changed();
+        self.start(Duration::ZERO, true);
+    }
+
+    fn seek(&mut self, at: Duration) {
+        self.position = at;
+        match self.current_engine() {
+            Some(engine) => engine.player.seek(at),
+            None => self.save_position(),
+        }
+        self.events.position(at.as_millis() as u64);
+    }
+
+    /// Pauses at the end of the queue, keeping the last track up.
+    fn stop(&mut self) {
+        if let Some(engine) = self.current_engine() {
+            engine.player.pause();
+        }
+        self.active = None;
+        self.status = match self.queue.current() {
+            Some(_) => Status::Paused,
+            None => Status::Idle,
+        };
+        self.position = Duration::ZERO;
+        self.save_position();
+        self.publish();
+    }
+
+    fn engine_event(&mut self, slug: &'static str, generation: u64, event: PlaybackEvent) {
+        let current = self
+            .engines
+            .get(slug)
+            .is_some_and(|engine| engine.generation == generation);
+        if !current || self.active != Some(slug) {
+            return;
+        }
+        let playing = self
+            .queue
+            .current()
+            .map(|item| tag::untag(&item.id).to_owned());
+        if let Some(id) = event.id()
+            && Some(id) != playing.as_deref()
+        {
+            return;
+        }
+        match event {
+            PlaybackEvent::Loading { .. } => {
+                self.status = Status::Loading;
+                self.publish();
+            }
+            PlaybackEvent::Playing { at, .. } | PlaybackEvent::Seeked { at, .. } => {
+                self.failures = 0;
+                self.position = at;
+                if self.status != Status::Playing {
+                    self.status = Status::Playing;
+                    self.publish();
+                }
+                self.events.position(at.as_millis() as u64);
+            }
+            PlaybackEvent::Paused { at, .. } => {
+                self.position = at;
+                self.status = Status::Paused;
+                self.save_position();
+                self.publish();
+            }
+            PlaybackEvent::Position { at, .. } => {
+                self.position = at;
+                self.events.position(at.as_millis() as u64);
+                self.preload();
+                if self.saved_at.elapsed() >= SAVE {
+                    self.save_position();
+                }
+            }
+            PlaybackEvent::Length { duration, .. } => {
+                self.duration = duration;
+                self.publish();
+            }
+            PlaybackEvent::Ended { .. } => match self.queue.advance(true).is_some() {
+                true => {
+                    self.queue_changed();
+                    self.start(Duration::ZERO, true);
+                }
+                false => self.stop(),
+            },
+            PlaybackEvent::Unavailable { .. }
+            | PlaybackEvent::Throttled { .. }
+            | PlaybackEvent::Refused
+            | PlaybackEvent::Gated => {
+                if let Some(item) = self.queue.current().cloned() {
+                    self.failed(&item, "the provider would not play it");
+                }
+            }
+            PlaybackEvent::OutputChanged => {
+                log::info!("player: the audio output changed, dropping the {slug} engine");
+                self.engines.remove(slug);
+                self.active = None;
+                self.status = Status::Paused;
+                self.save_position();
+                self.publish();
+            }
+            PlaybackEvent::Downloaded { .. } => {}
+        }
+    }
+
+    /// Skips a track that cannot be played, and stops after `FAILURES` in a row.
+    fn failed(&mut self, item: &Item, why: &str) {
+        self.failures += 1;
+        self.events
+            .error(format!("cannot play {}: {why}", item.title));
+        if self.failures >= FAILURES {
+            self.failures = 0;
+            self.stop();
+            return;
+        }
+        match self.queue.advance(false).is_some() {
+            true => {
+                self.queue_changed();
+                self.start(Duration::ZERO, true);
+            }
+            false => self.stop(),
+        }
+    }
+
+    /// Fetches the next track once the current one nears its end, on its own provider's engine.
+    fn preload(&mut self) {
+        if self.duration.is_zero() || self.duration.saturating_sub(self.position) > PRELOAD {
+            return;
+        }
+        let Some(next) = self.queue.upcoming().map(|item| item.id.clone()) else {
+            return;
+        };
+        if self.preloaded.as_deref() == Some(next.as_str()) {
+            return;
+        }
+        self.preloaded = Some(next.clone());
+        let Some(slug) = tag::slug_of(&next).and_then(slug) else {
+            return;
+        };
+        let Some(engine) = self.engine(slug) else {
+            return;
+        };
+        if let Err(error) = engine.player.preload(tag::untag(&next), true) {
+            log::warn!("player: cannot preload {next}: {error:#}");
+        }
+    }
+
+    /// The engine of `slug`, started on first use. `None` when the provider has no session.
+    fn engine(&mut self, slug: &'static str) -> Option<&Engine> {
+        if !self.engines.contains_key(slug) {
+            let session = self.sessions.session(slug)?;
+            self.generations += 1;
+            let generation = self.generations;
+            let (player, mut events) = session.playback.start(config(), None);
+            let commands = self.commands.clone();
+            tokio::spawn(async move {
+                while let Some(event) = events.next().await {
+                    let command = Command::Engine {
+                        slug,
+                        generation,
+                        event,
+                    };
+                    if commands.send(command).is_err() {
+                        break;
+                    }
+                }
+                log::debug!("player: the {slug} engine stopped reporting");
+            });
+            self.engines.insert(slug, Engine { player, generation });
+        }
+        self.engines.get(slug)
+    }
+
+    /// The engine holding the current track, if one does.
+    fn current_engine(&self) -> Option<&Engine> {
+        self.engines.get(self.active?)
+    }
+
+    fn state(&self) -> PlayerState {
+        PlayerState {
+            track: self.queue.current().cloned(),
+            status: self.status,
+            position_ms: self.position.as_millis() as u64,
+            duration_ms: self.duration.as_millis() as u64,
+            shuffle: self.queue.shuffle(),
+            repeat: self.queue.repeat(),
+        }
+    }
+
+    /// Reports the player state, unless nothing in it changed.
+    fn publish(&mut self) {
+        let state = self.state();
+        if let Ok(mut published) = self.published.lock() {
+            if published.0 == state {
+                return;
+            }
+            published.0 = state.clone();
+        }
+        self.events.state(state);
+    }
+
+    /// Saves and reports the queue after any change to it.
+    fn queue_changed(&mut self) {
+        self.store.save(store::QUEUE, &self.queue);
+        let snapshot = self.queue.snapshot();
+        if let Ok(mut published) = self.published.lock() {
+            published.1 = snapshot.clone();
+        }
+        self.events.queue(snapshot);
+    }
+
+    fn save_position(&mut self) {
+        self.saved_at = Instant::now();
+        self.store
+            .save(store::POSITION, &(self.position.as_millis() as u64));
+    }
+}
+
+fn config() -> PlaybackConfig {
+    PlaybackConfig {
+        normalisation: true,
+        gapless: false,
+        position_interval: TICK,
+        gain: 1.0,
+        equalizer: Equalizer::default(),
+    }
+}
+
+/// The state reported before the deck has said anything.
+fn empty_state() -> PlayerState {
+    PlayerState {
+        track: None,
+        status: Status::Idle,
+        position_ms: 0,
+        duration_ms: 0,
+        shuffle: false,
+        repeat: crate::Repeat::Off,
+    }
+}
+
+/// The static slug of a known provider, so engines can be keyed without allocating.
+fn slug(name: &str) -> Option<&'static str> {
+    tag::SLUGS.iter().copied().find(|known| *known == name)
+}
