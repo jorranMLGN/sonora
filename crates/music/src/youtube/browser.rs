@@ -167,6 +167,13 @@ const CHROMIUM: &[(&str, &str)] = &[
     ("Helium", "net.imput.helium/User Data"),
 ];
 
+/// A platform without desktop browsers, such as iOS, has none to read cookies from.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+const FIREFOX: &[(&str, &str)] = &[];
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+const CHROMIUM: &[(&str, &str)] = &[];
+
 pub fn detect() -> Vec<Browser> {
     let Some(home) = home_dir() else {
         return Vec::new();
@@ -223,6 +230,11 @@ fn chromium_root(home: &Path) -> PathBuf {
 #[cfg(target_os = "macos")]
 fn chromium_root(home: &Path) -> PathBuf {
     home.join("Library/Application Support")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn chromium_root(home: &Path) -> PathBuf {
+    home.to_path_buf()
 }
 
 #[cfg(target_os = "windows")]
