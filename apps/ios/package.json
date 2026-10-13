@@ -7,6 +7,7 @@
     "@fluent/bundle": "^0.19.1",
     "expo": "~57.0.28",
     "expo-constants": "~57.0.21",
+    "expo-dev-client": "~57.0.20",
     "expo-font": "~57.0.4",
     "expo-image": "~57.0.5",
     "expo-linking": "~57.0.12",
@@ -30,6 +31,7 @@
   "scripts": {
     "prebuild:ftl": "node scripts/bundle-ftl.mjs",
     "start": "npm run prebuild:ftl && expo start",
+    "dev": "npm run prebuild:ftl && expo start --dev-client",
     "export": "npm run prebuild:ftl && expo export",
     "android": "expo start --android",
     "ios": "npm run prebuild:ftl && expo start --ios",
