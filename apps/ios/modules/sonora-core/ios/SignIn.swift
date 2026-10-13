@@ -142,14 +142,18 @@ final class SignInPresenter: NSObject, SFSafariViewControllerDelegate {
 
 /// A provider's cookie sign-in in a `WKWebView` over a non-persistent data store, the same
 /// contract as the desktop's `webview` crate: once the cookies for `domain` carry one of the
-/// `proof` names with a value, their `Cookie` header is the answer.
-final class WebSignInController: UIViewController {
+/// `proof` names with a value, their `Cookie` header is the answer. A page that opens a window,
+/// as SoundCloud does for Google, Facebook and Apple, gets it on top of itself in the same data
+/// store, so the cookies its sign-in leaves are read like the page's own.
+final class WebSignInController: UIViewController, WKUIDelegate {
   /// How often the cookies are read.
   private static let poll: UInt64 = 500_000_000
 
   private let slug: String
   private let web: WebSignIn
   private var webView: WKWebView?
+  /// The window the page opened, while it is open.
+  private var popup: WKWebView?
   private var polling: Task<Void, Never>?
   /// Whether the sign-in url was loaded a second time; once is the limit.
   private var retried = false
@@ -169,9 +173,11 @@ final class WebSignInController: UIViewController {
     super.viewDidLoad()
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
+    configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
     let page = WKWebView(frame: view.bounds, configuration: configuration)
     page.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     page.customUserAgent = web.agent ?? safariAgent
+    page.uiDelegate = self
     view.addSubview(page)
     webView = page
     title = web.landing
@@ -193,6 +199,33 @@ final class WebSignInController: UIViewController {
   func stop() {
     polling?.cancel()
     polling = nil
+    closePopup()
+  }
+
+  /// Opens the window a page asks for over the page, with the configuration WebKit hands in so
+  /// the two share their cookies and can talk to each other.
+  func webView(
+    _ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+    for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures
+  ) -> WKWebView? {
+    closePopup()
+    let window = WKWebView(frame: view.bounds, configuration: configuration)
+    window.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    window.customUserAgent = webView.customUserAgent
+    window.uiDelegate = self
+    view.addSubview(window)
+    popup = window
+    return window
+  }
+
+  /// The opened window closed itself, as one does once its sign-in is through.
+  func webViewDidClose(_ webView: WKWebView) {
+    if webView === popup { closePopup() }
+  }
+
+  private func closePopup() {
+    popup?.removeFromSuperview()
+    popup = nil
   }
 
   @objc private func cancel() {
