@@ -35,6 +35,16 @@ pub enum Command {
         origin: Option<String>,
     },
     Toggle,
+    /// Plays what is paused; a remote play command.
+    Resume,
+    /// Pauses what plays; a remote pause command.
+    Pause,
+    /// The system took the audio away (a call, an alarm, Siri).
+    Interrupted,
+    /// The system gave the audio back; `true` when it says playback may go on.
+    Resumed(bool),
+    /// The output went away (headphones out) or the media services were reset.
+    RouteLost,
     Next,
     Previous,
     Seek(Duration),
@@ -73,6 +83,8 @@ pub struct Deck {
     duration: Duration,
     preloaded: Option<String>,
     failures: u32,
+    /// Set when an interruption paused playback, so its end knows to resume.
+    interrupted: bool,
     saved_at: Instant,
     published: Arc<Mutex<(PlayerState, QueueSnapshot)>>,
 }
@@ -110,6 +122,7 @@ impl Deck {
             duration,
             preloaded: None,
             failures: 0,
+            interrupted: false,
             saved_at: Instant::now(),
         };
         let state = deck.state();
@@ -148,7 +161,28 @@ impl Deck {
                 self.queue_changed();
                 self.start(Duration::ZERO, true);
             }
-            Command::Toggle => self.toggle(),
+            Command::Toggle => {
+                self.interrupted = false;
+                self.toggle();
+            }
+            Command::Resume => {
+                self.interrupted = false;
+                self.resume();
+            }
+            Command::Pause => {
+                self.interrupted = false;
+                self.pause();
+            }
+            Command::Interrupted => {
+                self.interrupted = matches!(self.status, Status::Playing | Status::Loading);
+                self.pause();
+            }
+            Command::Resumed(should_resume) => {
+                if std::mem::take(&mut self.interrupted) && should_resume {
+                    self.resume();
+                }
+            }
+            Command::RouteLost => self.route_lost(),
             Command::Next => match self.queue.advance(false).is_some() {
                 true => {
                     self.queue_changed();
@@ -253,27 +287,67 @@ impl Deck {
     }
 
     fn toggle(&mut self) {
-        match (self.status, self.current_engine()) {
-            (Status::Playing | Status::Loading, Some(engine)) => {
-                engine.player.pause();
-                self.status = Status::Paused;
-                self.save_position();
-                self.publish();
-            }
-            (Status::Paused, Some(engine)) => {
+        match self.status {
+            Status::Playing | Status::Loading => self.pause(),
+            Status::Paused | Status::Idle => self.resume(),
+        }
+    }
+
+    /// Pauses what plays or loads; anything else stays as it is.
+    fn pause(&mut self) {
+        if !matches!(self.status, Status::Playing | Status::Loading) {
+            return;
+        }
+        if let Some(engine) = self.current_engine() {
+            engine.player.pause();
+        }
+        self.status = Status::Paused;
+        self.save_position();
+        self.publish();
+    }
+
+    /// Plays what is paused, loading it first when no engine holds it: a restored queue, a lost
+    /// output or a finished queue.
+    fn resume(&mut self) {
+        if matches!(self.status, Status::Playing | Status::Loading) {
+            return;
+        }
+        match self.current_engine() {
+            Some(engine) if self.status == Status::Paused => {
                 engine.player.play();
                 self.status = Status::Loading;
                 self.publish();
             }
-            // Nothing is loaded: a restored queue, a lost output or a finished queue.
-            (_, None) => {
+            Some(_) => {}
+            None => {
                 if self.queue.current().is_some() {
                     let at = self.position;
                     self.start(at, true);
                 }
             }
-            (Status::Idle, Some(_)) => {}
         }
+    }
+
+    /// Pauses and drops every engine, so the next play opens the output that is there now.
+    fn route_lost(&mut self) {
+        self.interrupted = false;
+        if let Some(engine) = self.current_engine() {
+            engine.player.pause();
+        }
+        if !self.engines.is_empty() {
+            log::info!("player: the audio route was lost, dropping every engine");
+        }
+        self.engines.clear();
+        self.active = None;
+        self.preloaded = None;
+        if self.status != Status::Idle {
+            self.status = match self.queue.current() {
+                Some(_) => Status::Paused,
+                None => Status::Idle,
+            };
+        }
+        self.save_position();
+        self.publish();
     }
 
     fn previous(&mut self) {

@@ -46,6 +46,7 @@ pub async fn page(core: &Core, slug: &str, part: Part, page: u32) -> Result<Libr
                 id: artist.id,
                 title: artist.name,
                 subtitle: String::new(),
+                album: String::new(),
                 artwork: artist.cover,
                 duration_ms: 0,
                 explicit: false,

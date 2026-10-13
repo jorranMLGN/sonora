@@ -30,6 +30,9 @@ pub struct Item {
     pub title: String,
     /// The artists of a track or an album, the owner of a playlist.
     pub subtitle: String,
+    /// The album a track is on, for Now Playing. Empty for anything else, or when unknown.
+    #[serde(default)]
+    pub album: String,
     pub artwork: Option<String>,
     /// Zero for anything that is not a track.
     pub duration_ms: u64,
@@ -227,6 +230,38 @@ pub async fn play(ids: Vec<String>, index: u32, origin: Option<String>) -> Answe
 #[uniffi::export]
 pub fn toggle() -> Answer<()> {
     Ok(core::get()?.send(Command::Toggle)?)
+}
+
+/// Plays what is paused, from where it stopped. Does nothing while playing.
+#[uniffi::export]
+pub fn resume() -> Answer<()> {
+    Ok(core::get()?.send(Command::Resume)?)
+}
+
+/// Pauses what plays. Does nothing while paused.
+#[uniffi::export]
+pub fn pause() -> Answer<()> {
+    Ok(core::get()?.send(Command::Pause)?)
+}
+
+/// The system interrupted the audio session (a call, an alarm, Siri): playback pauses.
+#[uniffi::export]
+pub fn audio_interrupted() -> Answer<()> {
+    Ok(core::get()?.send(Command::Interrupted)?)
+}
+
+/// The interruption ended. Playback resumes when it was playing before and the system says
+/// `should_resume`.
+#[uniffi::export]
+pub fn audio_resumed(should_resume: bool) -> Answer<()> {
+    Ok(core::get()?.send(Command::Resumed(should_resume))?)
+}
+
+/// The output device went away, such as headphones pulled out, or the media services were
+/// reset. Playback pauses and the engines are rebuilt on the next play.
+#[uniffi::export]
+pub fn route_changed() -> Answer<()> {
+    Ok(core::get()?.send(Command::RouteLost)?)
 }
 
 #[uniffi::export]
