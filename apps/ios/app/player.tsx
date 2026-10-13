@@ -10,6 +10,7 @@ import { Scrubber } from '../src/components/Scrubber';
 import { TrackRow } from '../src/components/TrackRow';
 import { clock } from '../src/format';
 import { t } from '../src/i18n';
+import { useSettings } from '../src/settings';
 import { attempt, useStore } from '../src/store';
 import { makeStyles, useTheme } from '../src/styles';
 import { sizes, spacing } from '../src/theme';
@@ -23,10 +24,11 @@ export default function Player() {
   const playing = player?.status === 'playing';
   const { colors } = useTheme();
   const styles = useStyles();
+  const artwork = useSettings((s) => s.artwork);
 
   const header = (
     <View style={styles.header}>
-      <Artwork uri={player?.track?.artwork ?? null} size={sizes.playerArtwork} />
+      <Artwork uri={player?.track?.artwork ?? null} size={sizes.playerArtwork} shape={artwork} />
       <View style={styles.titles}>
         <Text numberOfLines={1} style={styles.title}>
           {player?.track?.title ?? t('mobile-nothing-playing')}
