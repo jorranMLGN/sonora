@@ -79,6 +79,11 @@ export function startStore(): void {
     apply((s) => ({ prompts: { ...s.prompts, [slug]: prompt } })),
   );
   bridge.on('onError', ({ message }) => apply({ error: message }));
+  // Every error the banner shows also goes to the log, for whoever follows the app from the
+  // dev server; the banner alone is gone after a few seconds.
+  useStore.subscribe((now, before) => {
+    if (now.error !== null && now.error !== before.error) console.warn(`error: ${now.error}`);
+  });
   bridge
     .init('')
     .then(() => bridge.providers())
