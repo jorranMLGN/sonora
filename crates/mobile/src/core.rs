@@ -82,6 +82,12 @@ pub fn start(dir: PathBuf, listener: Box<dyn EventListener>) -> Result<()> {
     let _ = env_logger::Builder::new()
         .parse_filters("warn,music=info,mobile=debug")
         .try_init();
+    // Two rustls backends are compiled in: librespot, oauth2 and ytmusic still ask for ring,
+    // while reqwest 0.13 asks for aws-lc-rs. rustls refuses to guess between them, so one is
+    // picked here. A second install only means another crate got there first.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(WORKERS)

@@ -22,6 +22,7 @@ futures.workspace = true
 log.workspace = true
 music = { path = "../music", default-features = false }
 rusqlite.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
