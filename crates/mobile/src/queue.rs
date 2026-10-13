@@ -52,6 +52,11 @@ impl Queue {
         }
     }
 
+    /// How many entries the queue holds, the current one included.
+    pub fn count(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn current(&self) -> Option<&Item> {
         self.entries.get(self.at?).map(|entry| &entry.item)
     }

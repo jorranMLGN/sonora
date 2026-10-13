@@ -183,7 +183,7 @@ impl Deck {
                 }
             }
             Command::RouteLost => self.route_lost(),
-            Command::Next => match self.queue.advance(false).is_some() {
+            Command::Next => match self.forward(false) {
                 true => {
                     self.queue_changed();
                     self.start(Duration::ZERO, true);
@@ -242,6 +242,17 @@ impl Deck {
             self.publish();
             return;
         };
+        if !item.playable {
+            // Started on a track the provider will not play: go on to the next one that it will.
+            match self.forward(false) {
+                true => {
+                    self.queue_changed();
+                    self.start(Duration::ZERO, play);
+                }
+                false => self.stop(),
+            }
+            return;
+        }
         self.position = at;
         self.duration = Duration::from_millis(item.duration_ms);
         self.preloaded = None;
@@ -355,6 +366,13 @@ impl Deck {
             self.seek(Duration::ZERO);
             return;
         }
+        // Pass back over tracks the provider cannot play.
+        for _ in 0..self.queue.count() {
+            if self.queue.current().is_none_or(|item| item.playable) || self.queue.back().is_none()
+            {
+                break;
+            }
+        }
         self.queue_changed();
         self.start(Duration::ZERO, true);
     }
@@ -432,7 +450,7 @@ impl Deck {
                 self.duration = duration;
                 self.publish();
             }
-            PlaybackEvent::Ended { .. } => match self.queue.advance(true).is_some() {
+            PlaybackEvent::Ended { .. } => match self.forward(true) {
                 true => {
                     self.queue_changed();
                     self.start(Duration::ZERO, true);
@@ -469,13 +487,33 @@ impl Deck {
             self.stop();
             return;
         }
-        match self.queue.advance(false).is_some() {
+        match self.forward(false) {
             true => {
                 self.queue_changed();
                 self.start(Duration::ZERO, true);
             }
             false => self.stop(),
         }
+    }
+
+    /// Moves to the next track the provider can play, passing over unplayable ones. False when
+    /// none is left; the queue may then rest on an unplayable track.
+    fn forward(&mut self, ended: bool) -> bool {
+        if self.queue.advance(ended).is_none() {
+            return false;
+        }
+        for _ in 0..self.queue.count() {
+            match self.queue.current() {
+                Some(item) if item.playable => return true,
+                Some(_) => {
+                    if self.queue.advance(false).is_none() {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        false
     }
 
     /// Fetches the next track once the current one nears its end, on its own provider's engine.

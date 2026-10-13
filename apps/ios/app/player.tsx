@@ -124,7 +124,7 @@ export default function Player() {
                       ),
                     )
                   }
-                  onLongPress={() => {}}
+                  onLongPress={() => !current && attempt(bridge.remove(index))}
                 />
               </View>
               {!current && (

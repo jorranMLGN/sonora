@@ -18,7 +18,11 @@ export function trackActions(track: Track) {
   ]);
 }
 
-/** One track in a list; long press opens its actions unless `onLongPress` overrides them. */
+/**
+ * One track in a list; long press opens its actions unless `onLongPress` overrides them. An
+ * unplayable track is dimmed and ignores a tap, but its long press still works, so it can be
+ * queued, saved or removed like any other.
+ */
 export function TrackRow({
   track,
   current = false,
@@ -33,13 +37,12 @@ export function TrackRow({
   return (
     <Pressable
       style={[styles.row, current && styles.current]}
-      onPress={onPress}
+      onPress={track.playable ? onPress : undefined}
       onLongPress={onLongPress ?? (() => trackActions(track))}
-      disabled={!track.playable}
     >
       <Artwork uri={track.artwork} size={sizes.rowArtwork} />
       <View style={styles.meta}>
-        <Text numberOfLines={1} style={[styles.title, current && styles.accent]}>
+        <Text numberOfLines={1} style={[styles.title, !track.playable && styles.dim, current && styles.accent]}>
           {track.title}
         </Text>
         <Text numberOfLines={1} style={styles.subtitle}>
@@ -65,4 +68,5 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: typography.body, fontWeight: '500' },
   subtitle: { color: colors.textDim, fontSize: typography.caption },
   accent: { color: colors.accent },
+  dim: { color: colors.textDim },
 });
