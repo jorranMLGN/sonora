@@ -393,6 +393,13 @@ release-meta = { $year } • { $kind }
 # home page
 home-quick-picks = Quick picks
 home-quick-picks-empty = Like a few songs and they will show up here
+home-featured-release = New release · { $provider }
+home-featured-mix = Mix
+home-featured-play = Play
+home-featured-open = Open album
+home-resume = Jump back in
+home-new-releases = New from your artists
+home-because = Because you listened to { $artist }
 
 # search page
 search-placeholder = What do you want to listen to?
