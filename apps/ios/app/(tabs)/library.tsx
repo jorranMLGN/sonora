@@ -9,6 +9,7 @@ import { SettingsButton } from '../../src/components/SettingsButton';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
+import { useSettings, visible } from '../../src/settings';
 import { attempt, markSaved, reason, useStore } from '../../src/store';
 import { makeStyles } from '../../src/styles';
 import { spacing } from '../../src/theme';
@@ -32,7 +33,11 @@ export default function Library() {
   const slug = usable.find((p) => p.slug === chosen)?.slug ?? usable[0]?.slug ?? null;
   // Signing in to another account of the same provider lists the library again.
   const account = usable.find((p) => p.slug === slug)?.account ?? null;
-  const [part, setPart] = useState<LibraryPart>('tracks');
+  const opening = useSettings((s) => s.libraryTab);
+  const [part, setPart] = useState<LibraryPart>(opening);
+  // Choosing another part to open on in Settings switches to it at once.
+  useEffect(() => setPart(opening), [opening]);
+  const hideExplicit = useSettings((s) => s.hideExplicit);
   const [items, setItems] = useState<Track[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -83,6 +88,8 @@ export default function Library() {
 
   useEffect(() => restart(true), [restart]);
 
+  const shown = part === 'tracks' ? visible(items, hideExplicit) : items;
+
   return (
     <Screen
       title={t('mobile-tab-library')}
@@ -107,7 +114,7 @@ export default function Library() {
         <Text style={styles.empty}>{t('mobile-library-sign-in')}</Text>
       ) : (
         <FlatList
-          data={items}
+          data={shown}
           keyExtractor={(item, index) => `${index}:${item.id}`}
           refreshing={loading && page.current === 0 && items.length > 0}
           onRefresh={() => restart(false)}
@@ -124,7 +131,7 @@ export default function Library() {
                 onPress={() =>
                   attempt(
                     bridge.play(
-                      items.map((track) => track.id),
+                      shown.map((track) => track.id),
                       index,
                       `library:${slug}`,
                     ),

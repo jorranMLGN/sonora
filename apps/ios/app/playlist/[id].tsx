@@ -7,6 +7,7 @@ import { bridge } from '../../src/bridgeImpl';
 import { DetailHeader, Loading, useCurrentId } from '../../src/components/Detail';
 import { Screen } from '../../src/components/Screen';
 import { TrackRow } from '../../src/components/TrackRow';
+import { useVisible } from '../../src/settings';
 import { attempt, useStore } from '../../src/store';
 import { useLoad } from '../../src/useLoad';
 
@@ -17,6 +18,7 @@ export default function PlaylistPage() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [continuation, setContinuation] = useState<string | null>(null);
   const fetching = useRef(false);
+  const shown = useVisible(tracks);
 
   // A fresh load replaces whatever the continuations had added.
   useEffect(() => {
@@ -46,7 +48,7 @@ export default function PlaylistPage() {
         <Loading />
       ) : (
         <FlatList
-          data={tracks}
+          data={shown}
           keyExtractor={(track, index) => `${index}:${track.id}`}
           refreshing={loading}
           onRefresh={reload}
@@ -56,7 +58,7 @@ export default function PlaylistPage() {
             <DetailHeader
               item={data.playlist}
               kind="playlists"
-              tracks={tracks}
+              tracks={shown}
               origin={`playlist:${id}`}
             />
           }
@@ -67,7 +69,7 @@ export default function PlaylistPage() {
               onPress={() =>
                 attempt(
                   bridge.play(
-                    tracks.map((track) => track.id),
+                    shown.map((track) => track.id),
                     index,
                     `playlist:${id}`,
                   ),

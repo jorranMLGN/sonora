@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { FlatList, Text, View } from 'react-native';
 
 import type { Section } from '../../src/bridge';
@@ -8,6 +9,7 @@ import { SettingsButton } from '../../src/components/SettingsButton';
 import { Shelf } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
+import { useSettings, visible } from '../../src/settings';
 import { attempt, useStore } from '../../src/store';
 import { makeStyles } from '../../src/styles';
 import { spacing } from '../../src/theme';
@@ -39,11 +41,35 @@ export default function Home() {
   const { data, loading, reload } = useLoad(() => bridge.home(), [live]);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
   const styles = useStyles();
+  const providers = useStore((s) => s.providers);
+  const hidden = useSettings((s) => s.homeHidden);
+  const hideExplicit = useSettings((s) => s.hideExplicit);
+  // A section names its provider by display name; the setting keeps slugs.
+  const sections = useMemo(
+    () =>
+      (data ?? [])
+        .filter((section) => {
+          const provider = providers.find(
+            (p) => p.name === section.provider || p.slug === section.provider,
+          );
+          return !hidden.includes(provider?.slug ?? section.provider);
+        })
+        .map((section) => ({ ...section, tracks: visible(section.tracks, hideExplicit) }))
+        .filter(
+          (section) =>
+            section.tracks.length +
+              section.albums.length +
+              section.artists.length +
+              section.playlists.length >
+            0,
+        ),
+    [data, providers, hidden, hideExplicit],
+  );
   return (
     <Screen title={t('mobile-tab-home')} right={<SettingsButton />}>
       {loading && !data && <Loading />}
       <FlatList
-        data={data ?? []}
+        data={sections}
         keyExtractor={(section) => section.id}
         refreshing={loading && data !== null}
         onRefresh={reload}
