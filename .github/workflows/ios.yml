@@ -3,10 +3,18 @@ name: ios
 on:
   push:
     branches: [feat/ios, main]
+  # Run by hand with dev_client on for a Debug build that loads its JS from `npm run dev` on a
+  # computer on the same Wi-Fi, so screens change without a new ipa. Only native changes (Rust,
+  # Swift, a new native package) need a new one.
   workflow_dispatch:
+    inputs:
+      dev_client:
+        description: Build the development client instead of the release app
+        type: boolean
+        default: false
 
 concurrency:
-  group: ios-${{ github.ref }}
+  group: ios-${{ github.ref }}-${{ inputs.dev_client || false }}
   cancel-in-progress: true
 
 jobs:
@@ -16,6 +24,8 @@ jobs:
       IPHONEOS_DEPLOYMENT_TARGET: "16.4"
       CARGO_TERM_COLOR: always
       MODULE: apps/ios/modules/sonora-core/ios
+      CONFIGURATION: ${{ inputs.dev_client && 'Debug' || 'Release' }}
+      ARTIFACT: ${{ inputs.dev_client && 'sonora-dev-ipa' || 'sonora-ipa' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,7 +112,7 @@ jobs:
           echo "workspace=$WORKSPACE scheme=$SCHEME"
           set -o pipefail
           xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
-            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -configuration "$CONFIGURATION" -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath "$GITHUB_WORKSPACE/build/dd" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build > "$GITHUB_WORKSPACE/build-xcode.log" 2>&1 || {
@@ -110,11 +120,11 @@ jobs:
               exit 1
             }
           grep -E "warning: .*SonoraCore|BUILD SUCCEEDED" "$GITHUB_WORKSPACE/build-xcode.log" | head -40 || true
-          test -d "$GITHUB_WORKSPACE/build/dd/Build/Products/Release-iphoneos/$SCHEME.app"
+          test -d "$GITHUB_WORKSPACE/build/dd/Build/Products/$CONFIGURATION-iphoneos/$SCHEME.app"
 
       - name: Package the ipa
         run: |
-          APP=$(ls -d build/dd/Build/Products/Release-iphoneos/*.app | head -1)
+          APP=$(ls -d build/dd/Build/Products/$CONFIGURATION-iphoneos/*.app | head -1)
           mkdir -p ipa/Payload
           cp -R "$APP" ipa/Payload/
           (cd ipa && zip -qry ../sonora.ipa Payload)
@@ -122,7 +132,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sonora-ipa
+          name: ${{ env.ARTIFACT }}
           path: sonora.ipa
 
       - if: failure()
