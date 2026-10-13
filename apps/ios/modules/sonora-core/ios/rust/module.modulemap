@@ -1,4 +1,0 @@
-module SonoraRust {
-  header "sonora_core.h"
-  export *
-}

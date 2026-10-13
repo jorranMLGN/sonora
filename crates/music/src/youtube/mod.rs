@@ -76,7 +76,13 @@ pub struct YouTubeProvider {
 
 impl YouTubeProvider {
     pub fn new() -> Self {
-        let cache = credentials::dir("youtube");
+        Self::at(credentials::dir("youtube"))
+    }
+
+    /// A provider that keeps its credentials, cookies and player caches in `cache`, for a
+    /// platform whose cache directory is handed in rather than found, such as an iOS app's
+    /// sandbox.
+    pub fn at(cache: PathBuf) -> Self {
         Self {
             credentials: cache.join(credentials::FILE),
             cookies: cache.join("cookies.json"),
