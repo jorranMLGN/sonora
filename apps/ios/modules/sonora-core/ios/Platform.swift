@@ -21,19 +21,19 @@ final class Platform {
   func start() {
     guard audioSession == nil else { return }
     audioSession = AudioSession(
-      onInterrupted: { report(try SonoraCore.audioInterrupted()) },
+      onInterrupted: { report { try SonoraCore.audioInterrupted() } },
       onResumed: { shouldResume in
-        report(try SonoraCore.audioResumed(shouldResume: shouldResume))
+        report { try SonoraCore.audioResumed(shouldResume: shouldResume) }
       },
-      onRouteLost: { report(try SonoraCore.routeChanged()) }
+      onRouteLost: { report { try SonoraCore.routeChanged() } }
     )
     nowPlaying = NowPlaying(
-      onPlay: { report(try SonoraCore.resume()) },
-      onPause: { report(try SonoraCore.pause()) },
-      onToggle: { report(try SonoraCore.toggle()) },
-      onNext: { report(try SonoraCore.next()) },
-      onPrevious: { report(try SonoraCore.previous()) },
-      onSeek: { ms in report(try SonoraCore.seek(positionMs: UInt64(max(0, ms)))) }
+      onPlay: { report { try SonoraCore.resume() } },
+      onPause: { report { try SonoraCore.pause() } },
+      onToggle: { report { try SonoraCore.toggle() } },
+      onNext: { report { try SonoraCore.next() } },
+      onPrevious: { report { try SonoraCore.previous() } },
+      onSeek: { ms in report { try SonoraCore.seek(positionMs: UInt64(max(0, ms))) } }
     )
   }
 
@@ -78,7 +78,7 @@ final class Platform {
 }
 
 /// Runs a core call for a system event, which has nobody to hand a failure to but the log.
-private func report(_ call: @autoclosure () throws -> Void) {
+private func report(_ call: () throws -> Void) {
   do {
     try call()
   } catch {
