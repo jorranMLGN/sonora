@@ -10,7 +10,7 @@ import { Screen } from '../../src/components/Screen';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
-import { attempt, useStore } from '../../src/store';
+import { attempt, markSaved, useStore } from '../../src/store';
 import { colors, radii, sizes, spacing, typography } from '../../src/theme';
 
 const PARTS: LibraryPart[] = ['tracks', 'albums', 'artists', 'playlists'];
@@ -25,9 +25,8 @@ export default function Library() {
   const router = useRouter();
   const providers = useStore((s) => s.providers);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
-  const usable = providers.filter(
-    (p) => p.session.kind === 'signedIn' || p.session.kind === 'guest',
-  );
+  // A guest session has no library, so only accounts get a chip.
+  const usable = providers.filter((p) => p.session.kind === 'signedIn');
   const [chosen, setChosen] = useState<string | null>(null);
   const slug = chosen ?? usable[0]?.slug ?? null;
   const [part, setPart] = useState<LibraryPart>('tracks');
@@ -37,15 +36,18 @@ export default function Library() {
   const page = useRef(0);
   const generation = useRef(0);
 
+  /** Loads the next page; page 0 starts the part over and replaces what is drawn. */
   const fetchPage = useCallback(() => {
     if (slug === null) return;
     const mine = generation.current;
+    const first = page.current === 0;
     setLoading(true);
     bridge
       .library(slug, part, page.current)
       .then((result) => {
         if (mine !== generation.current) return;
-        setItems((known) => [...known, ...result[part]]);
+        markSaved(part, result.items.map((item) => item.id));
+        setItems((known) => (first ? result.items : [...known, ...result.items]));
         setHasMore(result.hasMore);
         page.current += 1;
       })
@@ -53,13 +55,30 @@ export default function Library() {
       .finally(() => mine === generation.current && setLoading(false));
   }, [slug, part]);
 
-  useEffect(() => {
-    generation.current += 1;
-    page.current = 0;
-    setItems([]);
-    setHasMore(false);
-    fetchPage();
-  }, [fetchPage]);
+  /** Draws the part's last snapshot at once, then reads the first page from the network. */
+  const restart = useCallback(
+    (cached: boolean) => {
+      generation.current += 1;
+      page.current = 0;
+      setHasMore(false);
+      if (slug !== null && cached) {
+        const mine = generation.current;
+        setItems([]);
+        bridge
+          .cachedLibrary(slug, part)
+          .then((snapshot) => {
+            if (snapshot !== null && mine === generation.current && page.current === 0) {
+              setItems(snapshot.items);
+            }
+          })
+          .catch(() => undefined);
+      }
+      fetchPage();
+    },
+    [slug, part, fetchPage],
+  );
+
+  useEffect(() => restart(true), [restart]);
 
   return (
     <Screen
@@ -94,7 +113,9 @@ export default function Library() {
       ) : (
         <FlatList
           data={items}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item, index) => `${index}:${item.id}`}
+          refreshing={loading && page.current === 0 && items.length > 0}
+          onRefresh={() => restart(false)}
           onEndReachedThreshold={0.5}
           onEndReached={() => hasMore && !loading && fetchPage()}
           ListEmptyComponent={

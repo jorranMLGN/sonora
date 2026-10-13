@@ -1,21 +1,44 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Track } from '../bridge';
 import { bridge } from '../bridgeImpl';
 import { clock } from '../format';
 import { t } from '../i18n';
-import { attempt } from '../store';
+import { attempt, savedKey, toggleSaved, useSaved, useStore } from '../store';
 import { colors, sizes, spacing, typography } from '../theme';
 import { Artwork } from './Artwork';
 
-/** Opens the action sheet for a track: play next, add to the queue, save. */
+/** Opens the action sheet for a track: play next, add to the queue, save or unsave. */
 export function trackActions(track: Track) {
+  const saved = useStore.getState().saved[savedKey('tracks', track.id)] === true;
   Alert.alert(track.title, track.subtitle, [
     { text: t('mobile-play-next'), onPress: () => attempt(bridge.enqueueNext([track.id])) },
     { text: t('mobile-add-to-queue'), onPress: () => attempt(bridge.enqueueLast([track.id])) },
-    { text: t('mobile-save'), onPress: () => attempt(bridge.setSaved(track.id, true)) },
+    {
+      text: t(saved ? 'mobile-unsave' : 'mobile-save'),
+      onPress: () => toggleSaved('tracks', track.id),
+    },
     { text: t('mobile-cancel'), style: 'cancel' },
   ]);
+}
+
+/** The heart beside a track, filled while the track is in its provider's library. */
+function Heart({ id }: { id: string }) {
+  const saved = useSaved('tracks', id);
+  return (
+    <Pressable
+      hitSlop={spacing.sm}
+      onPress={() => toggleSaved('tracks', id)}
+      accessibilityLabel={t(saved ? 'mobile-unsave' : 'mobile-save')}
+    >
+      <Ionicons
+        name={saved ? 'heart' : 'heart-outline'}
+        size={sizes.icon}
+        color={saved ? colors.accent : colors.textDim}
+      />
+    </Pressable>
+  );
 }
 
 /**
@@ -28,11 +51,14 @@ export function TrackRow({
   current = false,
   onPress,
   onLongPress,
+  heart = true,
 }: {
   track: Track;
   current?: boolean;
   onPress: () => void;
   onLongPress?: () => void;
+  /** Whether the row shows the save toggle; the queue leaves it out. */
+  heart?: boolean;
 }) {
   return (
     <Pressable
@@ -51,6 +77,7 @@ export function TrackRow({
         </Text>
       </View>
       {track.durationMs > 0 && <Text style={styles.subtitle}>{clock(track.durationMs)}</Text>}
+      {heart && <Heart id={track.id} />}
     </Pressable>
   );
 }

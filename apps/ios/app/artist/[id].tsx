@@ -13,7 +13,7 @@ import { useLoad } from '../../src/useLoad';
 
 export default function ArtistPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data } = useLoad(() => bridge.artist(id), [id]);
+  const { data, loading, reload } = useLoad(() => bridge.artist(id), [id]);
   const currentId = useCurrentId();
   return (
     <Screen back miniPlayer>
@@ -22,11 +22,14 @@ export default function ArtistPage() {
       ) : (
         <FlatList
           data={data.topTracks}
-          keyExtractor={(track) => track.id}
+          keyExtractor={(track, index) => `${index}:${track.id}`}
+          refreshing={loading}
+          onRefresh={reload}
           ListHeaderComponent={
             <View>
               <DetailHeader
                 item={data.artist}
+                kind="artists"
                 tracks={data.topTracks}
                 origin={`artist:${id}`}
                 round

@@ -22,7 +22,8 @@ pub const POSITION: &str = "position";
 /// slug, so a sign-out can drop them all at once.
 pub const SNAPSHOT: &str = "snapshot:";
 
-/// The open database. Only the player writes to it, from its own task.
+/// An open connection to the database. The player keeps one for the queue and the library
+/// another for its snapshots.
 pub struct Store {
     connection: Connection,
 }

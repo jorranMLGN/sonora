@@ -25,10 +25,16 @@ export type Artist = Track;
 /** A playlist (`subtitle` is the owner). */
 export type Playlist = Track;
 
-/** A titled shelf on Home. */
+/**
+ * A shelf on Home, from one provider. `title` is the provider's own and is empty for the two
+ * kinds the app names itself (`listenAgain`, `quickPicks`).
+ */
 export type Section = {
   id: string;
   title: string;
+  /** The provider's display name. */
+  provider: string;
+  kind: 'listenAgain' | 'quickPicks' | 'shelf';
   tracks: Track[];
   albums: Album[];
   artists: Artist[];
@@ -42,13 +48,19 @@ export type SearchResults = {
   playlists: Playlist[];
 };
 
-/** One page of a library part; only the list for the requested part is filled. */
-export type Page = SearchResults & { hasMore: boolean };
+/** One page of a library part; `total` is the part's length when the provider says it. */
+export type Page = { items: Track[]; total: number; hasMore: boolean };
 
+/** A library part, and the kind of item a saved toggle is about. */
 export type LibraryPart = 'tracks' | 'albums' | 'artists' | 'playlists';
 
+/** Every id in the signed-in providers' libraries, by kind. */
+export type SavedIds = Record<LibraryPart, string[]>;
+
 export type AlbumDetail = { album: Album; tracks: Track[] };
-export type PlaylistDetail = { playlist: Playlist; tracks: Track[] };
+/** A playlist page; `continuation`, when set, fetches more tracks through `playlistMore`. */
+export type PlaylistDetail = { playlist: Playlist; tracks: Track[]; continuation: string | null };
+export type PlaylistMore = { tracks: Track[]; continuation: string | null };
 export type ArtistDetail = { artist: Artist; topTracks: Track[]; albums: Album[] };
 
 export type Status = 'idle' | 'loading' | 'playing' | 'paused';
@@ -137,9 +149,15 @@ export interface Bridge {
   signOut(slug: string): Promise<void>;
   home(): Promise<Section[]>;
   search(query: string): Promise<SearchResults>;
+  /** Page `page` of a library part, from 0; page 0 reads the part afresh. */
   library(slug: string, part: LibraryPart, page: number): Promise<Page>;
+  /** The first page of a part as it was last listed, to draw before the network answers. */
+  cachedLibrary(slug: string, part: LibraryPart): Promise<Page | null>;
+  /** Every id in the signed-in providers' libraries, for the hearts. */
+  savedIds(): Promise<SavedIds>;
   album(id: string): Promise<AlbumDetail>;
   playlist(id: string): Promise<PlaylistDetail>;
+  playlistMore(id: string, continuation: string): Promise<PlaylistMore>;
   artist(id: string): Promise<ArtistDetail>;
   /** Replaces the queue with `ids` and plays the one at `index`. */
   play(ids: string[], index: number, origin: string | null): Promise<void>;
@@ -153,7 +171,8 @@ export interface Bridge {
   enqueueLast(ids: string[]): Promise<void>;
   /** Takes the entry at `index` out of the queue; the current track cannot be removed. */
   remove(index: number): Promise<void>;
-  setSaved(id: string, saved: boolean): Promise<void>;
+  /** Puts the item `id` of kind `kind` into its provider's library, or takes it out. */
+  setSaved(id: string, kind: LibraryPart, saved: boolean): Promise<void>;
   /** Subscribes to a core event; returns the function that removes the subscription. */
   on<K extends keyof BridgeEvents>(
     event: K,

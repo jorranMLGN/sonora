@@ -1,10 +1,12 @@
 import { create } from 'zustand';
 
 import type {
+  LibraryPart,
   PlayerState,
   Prompt,
   ProviderInfo,
   QueueSnapshot,
+  SavedIds,
   SessionState,
   SignInOption,
 } from './bridge';
@@ -21,6 +23,8 @@ type StoreState = {
   positionMs: number;
   queue: QueueSnapshot | null;
   error: string | null;
+  /** What is known to be in a library, keyed by `savedKey`. */
+  saved: Record<string, boolean>;
   clearError(): void;
   clearPrompt(slug: string): void;
 };
@@ -35,6 +39,7 @@ export const useStore = create<StoreState>((set) => ({
   positionMs: 0,
   queue: null,
   error: null,
+  saved: {},
   clearError: () => set({ error: null }),
   clearPrompt: (slug) => set((s) => ({ prompts: { ...s.prompts, [slug]: undefined } })),
 }));
@@ -49,7 +54,8 @@ export function startStore(): void {
   bridge.on('onState', (player) => apply({ player, positionMs: player.positionMs }));
   bridge.on('onPosition', ({ positionMs }) => apply({ positionMs }));
   bridge.on('onQueue', (queue) => apply({ queue }));
-  bridge.on('onSession', ({ slug, state }) =>
+  bridge.on('onSession', ({ slug, state }) => {
+    if (state.kind === 'signedIn') loadSaved();
     apply((s) => ({
       sessions: { ...s.sessions, [slug]: state },
       providers: s.providers.map((p) =>
@@ -63,8 +69,8 @@ export function startStore(): void {
           : p,
       ),
       prompts: state.kind === 'connecting' ? s.prompts : { ...s.prompts, [slug]: undefined },
-    })),
-  );
+    }));
+  });
   bridge.on('onPrompt', ({ slug, prompt }) =>
     apply((s) => ({ prompts: { ...s.prompts, [slug]: prompt } })),
   );
@@ -108,4 +114,49 @@ const SIGN_IN = 'ERR_SIGN_IN_';
 function reason(error: Error): string {
   const parts = error.message.split('Caused by: ');
   return parts[parts.length - 1].trim();
+}
+
+/** The key of an item in the store's `saved` map; ids of different kinds may collide. */
+export function savedKey(kind: LibraryPart, id: string): string {
+  return `${kind}|${id}`;
+}
+
+/** Whether the item is known to be in its provider's library. */
+export function useSaved(kind: LibraryPart, id: string): boolean {
+  return useStore((s) => s.saved[savedKey(kind, id)] === true);
+}
+
+/** Records items a library listing handed out, which are saved by definition. */
+export function markSaved(kind: LibraryPart, ids: string[]): void {
+  useStore.setState((s) => {
+    const saved = { ...s.saved };
+    ids.forEach((id) => (saved[savedKey(kind, id)] = true));
+    return { saved };
+  });
+}
+
+/** Asks the core for every saved id and replaces what the store knew. */
+export function loadSaved(): void {
+  bridge
+    .savedIds()
+    .then((ids: SavedIds) => {
+      const saved: Record<string, boolean> = {};
+      (Object.keys(ids) as LibraryPart[]).forEach((kind) =>
+        ids[kind].forEach((id) => (saved[savedKey(kind, id)] = true)),
+      );
+      useStore.setState({ saved });
+    })
+    .catch((error: Error) => useStore.setState({ error: error.message }));
+}
+
+/** Flips the heart at once and tells the provider; a refusal flips it back. */
+export function toggleSaved(kind: LibraryPart, id: string): void {
+  const key = savedKey(kind, id);
+  const next = useStore.getState().saved[key] !== true;
+  const put = (on: boolean) => useStore.setState((s) => ({ saved: { ...s.saved, [key]: on } }));
+  put(next);
+  bridge.setSaved(id, kind, next).catch((error: Error) => {
+    put(!next);
+    useStore.setState({ error: error.message });
+  });
 }

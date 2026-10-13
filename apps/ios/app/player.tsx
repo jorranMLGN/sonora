@@ -125,6 +125,7 @@ export default function Player() {
                     )
                   }
                   onLongPress={() => !current && attempt(bridge.remove(index))}
+                  heart={false}
                 />
               </View>
               {!current && (

@@ -16,6 +16,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use crate::account;
+use crate::library::Library;
 use crate::player::{self, Command};
 use crate::store::Store;
 use crate::{
@@ -40,6 +41,8 @@ pub struct Core {
     known: Mutex<HashMap<String, Item>>,
     commands: mpsc::UnboundedSender<Command>,
     published: Arc<Mutex<(PlayerState, QueueSnapshot)>>,
+    /// The library listings, the saved ids and the snapshots.
+    pub library: Library,
 }
 
 /// A provider's live session, its api already tagging every id with the provider's slug.
@@ -87,6 +90,7 @@ pub fn start(dir: PathBuf, listener: Box<dyn EventListener>) -> Result<()> {
         .build()
         .context("cannot build the runtime")?;
     let store = Store::open(&dir.join(STORE))?;
+    let library = Library::open(&dir.join(STORE))?;
     let events = Arc::new(Events {
         listener: RwLock::new(listener),
     });
@@ -108,6 +112,7 @@ pub fn start(dir: PathBuf, listener: Box<dyn EventListener>) -> Result<()> {
         known: Mutex::new(HashMap::new()),
         commands,
         published,
+        library,
     });
     core.replay();
     core.restore();
@@ -522,6 +527,7 @@ pub fn playlist(playlist: &Playlist) -> Item {
     }
 }
 
-fn provider(id: &str) -> String {
+/// The slug of the provider a tagged id belongs to, or empty for an untagged one.
+pub fn provider(id: &str) -> String {
     tag::slug_of(id).unwrap_or_default().to_owned()
 }

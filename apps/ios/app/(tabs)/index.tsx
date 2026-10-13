@@ -1,5 +1,6 @@
-import { FlatList, StyleSheet, Text } from 'react-native';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
 
+import type { Section } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
 import { Loading } from '../../src/components/Detail';
 import { Screen } from '../../src/components/Screen';
@@ -12,8 +13,27 @@ import { useLoad } from '../../src/useLoad';
 
 const TRACKS_SHOWN = 5;
 
+/** A shelf's heading: the provider's own title, or the app's name for the two it leaves blank. */
+function heading(section: Section): string {
+  switch (section.kind) {
+    case 'listenAgain':
+      return t('mobile-home-listen-again');
+    case 'quickPicks':
+      return t('mobile-home-quick-picks');
+    default:
+      return section.title;
+  }
+}
+
 export default function Home() {
-  const { data, loading, reload } = useLoad(() => bridge.home(), []);
+  // Every provider whose session is up feeds Home, so a session coming up loads it again.
+  const live = useStore((s) =>
+    s.providers
+      .filter((p) => p.session.kind === 'signedIn' || p.session.kind === 'guest')
+      .map((p) => p.slug)
+      .join(','),
+  );
+  const { data, loading, reload } = useLoad(() => bridge.home(), [live]);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
   return (
     <Screen title={t('mobile-tab-home')}>
@@ -26,45 +46,58 @@ export default function Home() {
         ListEmptyComponent={
           !loading ? <Text style={styles.empty}>{t('mobile-home-empty')}</Text> : null
         }
-        renderItem={({ item: section }) => (
-          <>
-            {section.tracks.length > 0 && (
-              <>
-                <Text style={styles.heading}>{section.title}</Text>
-                {section.tracks.slice(0, TRACKS_SHOWN).map((track, index) => (
-                  <TrackRow
-                    key={track.id}
-                    track={track}
-                    current={track.id === currentId}
-                    onPress={() =>
-                      attempt(
-                        bridge.play(
-                          section.tracks.map((entry) => entry.id),
-                          index,
-                          `home:${section.id}`,
-                        ),
-                      )
-                    }
-                  />
-                ))}
-              </>
-            )}
-            <Shelf title={section.title} items={section.albums} kind="album" />
-            <Shelf title={section.title} items={section.artists} kind="artist" />
-            <Shelf title={section.title} items={section.playlists} kind="playlist" />
-          </>
-        )}
+        renderItem={({ item: section }) => {
+          const title = heading(section);
+          return (
+            <View style={styles.section}>
+              <Text style={styles.provider}>{section.provider}</Text>
+              {section.tracks.length > 0 && (
+                <>
+                  <Text style={styles.heading}>{title}</Text>
+                  {section.tracks.slice(0, TRACKS_SHOWN).map((track, index) => (
+                    <TrackRow
+                      key={`${index}:${track.id}`}
+                      track={track}
+                      current={track.id === currentId}
+                      onPress={() =>
+                        attempt(
+                          bridge.play(
+                            section.tracks.map((entry) => entry.id),
+                            index,
+                            `home:${section.id}`,
+                          ),
+                        )
+                      }
+                    />
+                  ))}
+                </>
+              )}
+              <Shelf title={title} items={section.albums} kind="album" />
+              <Shelf title={title} items={section.artists} kind="artist" />
+              <Shelf title={title} items={section.playlists} kind="playlist" />
+            </View>
+          );
+        }}
       />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  section: { marginTop: spacing.md },
+  provider: {
+    color: colors.textDim,
+    fontSize: typography.caption,
+    marginHorizontal: spacing.lg,
+    textTransform: 'uppercase',
+  },
   heading: {
     color: colors.text,
     fontSize: typography.heading,
     fontWeight: '700',
-    margin: spacing.lg,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
   },
   empty: { color: colors.textDim, textAlign: 'center', marginTop: spacing.xxl },
 });

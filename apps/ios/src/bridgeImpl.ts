@@ -1,42 +1,8 @@
 import native, { type SonoraCoreModule } from '../modules/sonora-core';
-import type {
-  AlbumDetail,
-  ArtistDetail,
-  Bridge,
-  Page,
-  PlaylistDetail,
-  Section,
-  Track,
-  Unsubscribe,
-} from './bridge';
+import type { Bridge, Unsubscribe } from './bridge';
 import { mockBridge } from './mockBridge';
 
-/** A record standing in for an album, playlist or artist whose page the core cannot load yet. */
-function placeholder(id: string): Track {
-  return {
-    id,
-    title: '',
-    subtitle: '',
-    artwork: null,
-    durationMs: 0,
-    explicit: false,
-    provider: id.split(':')[0] ?? '',
-    playable: false,
-  };
-}
-
-const emptyPage = (): Page => ({
-  tracks: [],
-  albums: [],
-  artists: [],
-  playlists: [],
-  hasMore: false,
-});
-
-/**
- * The bridge over the Rust core. Calls the core does not have yet answer empty, so every screen
- * still renders.
- */
+/** The bridge over the Rust core. */
 function nativeBridge(core: SonoraCoreModule): Bridge {
   return {
     // The core keeps its files under Application Support; Swift picks the folder.
@@ -46,15 +12,15 @@ function nativeBridge(core: SonoraCoreModule): Bridge {
     answer: (slug, input) => core.answer(slug, input),
     cancelSignIn: (slug) => core.cancelSignIn(slug),
     signOut: (slug) => core.signOut(slug),
-    // TODO(milestone 4): home, library, album, playlist, artist and set_saved on the core.
-    home: () => Promise.resolve<Section[]>([]),
+    home: () => core.home(),
     search: (query) => core.search(query),
-    library: () => Promise.resolve(emptyPage()),
-    album: (id) => Promise.resolve<AlbumDetail>({ album: placeholder(id), tracks: [] }),
-    playlist: (id) =>
-      Promise.resolve<PlaylistDetail>({ playlist: placeholder(id), tracks: [] }),
-    artist: (id) =>
-      Promise.resolve<ArtistDetail>({ artist: placeholder(id), topTracks: [], albums: [] }),
+    library: (slug, part, page) => core.library(slug, part, page),
+    cachedLibrary: (slug, part) => core.cachedLibrary(slug, part),
+    savedIds: () => core.savedIds(),
+    album: (id) => core.album(id),
+    playlist: (id) => core.playlist(id),
+    playlistMore: (id, continuation) => core.playlistMore(id, continuation),
+    artist: (id) => core.artist(id),
     play: (ids, index, origin) => core.play(ids, index, origin),
     toggle: () => core.toggle(),
     next: () => core.next(),
@@ -65,7 +31,7 @@ function nativeBridge(core: SonoraCoreModule): Bridge {
     enqueueNext: (ids) => core.enqueueNext(ids),
     enqueueLast: (ids) => core.enqueueLast(ids),
     remove: (index) => core.remove(index),
-    setSaved: () => Promise.resolve(),
+    setSaved: (id, kind, saved) => core.setSaved(id, kind, saved),
     on: (event, handler): Unsubscribe => {
       const subscription = core.addListener(event, handler as never);
       return () => subscription.remove();

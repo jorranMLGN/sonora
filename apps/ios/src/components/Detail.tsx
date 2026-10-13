@@ -1,27 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { Track } from '../bridge';
+import type { LibraryPart, Track } from '../bridge';
 import { bridge } from '../bridgeImpl';
 import { t } from '../i18n';
-import { attempt, useStore } from '../store';
+import { attempt, toggleSaved, useSaved, useStore } from '../store';
 import { colors, radii, sizes, spacing, typography } from '../theme';
 import { Artwork } from './Artwork';
 
 /** Artwork, title, play / shuffle buttons and a save toggle, shared by the detail pages. */
 export function DetailHeader({
   item,
+  kind,
   tracks,
   origin,
   round = false,
 }: {
   item: Track;
+  /** What the save toggle puts into the library. */
+  kind: LibraryPart;
   tracks: Track[];
   origin: string;
   round?: boolean;
 }) {
-  const [saved, setSaved] = useState(false);
+  const saved = useSaved(kind, item.id);
   const play = (shuffle: boolean) => {
     if (tracks.length === 0) return;
     attempt(
@@ -50,10 +52,7 @@ export function DetailHeader({
         </Pressable>
         <Pressable
           style={styles.secondary}
-          onPress={() => {
-            attempt(bridge.setSaved(item.id, !saved));
-            setSaved(!saved);
-          }}
+          onPress={() => toggleSaved(kind, item.id)}
           accessibilityLabel={t(saved ? 'mobile-unsave' : 'mobile-save')}
         >
           <Ionicons

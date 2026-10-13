@@ -19,7 +19,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub use account::{Problem, SignInOption, WebSignIn, answer, cancel_sign_in, sign_in, sign_out};
-pub use library::{LibraryPage, Part};
+pub use library::{
+    AlbumDetail, ArtistDetail, HomeSection, LibraryPage, Part, PlaylistDetail, PlaylistMore,
+    SavedIds, SectionKind,
+};
 pub use potoken::{PoTokenAsk, po_token, po_token_wanted};
 
 use crate::player::Command;
@@ -347,12 +350,90 @@ pub fn queue() -> Answer<QueueSnapshot> {
     Ok(core::get()?.published().1)
 }
 
-/// One page of a provider's library. Pages are numbered from zero; an empty page is the end.
+// Home, the library and the pages.
+
+/// The home of every provider with a session, woven a shelf at a time, each shelf naming its
+/// provider.
+#[uniffi::export]
+pub async fn home() -> Answer<Vec<HomeSection>> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core.spawn(library::home(worker)).await?)
+}
+
+/// One page of a provider's library. Pages are numbered from zero; page zero reads the part
+/// afresh, and `has_more` says whether another page follows. A guest session lists nothing.
 #[uniffi::export]
 pub async fn library(slug: String, part: Part, page: u32) -> Answer<LibraryPage> {
     let core = core::get()?;
     let worker = core.clone();
     Ok(core
-        .spawn(async move { library::page(&worker, &slug, part, page).await })
+        .spawn(async move { library::page(worker, &slug, part, page).await })
+        .await?)
+}
+
+/// The first page of a library part as it was last listed, to draw before the network
+/// answers, or `None` before the first listing.
+#[uniffi::export]
+pub fn cached_library(slug: String, part: Part) -> Answer<Option<LibraryPage>> {
+    let core = core::get()?;
+    Ok(library::snapshot(&core, &slug, part))
+}
+
+/// Every id in the signed-in providers' libraries, by kind, for the hearts.
+#[uniffi::export]
+pub async fn saved_ids() -> Answer<SavedIds> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core.spawn(library::saved(worker)).await?)
+}
+
+/// Puts the item `id`, of the kind `kind` names, into its provider's library or takes it out.
+#[uniffi::export]
+pub async fn set_saved(id: String, kind: Part, saved: bool) -> Answer<()> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core
+        .spawn(async move { library::set_saved(worker, &id, kind, saved).await })
+        .await?)
+}
+
+#[uniffi::export]
+pub async fn album(id: String) -> Answer<AlbumDetail> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core
+        .spawn(async move { library::album(worker, &id).await })
+        .await?)
+}
+
+/// A playlist with its first tracks; `continuation`, when set, fetches the rest through
+/// `playlist_more`.
+#[uniffi::export]
+pub async fn playlist(id: String) -> Answer<PlaylistDetail> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core
+        .spawn(async move { library::playlist(worker, &id).await })
+        .await?)
+}
+
+/// The tracks of the playlist `id` after `continuation`.
+#[uniffi::export]
+pub async fn playlist_more(id: String, continuation: String) -> Answer<PlaylistMore> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core
+        .spawn(async move { library::playlist_more(worker, &id, &continuation).await })
+        .await?)
+}
+
+/// An artist with their top tracks and albums.
+#[uniffi::export]
+pub async fn artist(id: String) -> Answer<ArtistDetail> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core
+        .spawn(async move { library::artist(worker, &id).await })
         .await?)
 }

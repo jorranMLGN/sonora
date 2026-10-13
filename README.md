@@ -187,7 +187,8 @@ three sideloaded apps at a time.
 
 It is built for SoundCloud, Spotify and YouTube Music. SoundCloud plays without an account; sign
 in to Spotify (Premium) or YouTube Music, or to your SoundCloud account, under Library, Accounts.
-Your library and the album and artist pages are still being built. Apple Music, Deezer and every
+Home, your library, and the album, playlist and artist pages show what each signed-in provider has,
+and the heart saves a track, album or playlist. Apple Music, Deezer and every
 other provider that needs Widevine do not work on iOS, and local files, Subsonic, jam, lyrics and
 scrobbling are not there yet.
 
@@ -221,21 +222,21 @@ AI-assisted proofreading and translation of human-written text are permitted.
 
 | Language | Translated | Coverage |
 | --- | --- | --- |
-| English (`en-US`) | 998/998 | 100% |
-| Deutsch (`de`) | 628/998 | 63% |
-| Español (`es`) | 690/998 | 69% |
-| Français (`fr`) | 749/998 | 75% |
-| Italiano (`it`) | 605/998 | 61% |
-| Bahasa Indonesia (`id`) | 605/998 | 61% |
-| 日本語 (`ja`) | 605/998 | 61% |
-| Русский (`ru`) | 718/998 | 72% |
-| Українська (`uk`) | 718/998 | 72% |
-| Polski (`pl`) | 718/998 | 72% |
-| Čeština (`cs`) | 743/998 | 74% |
-| Português (Brasil) (`pt-BR`) | 605/998 | 61% |
-| 简体中文 (`zh-CN`) | 605/998 | 61% |
-| Türkçe (`tr`) | 605/998 | 61% |
-| Shqip (`sq`) | 714/998 | 72% |
+| English (`en-US`) | 1000/1000 | 100% |
+| Deutsch (`de`) | 628/1000 | 63% |
+| Español (`es`) | 690/1000 | 69% |
+| Français (`fr`) | 749/1000 | 75% |
+| Italiano (`it`) | 605/1000 | 60% |
+| Bahasa Indonesia (`id`) | 605/1000 | 60% |
+| 日本語 (`ja`) | 605/1000 | 60% |
+| Русский (`ru`) | 718/1000 | 72% |
+| Українська (`uk`) | 718/1000 | 72% |
+| Polski (`pl`) | 718/1000 | 72% |
+| Čeština (`cs`) | 743/1000 | 74% |
+| Português (Brasil) (`pt-BR`) | 605/1000 | 60% |
+| 简体中文 (`zh-CN`) | 605/1000 | 60% |
+| Türkçe (`tr`) | 605/1000 | 60% |
+| Shqip (`sq`) | 714/1000 | 71% |
 
 <!-- i18n:end -->
 

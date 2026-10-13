@@ -7,9 +7,11 @@ import type {
   Page,
   PlayerState,
   PlaylistDetail,
+  PlaylistMore,
   ProviderInfo,
   QueueSnapshot,
   Repeat,
+  SavedIds,
   SearchResults,
   Section,
   SessionState,
@@ -199,10 +201,10 @@ export const mockBridge: Bridge = {
   async home() {
     await delay(200);
     const sections: Section[] = [
-      { id: 'recent', title: 'Jump back in', tracks: remember(many('soundcloud', 'track', 0, 8)), albums: [], artists: [], playlists: [] },
-      { id: 'albums', title: 'New albums', tracks: [], albums: remember(many('spotify', 'album', 0, 8)), artists: [], playlists: [] },
-      { id: 'artists', title: 'Artists for you', tracks: [], albums: [], artists: remember(many('youtube', 'artist', 0, 8)), playlists: [] },
-      { id: 'lists', title: 'Made for you', tracks: [], albums: [], artists: [], playlists: remember(many('spotify', 'playlist', 0, 8)) },
+      { id: 'recent', title: '', provider: 'SoundCloud', kind: 'quickPicks', tracks: remember(many('soundcloud', 'track', 0, 8)), albums: [], artists: [], playlists: [] },
+      { id: 'albums', title: 'New albums', provider: 'Spotify', kind: 'shelf', tracks: [], albums: remember(many('spotify', 'album', 0, 8)), artists: [], playlists: [] },
+      { id: 'artists', title: 'Artists for you', provider: 'YouTube Music', kind: 'shelf', tracks: [], albums: [], artists: remember(many('youtube', 'artist', 0, 8)), playlists: [] },
+      { id: 'lists', title: 'Made for you', provider: 'Spotify', kind: 'shelf', tracks: [], albums: [], artists: [], playlists: remember(many('spotify', 'playlist', 0, 8)) },
     ];
     return sections;
   },
@@ -219,8 +221,22 @@ export const mockBridge: Bridge = {
   async library(slug, part: LibraryPart, page): Promise<Page> {
     await delay(200);
     const kind = part.slice(0, -1);
-    const list = remember(many(slug, kind, page * PAGE_SIZE, PAGE_SIZE));
-    return { ...empty(), [part]: list, hasMore: page + 1 < PAGES };
+    const items = remember(many(slug, kind, page * PAGE_SIZE, PAGE_SIZE));
+    items.forEach((entry) => saved.add(entry.id));
+    return { items, total: PAGE_SIZE * PAGES, hasMore: page + 1 < PAGES };
+  },
+  async cachedLibrary(): Promise<Page | null> {
+    return null;
+  },
+  async savedIds(): Promise<SavedIds> {
+    const ids = [...saved];
+    const of = (kind: string) => ids.filter((id) => id.split(':')[1]?.startsWith(kind));
+    return {
+      tracks: of('track'),
+      albums: of('album'),
+      artists: of('artist'),
+      playlists: of('playlist'),
+    };
   },
   async album(id): Promise<AlbumDetail> {
     await delay(200);
@@ -230,7 +246,10 @@ export const mockBridge: Bridge = {
   async playlist(id): Promise<PlaylistDetail> {
     await delay(200);
     const playlist = catalog.get(id) ?? item('spotify', 'playlist', 0);
-    return { playlist, tracks: remember(many(playlist.provider, 'track', 30, 14)) };
+    return { playlist, tracks: remember(many(playlist.provider, 'track', 30, 14)), continuation: null };
+  },
+  async playlistMore(): Promise<PlaylistMore> {
+    return { tracks: [], continuation: null };
   },
   async artist(id): Promise<ArtistDetail> {
     await delay(200);
@@ -306,7 +325,7 @@ export const mockBridge: Bridge = {
     queue = { ...queue, items, current };
     publishQueue();
   },
-  async setSaved(id, on) {
+  async setSaved(id, _kind, on) {
     if (on) saved.add(id);
     else saved.delete(id);
   },

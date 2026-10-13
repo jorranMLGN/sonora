@@ -152,6 +152,80 @@ enum Bridge {
     }
   }
 
+  /// The library part JS names (`tracks`, `albums`, `artists`, `playlists`), or nil for any
+  /// other word.
+  static func part(_ name: String) -> Part? {
+    switch name {
+    case "tracks": return .songs
+    case "albums": return .albums
+    case "artists": return .artists
+    case "playlists": return .playlists
+    default: return nil
+    }
+  }
+
+  static func page(_ page: LibraryPage) -> [String: Any] {
+    [
+      "items": items(page.items),
+      "total": Int(page.total),
+      "hasMore": page.hasMore,
+    ]
+  }
+
+  static func sectionKind(_ kind: SectionKind) -> String {
+    switch kind {
+    case .listenAgain: return "listenAgain"
+    case .quickPicks: return "quickPicks"
+    case .shelf: return "shelf"
+    }
+  }
+
+  static func section(_ section: HomeSection) -> [String: Any] {
+    [
+      "id": section.id,
+      "title": section.title,
+      "provider": section.provider,
+      "kind": sectionKind(section.kind),
+      "tracks": items(section.tracks),
+      "albums": items(section.albums),
+      "artists": items(section.artists),
+      "playlists": items(section.playlists),
+    ]
+  }
+
+  static func album(_ detail: AlbumDetail) -> [String: Any] {
+    ["album": item(detail.album), "tracks": items(detail.tracks)]
+  }
+
+  static func playlist(_ detail: PlaylistDetail) -> [String: Any] {
+    [
+      "playlist": item(detail.playlist),
+      "tracks": items(detail.tracks),
+      "continuation": optional(detail.continuation),
+    ]
+  }
+
+  static func playlistMore(_ more: PlaylistMore) -> [String: Any] {
+    ["tracks": items(more.tracks), "continuation": optional(more.continuation)]
+  }
+
+  static func artist(_ detail: ArtistDetail) -> [String: Any] {
+    [
+      "artist": item(detail.artist),
+      "topTracks": items(detail.topTracks),
+      "albums": items(detail.albums),
+    ]
+  }
+
+  static func saved(_ ids: SavedIds) -> [String: Any] {
+    [
+      "tracks": ids.tracks,
+      "albums": ids.albums,
+      "artists": ids.artists,
+      "playlists": ids.playlists,
+    ]
+  }
+
   /// The words of a core failure, for a rejected promise.
   static func message(_ error: Error) -> String {
     switch error {
@@ -161,6 +235,13 @@ enum Bridge {
     }
     return error.localizedDescription
   }
+}
+
+/// A JS argument the core has no value for, such as an unknown library part.
+struct BadArgument: LocalizedError {
+  let value: String
+
+  var errorDescription: String? { "unknown value \(value)" }
 }
 
 /// Forwards the core's events to JS. It holds the module weakly, so a reloaded bridge lets the

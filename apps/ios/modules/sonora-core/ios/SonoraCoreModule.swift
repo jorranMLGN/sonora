@@ -106,6 +106,48 @@ public class SonoraCoreModule: Module {
       try SonoraCore.remove(index: UInt32(max(0, index)))
     }
 
+    // Home, the library and the album, playlist and artist pages.
+
+    AsyncFunction("home") { () async throws -> [[String: Any]] in
+      try await SonoraCore.home().map(Bridge.section)
+    }
+
+    AsyncFunction("library") { (slug: String, part: String, page: Int) async throws -> [String: Any] in
+      guard let kind = Bridge.part(part) else { throw BadArgument(value: part) }
+      let found = try await SonoraCore.library(slug: slug, part: kind, page: UInt32(max(0, page)))
+      return Bridge.page(found)
+    }
+
+    AsyncFunction("cachedLibrary") { (slug: String, part: String) throws -> [String: Any]? in
+      guard let kind = Bridge.part(part) else { throw BadArgument(value: part) }
+      return try SonoraCore.cachedLibrary(slug: slug, part: kind).map(Bridge.page)
+    }
+
+    AsyncFunction("savedIds") { () async throws -> [String: Any] in
+      Bridge.saved(try await SonoraCore.savedIds())
+    }
+
+    AsyncFunction("setSaved") { (id: String, kind: String, saved: Bool) async throws in
+      guard let part = Bridge.part(kind) else { throw BadArgument(value: kind) }
+      try await SonoraCore.setSaved(id: id, kind: part, saved: saved)
+    }
+
+    AsyncFunction("album") { (id: String) async throws -> [String: Any] in
+      Bridge.album(try await SonoraCore.album(id: id))
+    }
+
+    AsyncFunction("playlist") { (id: String) async throws -> [String: Any] in
+      Bridge.playlist(try await SonoraCore.playlist(id: id))
+    }
+
+    AsyncFunction("playlistMore") { (id: String, continuation: String) async throws -> [String: Any] in
+      Bridge.playlistMore(try await SonoraCore.playlistMore(id: id, continuation: continuation))
+    }
+
+    AsyncFunction("artist") { (id: String) async throws -> [String: Any] in
+      Bridge.artist(try await SonoraCore.artist(id: id))
+    }
+
     AsyncFunction("playerState") { () throws -> [String: Any] in
       Bridge.state(try SonoraCore.playerState())
     }

@@ -1,27 +1,64 @@
 import { useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { FlatList } from 'react-native';
 
+import type { Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
 import { DetailHeader, Loading, useCurrentId } from '../../src/components/Detail';
 import { Screen } from '../../src/components/Screen';
 import { TrackRow } from '../../src/components/TrackRow';
-import { attempt } from '../../src/store';
+import { attempt, useStore } from '../../src/store';
 import { useLoad } from '../../src/useLoad';
 
 export default function PlaylistPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data } = useLoad(() => bridge.playlist(id), [id]);
+  const { data, loading, reload } = useLoad(() => bridge.playlist(id), [id]);
   const currentId = useCurrentId();
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [continuation, setContinuation] = useState<string | null>(null);
+  const fetching = useRef(false);
+
+  // A fresh load replaces whatever the continuations had added.
+  useEffect(() => {
+    setTracks(data?.tracks ?? []);
+    setContinuation(data?.continuation ?? null);
+  }, [data]);
+
+  const more = () => {
+    if (continuation === null || fetching.current) return;
+    fetching.current = true;
+    bridge
+      .playlistMore(id, continuation)
+      .then((next) => {
+        setTracks((known) => [...known, ...next.tracks]);
+        setContinuation(next.continuation);
+      })
+      .catch((error: Error) => {
+        setContinuation(null);
+        useStore.setState({ error: error.message });
+      })
+      .finally(() => (fetching.current = false));
+  };
+
   return (
     <Screen back miniPlayer>
       {!data ? (
         <Loading />
       ) : (
         <FlatList
-          data={data.tracks}
-          keyExtractor={(track) => track.id}
+          data={tracks}
+          keyExtractor={(track, index) => `${index}:${track.id}`}
+          refreshing={loading}
+          onRefresh={reload}
+          onEndReachedThreshold={0.5}
+          onEndReached={more}
           ListHeaderComponent={
-            <DetailHeader item={data.playlist} tracks={data.tracks} origin={`playlist:${id}`} />
+            <DetailHeader
+              item={data.playlist}
+              kind="playlists"
+              tracks={tracks}
+              origin={`playlist:${id}`}
+            />
           }
           renderItem={({ item, index }) => (
             <TrackRow
@@ -30,7 +67,7 @@ export default function PlaylistPage() {
               onPress={() =>
                 attempt(
                   bridge.play(
-                    data.tracks.map((track) => track.id),
+                    tracks.map((track) => track.id),
                     index,
                     `playlist:${id}`,
                   ),

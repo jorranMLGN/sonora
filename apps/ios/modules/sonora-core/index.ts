@@ -76,6 +76,30 @@ export type Prompt =
   | { kind: 'secret'; web: WebSignIn | null }
   | { kind: 'accounts'; choices: { id: string; name: string; detail: string | null }[] };
 
+/** A library part, also the kind a saved toggle is about. */
+export type Part = 'tracks' | 'albums' | 'artists' | 'playlists';
+
+/** One page of a library part; `total` is the part's length when the provider says it. */
+export type LibraryPage = { items: Item[]; total: number; hasMore: boolean };
+
+/** One shelf on Home, from one provider. `title` is empty for the two the app names. */
+export type HomeSection = {
+  id: string;
+  title: string;
+  provider: string;
+  kind: 'listenAgain' | 'quickPicks' | 'shelf';
+  tracks: Item[];
+  albums: Item[];
+  artists: Item[];
+  playlists: Item[];
+};
+
+export type AlbumDetail = { album: Item; tracks: Item[] };
+export type PlaylistDetail = { playlist: Item; tracks: Item[]; continuation: string | null };
+export type PlaylistMore = { tracks: Item[]; continuation: string | null };
+export type ArtistDetail = { artist: Item; topTracks: Item[]; albums: Item[] };
+export type SavedIds = { tracks: string[]; albums: string[]; artists: string[]; playlists: string[] };
+
 type Events = {
   onState(state: PlayerState): void;
   onPosition(event: { positionMs: number }): void;
@@ -111,6 +135,19 @@ export declare class SonoraCoreModule extends NativeModule<Events> {
   enqueueLast(ids: string[]): Promise<void>;
   /** Takes the entry at `index` of the queue out; the current track cannot be removed. */
   remove(index: number): Promise<void>;
+  /** Every signed-in provider's home, woven a shelf at a time. */
+  home(): Promise<HomeSection[]>;
+  /** Page `page` of a library part; page 0 reads it afresh. */
+  library(slug: string, part: Part, page: number): Promise<LibraryPage>;
+  /** The first page of a part as last listed, or null before the first listing. */
+  cachedLibrary(slug: string, part: Part): Promise<LibraryPage | null>;
+  /** Every id in the signed-in providers' libraries, by kind. */
+  savedIds(): Promise<SavedIds>;
+  setSaved(id: string, kind: Part, saved: boolean): Promise<void>;
+  album(id: string): Promise<AlbumDetail>;
+  playlist(id: string): Promise<PlaylistDetail>;
+  playlistMore(id: string, continuation: string): Promise<PlaylistMore>;
+  artist(id: string): Promise<ArtistDetail>;
   playerState(): Promise<PlayerState>;
   queue(): Promise<QueueSnapshot>;
 }

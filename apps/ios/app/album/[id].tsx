@@ -10,7 +10,7 @@ import { useLoad } from '../../src/useLoad';
 
 export default function AlbumPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data } = useLoad(() => bridge.album(id), [id]);
+  const { data, loading, reload } = useLoad(() => bridge.album(id), [id]);
   const currentId = useCurrentId();
   return (
     <Screen back miniPlayer>
@@ -19,9 +19,16 @@ export default function AlbumPage() {
       ) : (
         <FlatList
           data={data.tracks}
-          keyExtractor={(track) => track.id}
+          keyExtractor={(track, index) => `${index}:${track.id}`}
+          refreshing={loading}
+          onRefresh={reload}
           ListHeaderComponent={
-            <DetailHeader item={data.album} tracks={data.tracks} origin={`album:${id}`} />
+            <DetailHeader
+              item={data.album}
+              kind="albums"
+              tracks={data.tracks}
+              origin={`album:${id}`}
+            />
           }
           renderItem={({ item, index }) => (
             <TrackRow
