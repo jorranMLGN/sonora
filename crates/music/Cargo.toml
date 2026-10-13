@@ -33,8 +33,6 @@ deunicode.workspace = true
 dirs.workspace = true
 http.workspace = true
 jiff.workspace = true
-librespot-core = { workspace = true, optional = true }
-librespot-playback = { workspace = true, optional = true }
 librespot-protocol = { workspace = true, optional = true }
 lofty.workspace = true
 kakasi.workspace = true
@@ -62,6 +60,16 @@ tokio.workspace = true
 video = { workspace = true, optional = true }
 widevine.workspace = true
 ytmusic = { workspace = true, optional = true }
+
+# librespot trusts either the system's roots or the bundled webpki ones, never both. iOS gives
+# rustls-native-certs nothing to read, so the phone carries Mozilla's roots instead.
+[target.'cfg(target_os = "ios")'.dependencies]
+librespot-core = { workspace = true, optional = true, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { workspace = true, optional = true, features = ["rustls-tls-webpki-roots"] }
+
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+librespot-core = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
+librespot-playback = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
 
 [[example]]
 name = "library-probe"

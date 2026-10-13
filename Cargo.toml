@@ -171,15 +171,13 @@ uniffi = "0.32"
 x11rb = "0.13"
 ytmusic = { git = "https://github.com/sonorahq/ytmusic-rs", rev = "8b044c4" }
 
-librespot-core = { version = "0.8.0", default-features = false, features = [
-  "rustls-tls-native-roots",
-] }
+# The root store is picked per target in `crates/music`: iOS cannot list native roots.
+librespot-core = { version = "0.8.0", default-features = false }
 librespot-oauth = { version = "0.8.0", default-features = false, features = [
   "rustls-tls-native-roots",
 ] }
 librespot-playback = { version = "0.8.0", default-features = false, features = [
   "rodio-backend",
-  "rustls-tls-native-roots",
 ] }
 librespot-protocol = "0.8.0"
 percent-encoding = "2.3"
