@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{Context, Entity, Task};
 use music::{Album, MusicApi, Shape, Track};
@@ -34,6 +34,13 @@ const PREFIX: &str = "discover/";
 const RELEASES: &str = "discover/releases";
 /// The cache key of the mixes.
 const MIXES: &str = "discover/mixes";
+/// How long to wait before asking for the featured album's tracks again, per try, so a
+/// provider that fails for a moment does not leave the hero's play button off for good.
+const RETRIES: [Duration; 3] = [
+    Duration::from_secs(3),
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+];
 
 /// A radio mix: the history track it grew from and the tracks the provider answered with,
 /// minus anything the user already played or favorited.
@@ -214,6 +221,9 @@ impl Discover {
         self.mixing = None;
         self.releases_at = 0;
         self.mixes_at = 0;
+        // Cached releases land before any provider has restored, when there is no client to
+        // ask for the featured album's tracks; this is the first moment there is.
+        self.feature(cx);
         self.refresh(cx);
     }
 
@@ -476,7 +486,8 @@ impl Discover {
         cx.notify();
     }
 
-    /// Loads the featured release's tracks once, so the hero can play it.
+    /// Loads the featured release's tracks once, so the hero can play it, trying again after
+    /// each `RETRIES` pause when the provider fails.
     fn feature(&mut self, cx: &mut Context<Self>) {
         let Some(album) = self.releases.first().cloned() else {
             self.featured_tracks = Rc::default();
@@ -496,16 +507,27 @@ impl Discover {
         };
         let io = self.io.clone();
         self.featuring = Some(cx.spawn(async move |this, cx| {
-            let id = album.id.clone();
-            match join(io.spawn(async move { client.album_tracks(&id).await })).await {
-                Ok(tracks) => {
-                    this.update(cx, |this, cx| {
-                        this.featured_tracks = Rc::new(tracks);
-                        cx.notify();
-                    })
-                    .ok();
+            let mut pauses = RETRIES.iter();
+            loop {
+                let id = album.id.clone();
+                let asked = client.clone();
+                match join(io.spawn(async move { asked.album_tracks(&id).await })).await {
+                    Ok(tracks) => {
+                        this.update(cx, |this, cx| {
+                            this.featured_tracks = Rc::new(tracks);
+                            cx.notify();
+                        })
+                        .ok();
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("discover: cannot load the featured album: {error:#}");
+                        let Some(&pause) = pauses.next() else {
+                            return;
+                        };
+                        cx.background_executor().timer(pause).await;
+                    }
                 }
-                Err(error) => log::warn!("discover: cannot load the featured album: {error:#}"),
             }
         }));
     }
