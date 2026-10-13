@@ -3,6 +3,10 @@ import type { FluentVariable } from "@fluent/bundle";
 import { getLocales } from "expo-localization";
 
 import { ftl } from "./generated/ftl";
+import { installPluralRules } from "./pluralRules";
+
+// Fluent picks the right form of a counted string with `Intl.PluralRules`, which Hermes lacks.
+installPluralRules();
 
 const FALLBACK = "en-US";
 
