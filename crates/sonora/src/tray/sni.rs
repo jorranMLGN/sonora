@@ -208,15 +208,42 @@ fn sandboxed() -> bool {
     std::path::Path::new(FLATPAK_INFO).exists()
 }
 
-/// The themed icon to ask the host for, or none when the host's theme cannot be counted on to
-/// have it. A Flatpak or AppImage install puts no `sonora` icon where the host looks, and hosts
-/// such as Quickshell draw a placeholder for a name they cannot find rather than the pixmap.
+/// The themed icon to ask the host for, or none when no icon theme on this system has it. A
+/// Flatpak, an AppImage or a `cargo run` puts no `sonora` icon where the host looks, and hosts
+/// such as Quickshell and GNOME's AppIndicator extension draw a placeholder for a name they
+/// cannot find rather than falling back to the pixmap.
 fn icon_name(sandboxed: bool) -> String {
     let packaged = sandboxed || std::env::var_os("APPIMAGE").is_some();
-    match packaged {
-        true => String::new(),
-        false => ICON_NAME.to_owned(),
+    match !packaged && themed(ICON_NAME) {
+        true => ICON_NAME.to_owned(),
+        false => String::new(),
     }
+}
+
+/// Whether an icon theme in the XDG data directories carries an app icon called `name`, at any
+/// size, as the hosts' own lookup would find it.
+fn themed(name: &str) -> bool {
+    let home = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")));
+    let shared =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".to_owned());
+    let roots = home
+        .into_iter()
+        .chain(shared.split(':').map(std::path::PathBuf::from))
+        .map(|data| data.join("icons"))
+        .chain(dirs::home_dir().map(|home| home.join(".icons")));
+    roots
+        .filter_map(|root| std::fs::read_dir(root).ok())
+        .flatten()
+        .filter_map(|theme| std::fs::read_dir(theme.ok()?.path()).ok())
+        .flatten()
+        .filter_map(|size| Some(size.ok()?.path().join("apps")))
+        .any(|apps| {
+            ["png", "svg"]
+                .iter()
+                .any(|kind| apps.join(format!("{name}.{kind}")).exists())
+        })
 }
 
 /// The cover as the png a menu item carries. A cover that cannot be encoded is simply left off
