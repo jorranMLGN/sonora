@@ -92,13 +92,15 @@ jobs:
           npx tsc --noEmit -p .
           npx expo prebuild --platform ios --clean --no-install
 
+      # One cache per configuration: a Release build swaps the prebuilt React Native core in
+      # Pods for its Release flavour, and a Debug build that restored it would link against that.
       - uses: actions/cache@v4
         with:
           path: |
             apps/ios/ios/Pods
             ~/Library/Caches/CocoaPods
-          key: pods-${{ runner.os }}-${{ hashFiles('apps/ios/package-lock.json', 'apps/ios/modules/sonora-core/ios/SonoraCore.podspec') }}
-          restore-keys: pods-${{ runner.os }}-
+          key: pods-${{ runner.os }}-${{ env.CONFIGURATION }}-${{ hashFiles('apps/ios/package-lock.json', 'apps/ios/modules/sonora-core/ios/SonoraCore.podspec') }}
+          restore-keys: pods-${{ runner.os }}-${{ env.CONFIGURATION }}-
 
       - name: Install pods
         working-directory: apps/ios/ios
