@@ -1136,6 +1136,7 @@ mobile-next = Next
 mobile-previous = Previous
 mobile-shuffle = Shuffle
 mobile-repeat = Repeat
+mobile-output-playing-on = Playing on { $device }
 mobile-open-player = Open player
 mobile-nothing-playing = Nothing playing
 mobile-queue = Queue

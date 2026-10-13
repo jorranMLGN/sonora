@@ -7,6 +7,7 @@ import { t } from '../i18n';
 import { attempt, useStore } from '../store';
 import { colors, sizes, spacing, typography } from '../theme';
 import { Artwork } from './Artwork';
+import { OutputButton } from './Output';
 
 /** The strip above the tab bar: current track, a progress hairline, toggle; opens the player. */
 export function MiniPlayer() {
@@ -47,6 +48,7 @@ export function MiniPlayer() {
           />
         </Pressable>
       )}
+      <OutputButton />
       <Pressable
         hitSlop={spacing.sm}
         style={styles.button}

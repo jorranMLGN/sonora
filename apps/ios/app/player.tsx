@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { bridge } from '../src/bridgeImpl';
 import { Artwork } from '../src/components/Artwork';
+import { OutputRow } from '../src/components/Output';
 import { ErrorBanner } from '../src/components/Screen';
 import { Scrubber } from '../src/components/Scrubber';
 import { TrackRow } from '../src/components/TrackRow';
@@ -87,6 +88,7 @@ export default function Player() {
           onPress={() => attempt(bridge.cycleRepeat())}
         />
       </View>
+      <OutputRow />
       <Text style={styles.queueHeading}>{t('mobile-queue')}</Text>
     </View>
   );

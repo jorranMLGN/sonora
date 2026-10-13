@@ -18,6 +18,11 @@ public final class AudioSession {
 
   private var observers: [NSObjectProtocol] = []
 
+  /// How long after the app's output picker closes a route change still counts as chosen there.
+  private static let choiceWindow: TimeInterval = 5
+  /// When the app's output picker last closed, or `.distantFuture` while it is open.
+  private static var choiceAt: Date = .distantPast
+
   /// Configures and activates the session, then starts observing. Failure to activate is logged,
   /// not thrown: observers stay registered so a later interruption end can recover.
   public init(
@@ -33,7 +38,9 @@ public final class AudioSession {
   }
 
   /// Sets the playback category and activates the session. Safe to call again, for instance
-  /// after the media services were reset or an interruption ended.
+  /// after the media services were reset or an interruption ended. `.playback` may already go
+  /// to AirPlay and Bluetooth; `.allowAirPlay` is only for `.playAndRecord`, and the long-form
+  /// route policy wants an `AVPlayer`, which the core's RemoteIO output is not.
   public func configure() {
     let session = AVAudioSession.sharedInstance()
     do {
@@ -42,6 +49,12 @@ public final class AudioSession {
     } catch {
       NSLog("sonora: cannot activate the audio session: \(error)")
     }
+  }
+
+  /// Marks the app's output picker as open or closed, so a route the person picks there is not
+  /// taken for a lost device.
+  public static func choosingRoute(_ open: Bool) {
+    choiceAt = open ? .distantFuture : Date()
   }
 
   /// Stops observing. Call it when the module goes away.
@@ -116,10 +129,23 @@ public final class AudioSession {
     }
     switch reason {
     case .oldDeviceUnavailable:
+      // Only a fall back to the phone's own speaker pauses, so music never blares out of it
+      // when headphones come out or an AirPlay speaker drops. A move to AirPlay or Bluetooth,
+      // or to the phone through the app's picker, is a choice that RemoteIO follows by itself.
+      let chosen = Date().timeIntervalSince(AudioSession.choiceAt) <= AudioSession.choiceWindow
+      guard AudioSession.onPhone(), !chosen else { return }
       onRouteLost()
     default:
-      // A new device (headphones in) takes over by itself; playback goes on as it was.
+      // A new device (headphones in, an AirPlay speaker picked) takes over by itself; playback
+      // goes on as it was.
       break
+    }
+  }
+
+  /// Whether every output of the current route is the phone's own speaker or earpiece.
+  private static func onPhone() -> Bool {
+    AVAudioSession.sharedInstance().currentRoute.outputs.allSatisfy {
+      $0.portType == .builtInSpeaker || $0.portType == .builtInReceiver
     }
   }
 }

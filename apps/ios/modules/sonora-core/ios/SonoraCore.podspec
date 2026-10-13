@@ -18,8 +18,8 @@ Pod::Spec.new do |s|
   s.public_header_files = 'generated/*.h'
   s.preserve_paths = 'rust/**/*'
   s.vendored_frameworks = 'rust/SonoraRust.xcframework'
-  s.frameworks = 'AudioToolbox', 'CoreAudio', 'AVFoundation', 'AVFAudio', 'CoreFoundation', 'Foundation',
-                 'MediaPlayer', 'SafariServices', 'Security', 'SystemConfiguration', 'UIKit', 'WebKit'
+  s.frameworks = 'AudioToolbox', 'CoreAudio', 'AVFoundation', 'AVFAudio', 'AVKit', 'CoreFoundation',
+                 'Foundation', 'MediaPlayer', 'SafariServices', 'Security', 'SystemConfiguration', 'UIKit', 'WebKit'
   s.libraries = 'c++', 'resolv', 'iconv', 'objc'
 
   s.pod_target_xcconfig = {
