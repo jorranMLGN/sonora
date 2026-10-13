@@ -172,6 +172,24 @@ on Windows on ARM.
 
 Download the latest `windows-msvc.exe` for your architecture from [Releases](https://github.com/sonorahq/sonora/releases/latest).
 
+### iPhone (sideload)
+
+There is an iPhone app in `apps/ios`: an Expo front end over the same Rust providers. It is not on
+the App Store. The `ios.yml` workflow builds it on GitHub's macOS runners and uploads an unsigned
+IPA as the `sonora-ipa` artifact of each run.
+
+1. Download `sonora-ipa` from the latest successful run in the Actions tab and unzip it.
+2. Install [SideStore](https://sidestore.io/) on the phone and sign in with a free Apple ID.
+3. Open the IPA in SideStore.
+
+A free Apple ID signs an app for 7 days, so SideStore has to re-sign it every week, and it allows
+three sideloaded apps at a time.
+
+It is built for SoundCloud, Spotify and YouTube Music. For now it searches and plays SoundCloud
+without an account; signing in to the others is still being built. Apple Music, Deezer and every
+other provider that needs Widevine do not work on iOS, and local files, Subsonic, jam, lyrics and
+scrobbling are not there yet.
+
 ## Community
 
 Feel free to join our [Discord](https://discord.gg/a8N8Tx23rV) server and [Matrix](https://matrix.to/#/#sonora:nolight.dev) space.
@@ -202,21 +220,21 @@ AI-assisted proofreading and translation of human-written text are permitted.
 
 | Language | Translated | Coverage |
 | --- | --- | --- |
-| English (`en-US`) | 940/940 | 100% |
-| Deutsch (`de`) | 628/940 | 67% |
-| Español (`es`) | 690/940 | 73% |
-| Français (`fr`) | 749/940 | 80% |
-| Italiano (`it`) | 605/940 | 64% |
-| Bahasa Indonesia (`id`) | 605/940 | 64% |
-| 日本語 (`ja`) | 605/940 | 64% |
-| Русский (`ru`) | 718/940 | 76% |
-| Українська (`uk`) | 718/940 | 76% |
-| Polski (`pl`) | 718/940 | 76% |
-| Čeština (`cs`) | 743/940 | 79% |
-| Português (Brasil) (`pt-BR`) | 605/940 | 64% |
-| 简体中文 (`zh-CN`) | 605/940 | 64% |
-| Türkçe (`tr`) | 605/940 | 64% |
-| Shqip (`sq`) | 714/940 | 76% |
+| English (`en-US`) | 995/995 | 100% |
+| Deutsch (`de`) | 628/995 | 63% |
+| Español (`es`) | 690/995 | 69% |
+| Français (`fr`) | 749/995 | 75% |
+| Italiano (`it`) | 605/995 | 61% |
+| Bahasa Indonesia (`id`) | 605/995 | 61% |
+| 日本語 (`ja`) | 605/995 | 61% |
+| Русский (`ru`) | 718/995 | 72% |
+| Українська (`uk`) | 718/995 | 72% |
+| Polski (`pl`) | 718/995 | 72% |
+| Čeština (`cs`) | 743/995 | 75% |
+| Português (Brasil) (`pt-BR`) | 605/995 | 61% |
+| 简体中文 (`zh-CN`) | 605/995 | 61% |
+| Türkçe (`tr`) | 605/995 | 61% |
+| Shqip (`sq`) | 714/995 | 72% |
 
 <!-- i18n:end -->
 

@@ -1,10 +1,12 @@
-import { NativeModule, requireNativeModule } from 'expo';
+import { NativeModule, requireOptionalNativeModule } from 'expo';
 
 /** A track, album, playlist or artist. Its id carries its provider, as `soundcloud:123`. */
 export type Item = {
   id: string;
   title: string;
   subtitle: string;
+  /** The album of a track; empty for anything else, or when unknown. */
+  album: string;
   artwork: string | null;
   durationMs: number;
   explicit: boolean;
@@ -70,7 +72,7 @@ type Events = {
   onError(event: { message: string }): void;
 };
 
-declare class SonoraCoreModule extends NativeModule<Events> {
+export declare class SonoraCoreModule extends NativeModule<Events> {
   /** Starts the core, which answers at once with the queue, the player and the sessions. */
   start(): Promise<void>;
   providers(): Promise<ProviderInfo[]>;
@@ -91,4 +93,5 @@ declare class SonoraCoreModule extends NativeModule<Events> {
   queue(): Promise<QueueSnapshot>;
 }
 
-export default requireNativeModule<SonoraCoreModule>('SonoraCore');
+/** The native module, or null where the build does not carry it (Expo Go, the web). */
+export default requireOptionalNativeModule<SonoraCoreModule>('SonoraCore');

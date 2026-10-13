@@ -1,0 +1,71 @@
+import { useLocalSearchParams } from 'expo-router';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
+
+import { bridge } from '../../src/bridgeImpl';
+import { DetailHeader, Loading, useCurrentId } from '../../src/components/Detail';
+import { Screen } from '../../src/components/Screen';
+import { Shelf } from '../../src/components/Shelf';
+import { TrackRow } from '../../src/components/TrackRow';
+import { t } from '../../src/i18n';
+import { attempt } from '../../src/store';
+import { colors, spacing, typography } from '../../src/theme';
+import { useLoad } from '../../src/useLoad';
+
+export default function ArtistPage() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const { data } = useLoad(() => bridge.artist(id), [id]);
+  const currentId = useCurrentId();
+  return (
+    <Screen back miniPlayer>
+      {!data ? (
+        <Loading />
+      ) : (
+        <FlatList
+          data={data.topTracks}
+          keyExtractor={(track) => track.id}
+          ListHeaderComponent={
+            <View>
+              <DetailHeader
+                item={data.artist}
+                tracks={data.topTracks}
+                origin={`artist:${id}`}
+                round
+              />
+              <Text style={styles.heading}>{t('mobile-artist-top-tracks')}</Text>
+            </View>
+          }
+          ListFooterComponent={
+            <View style={styles.footer}>
+              <Shelf title={t('mobile-artist-albums')} items={data.albums} kind="album" />
+            </View>
+          }
+          renderItem={({ item, index }) => (
+            <TrackRow
+              track={item}
+              current={item.id === currentId}
+              onPress={() =>
+                attempt(
+                  bridge.play(
+                    data.topTracks.map((track) => track.id),
+                    index,
+                    `artist:${id}`,
+                  ),
+                )
+              }
+            />
+          )}
+        />
+      )}
+    </Screen>
+  );
+}
+
+const styles = StyleSheet.create({
+  heading: {
+    color: colors.text,
+    fontSize: typography.heading,
+    fontWeight: '700',
+    marginHorizontal: spacing.lg,
+  },
+  footer: { marginTop: spacing.xl },
+});

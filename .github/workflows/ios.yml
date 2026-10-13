@@ -66,6 +66,7 @@ jobs:
         working-directory: apps/ios
         run: |
           npm ci
+          npm run prebuild:ftl
           npx tsc --noEmit -p .
           npx expo prebuild --platform ios --clean --no-install
 
