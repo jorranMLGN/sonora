@@ -10,7 +10,7 @@ pub mod engine;
 pub mod equalizer;
 pub mod escape;
 pub mod kugou;
-#[cfg(test)]
+#[cfg(all(test, feature = "spotify", feature = "youtube"))]
 mod live_tests;
 pub mod local;
 pub mod lrclib;
@@ -24,6 +24,7 @@ pub mod scrobble;
 mod sink;
 pub mod soundcloud;
 mod spectrum;
+#[cfg(feature = "spotify")]
 pub mod spotify;
 mod stream;
 pub mod subsonic;
@@ -31,7 +32,9 @@ pub mod tag;
 pub mod tagged;
 mod trim;
 pub mod trouble;
+#[cfg(feature = "video")]
 pub mod video;
+#[cfg(feature = "youtube")]
 pub mod youtube;
 
 use std::collections::HashMap;

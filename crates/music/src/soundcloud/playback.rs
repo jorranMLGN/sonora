@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "spotify", feature = "youtube"))]
 use super::auth::ClientId;
 use super::http::Http;
 use super::stream;
@@ -638,7 +638,7 @@ async fn resolve_transcoding(
 /// `cfg(test)`: its only caller is a `#[tokio::test]`, which the compiler
 /// already strips outside test builds, so this would otherwise warn as dead
 /// code in a plain `cargo build`/`clippy`.
-#[cfg(test)]
+#[cfg(all(test, feature = "spotify", feature = "youtube"))]
 pub(crate) async fn resolve_playable_url(
     client_id: String,
     token: Option<String>,

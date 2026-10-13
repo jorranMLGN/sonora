@@ -15,8 +15,9 @@ Pod::Spec.new do |s|
   s.source_files = '*.swift'
   s.preserve_paths = 'rust/**/*'
   s.vendored_libraries = 'rust/libmobile.a'
-  s.frameworks = 'AudioToolbox', 'CoreAudio', 'AVFoundation', 'AVFAudio', 'CoreFoundation', 'Foundation'
-  s.libraries = 'c++', 'resolv'
+  s.frameworks = 'AudioToolbox', 'CoreAudio', 'AVFoundation', 'AVFAudio', 'CoreFoundation', 'Foundation',
+                 'Security', 'SystemConfiguration'
+  s.libraries = 'c++', 'resolv', 'iconv', 'objc'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',

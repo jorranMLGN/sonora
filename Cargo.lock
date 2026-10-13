@@ -4474,7 +4474,14 @@ dependencies = [
 name = "mobile"
 version = "0.42.2"
 dependencies = [
+ "anyhow",
  "cpal 0.17.1",
+ "env_logger",
+ "log",
+ "music",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

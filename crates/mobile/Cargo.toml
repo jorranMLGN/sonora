@@ -9,4 +9,15 @@ publish = false
 crate-type = ["staticlib", "lib"]
 
 [dependencies]
+anyhow.workspace = true
 cpal.workspace = true
+env_logger.workspace = true
+log.workspace = true
+music = { path = "../music", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+# iOS has no libsqlite3 to link against, so SQLite is compiled in there, as on Windows.
+[target.'cfg(target_os = "ios")'.dependencies]
+music = { path = "../music", default-features = false, features = ["bundled-sqlite"] }
