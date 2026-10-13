@@ -4,6 +4,7 @@ import type { Track } from '../bridge';
 import { makeStyles } from '../styles';
 import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
+import { ProviderBadge } from './ProviderBadge';
 import { type Kind, useOpen } from './Shelf';
 
 /** A list row for an album, playlist or artist; opens its page. */
@@ -20,6 +21,7 @@ export function EntityRow({ item, kind }: { item: Track; kind: Kind }) {
         <Text numberOfLines={1} style={styles.subtitle}>
           {item.subtitle}
         </Text>
+        <ProviderBadge slug={item.provider} />
       </View>
     </Pressable>
   );

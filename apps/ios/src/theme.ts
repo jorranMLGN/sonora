@@ -54,6 +54,8 @@ const textScales = { small: 0.9, default: 1, large: 1.15 } as const;
 
 /** The type ramp at the default text size. */
 const typeRamp = {
+  /** A small tag, such as the service on a row. */
+  tag: 10,
   caption: 12,
   body: 15,
   title: 17,

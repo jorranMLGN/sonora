@@ -9,6 +9,7 @@ import { attempt, savedKey, toggleSaved, useSaved, useStore } from '../store';
 import { makeStyles, useTheme } from '../styles';
 import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
+import { ProviderBadge } from './ProviderBadge';
 
 /** Opens the action sheet for a track: play next, add to the queue, save or unsave. */
 export function trackActions(track: Track) {
@@ -78,6 +79,7 @@ export function TrackRow({
           {track.explicit ? `${t('mobile-explicit')} · ` : ''}
           {track.subtitle}
         </Text>
+        <ProviderBadge slug={track.provider} />
       </View>
       {track.durationMs > 0 && <Text style={styles.subtitle}>{clock(track.durationMs)}</Text>}
       {heart && <Heart id={track.id} />}
