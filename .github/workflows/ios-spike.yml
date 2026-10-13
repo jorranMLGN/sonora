@@ -1,0 +1,78 @@
+name: ios-spike
+
+on:
+  push:
+    branches: [spike/ios]
+  workflow_dispatch:
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "16.4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-ios
+          xcodebuild -version
+          node --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-spike
+
+      - name: Build the Rust static library
+        run: |
+          cargo rustc --locked -p mobile --release --target aarch64-apple-ios --crate-type staticlib -- --print native-static-libs
+          ls -la target/aarch64-apple-ios/release/
+          cp target/aarch64-apple-ios/release/libmobile.a apps/ios/modules/sonora-core/ios/rust/libmobile.a
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ios/package-lock.json
+
+      - name: Prebuild
+        working-directory: apps/ios
+        run: |
+          npm ci
+          npx expo prebuild --platform ios --clean --no-install
+          cd ios && pod install
+
+      - name: Build the app
+        working-directory: apps/ios/ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "workspace=$WORKSPACE scheme=$SCHEME"
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tee "$GITHUB_WORKSPACE/build-xcode.log" | grep -E "error:|warning: .*SonoraCore|BUILD (SUCCEEDED|FAILED)|\*\* " || true
+          test -d "$GITHUB_WORKSPACE/build/dd/Build/Products/Release-iphoneos/$SCHEME.app"
+
+      - name: Package the ipa
+        run: |
+          APP=$(ls -d build/dd/Build/Products/Release-iphoneos/*.app | head -1)
+          mkdir -p ipa/Payload
+          cp -R "$APP" ipa/Payload/
+          (cd ipa && zip -qry ../sonora-spike.ipa Payload)
+          ls -la sonora-spike.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonora-spike-ipa
+          path: sonora-spike.ipa
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-log
+          path: build-xcode.log
+          if-no-files-found: ignore

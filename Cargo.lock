@@ -4471,6 +4471,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mobile"
+version = "0.42.2"
+dependencies = [
+ "cpal 0.17.1",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
