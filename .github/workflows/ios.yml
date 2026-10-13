@@ -1,0 +1,120 @@
+name: ios
+
+on:
+  push:
+    branches: [feat/ios, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "16.4"
+      CARGO_TERM_COLOR: always
+      MODULE: apps/ios/modules/sonora-core/ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-ios
+          xcodebuild -version
+          node --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            crates/mobile/bindgen -> target
+
+      - name: Build the Rust core
+        run: |
+          cargo rustc --locked -p mobile --release --target aarch64-apple-ios --crate-type staticlib -- --print native-static-libs
+          ls -la target/aarch64-apple-ios/release/libmobile.a
+
+      - name: Generate the Swift bindings
+        run: |
+          cargo run --locked --release --manifest-path crates/mobile/bindgen/Cargo.toml -- \
+            generate --library target/aarch64-apple-ios/release/libmobile.a \
+            --language swift --out-dir build/swift
+          ls -la build/swift
+          mkdir -p "$MODULE/generated"
+          cp build/swift/mobile.swift build/swift/mobileFFI.h "$MODULE/generated/"
+
+      - name: Package the XCFramework
+        run: |
+          rm -rf "$MODULE/rust/SonoraRust.xcframework"
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/libmobile.a \
+            -output "$MODULE/rust/SonoraRust.xcframework"
+          find "$MODULE/rust/SonoraRust.xcframework" -maxdepth 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ios/package-lock.json
+
+      - name: Prebuild
+        working-directory: apps/ios
+        run: |
+          npm ci
+          npx tsc --noEmit -p .
+          npx expo prebuild --platform ios --clean --no-install
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/ios/ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('apps/ios/package-lock.json', 'apps/ios/modules/sonora-core/ios/SonoraCore.podspec') }}
+          restore-keys: pods-${{ runner.os }}-
+
+      - name: Install pods
+        working-directory: apps/ios/ios
+        run: pod install
+
+      - name: Build the app
+        working-directory: apps/ios/ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "workspace=$WORKSPACE scheme=$SCHEME"
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > "$GITHUB_WORKSPACE/build-xcode.log" 2>&1 || {
+              grep -E "error:|BUILD FAILED" "$GITHUB_WORKSPACE/build-xcode.log" | head -80
+              exit 1
+            }
+          grep -E "warning: .*SonoraCore|BUILD SUCCEEDED" "$GITHUB_WORKSPACE/build-xcode.log" | head -40 || true
+          test -d "$GITHUB_WORKSPACE/build/dd/Build/Products/Release-iphoneos/$SCHEME.app"
+
+      - name: Package the ipa
+        run: |
+          APP=$(ls -d build/dd/Build/Products/Release-iphoneos/*.app | head -1)
+          mkdir -p ipa/Payload
+          cp -R "$APP" ipa/Payload/
+          (cd ipa && zip -qry ../sonora.ipa Payload)
+          ls -la sonora.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonora-ipa
+          path: sonora.ipa
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-log
+          path: build-xcode.log
+          if-no-files-found: ignore
