@@ -99,7 +99,9 @@ A failing seed is logged (`discover: cannot load radio …`) and skipped.
 
 ### Featured
 
-The first release if there is one, otherwise the first mix, otherwise nothing.
+The first release if there is one, otherwise the first mix, otherwise nothing. For a featured
+release `Discover` also loads its tracks once (`album_tracks`), as `featured_tracks()`, so the
+hero's play button has something to start; the button is disabled until they arrive.
 
 ### Cache
 
@@ -114,7 +116,9 @@ start over. `Reconnected` and `LocalChanged` do nothing.
 
 ### Wiring
 
-Constructed in `state::init` after `Library` and `History`, stored on `Sonora` as `discover`.
+Constructed in `views::Root::new` beside `Home` (which is built there too), from the `Library`,
+`Session` and `History` entities `Root` already holds. Not on the `Sonora` global: only the home
+page reads it.
 
 ## State: `Home::resume`
 
@@ -136,14 +140,17 @@ Top to bottom, inside the existing `Scroller`:
      the mix tracks.
    - Below `Room::Snug` the cover stacks above the text. Appears through `Rising`.
    - Absent when `Discover::featured()` is `None`.
-2. **Resume** — `home/resume.rs`, title `home-resume`. A grid of row-mode `ui::Card`s (cover +
-   title, `.art(theme.metrics.thumb)`), 4 columns from `Room::Roomy`, 2 below; up to 8 items from
-   `Home::resume`. Clicking an item plays it or opens it, as Quick picks do. Hidden when empty.
-3. **New releases** — title `home-new-releases`, one shelf through `Shelves` with `album_card`,
-   the provider name as eyebrow. Skeleton while loading, hidden when empty.
+2. **Resume** — title `home-resume`, a second `Picks::mixed` deck (the row-mode deck Quick picks
+   already uses) over `Home::resume`, up to 8 items, with its own pager. Clicking an item plays
+   it or opens it, as Quick picks do. Hidden when empty.
+3. **New releases** — title `home-new-releases`, one `GenreSection` of `GenreItem::Album`s built
+   at render time and drawn by a second `Shelves` entity (it sits above Quick picks). Hidden when
+   empty.
 4. **Quick picks** — unchanged.
-5. **Mixes** — one shelf per `Mix`, title `home-because { $artist }`, `track_card`s; playing a
-   card starts the mix from that track.
+5. **Mixes** — one shelf per `Mix`, title `home-because { $artist }`, built as a `GenreSection`
+   of `GenreItem::Track`s at render time and drawn by the same `Shelves` as the provider
+   sections, so a card behaves like every other track card. The hero's play button is what
+   starts a whole mix.
 6. **Provider shelves** — the existing woven sections, unchanged.
 
 The failure page stays as it is and shows only when every section above is empty.
