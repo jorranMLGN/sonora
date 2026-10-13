@@ -3,19 +3,30 @@ import { StyleSheet, View } from 'react-native';
 
 import { colors, radii } from '../theme';
 
-/** Square artwork with a flat placeholder when there is no image. */
+/**
+ * Square artwork with a flat placeholder when there is no image. `onError` hears when the
+ * image cannot load, so a caller can fall back to another url.
+ */
 export function Artwork({
   uri,
   size,
   round = false,
+  onError,
 }: {
   uri: string | null;
   size: number;
   round?: boolean;
+  onError?: () => void;
 }) {
   const box = { width: size, height: size, borderRadius: round ? size / 2 : radii.small };
   return uri ? (
-    <Image source={{ uri }} style={[styles.image, box]} contentFit="cover" transition={150} />
+    <Image
+      source={{ uri }}
+      style={[styles.image, box]}
+      contentFit="cover"
+      transition={150}
+      onError={onError}
+    />
   ) : (
     <View style={[styles.image, box]} />
   );

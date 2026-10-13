@@ -428,6 +428,17 @@ pub async fn playlist_more(id: String, continuation: String) -> Answer<PlaylistM
         .await?)
 }
 
+/// The url of the Canvas of the track `id`, the short looping MP4 Spotify shows while it
+/// plays, or `None` when it has none. Only Spotify tracks have one.
+#[uniffi::export]
+pub async fn canvas(id: String) -> Answer<Option<String>> {
+    let core = core::get()?;
+    let worker = core.clone();
+    Ok(core
+        .spawn(async move { library::canvas(worker, &id).await })
+        .await?)
+}
+
 /// An artist with their top tracks and albums.
 #[uniffi::export]
 pub async fn artist(id: String) -> Answer<ArtistDetail> {

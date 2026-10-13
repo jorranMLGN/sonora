@@ -251,6 +251,10 @@ export const mockBridge: Bridge = {
   async playlistMore(): Promise<PlaylistMore> {
     return { tracks: [], continuation: null };
   },
+  // The mock runs where the native Canvas view does not exist, so no track has a Canvas.
+  async canvas() {
+    return null;
+  },
   async artist(id): Promise<ArtistDetail> {
     await delay(200);
     const artist = catalog.get(id) ?? item('youtube', 'artist', 0);
