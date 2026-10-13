@@ -351,6 +351,8 @@ struct Appearance {
     adaptive_theme: bool,
     ambient: bool,
     ambient_motion: bool,
+    /// Plays a track's Canvas in place of its cover where one exists.
+    canvas: bool,
     visualizer: bool,
     visualizer_style: String,
     /// Absent in a file written before the visualizer had profiles; then `visualizer` and
@@ -751,6 +753,7 @@ impl Default for Appearance {
             adaptive_theme: true,
             ambient: true,
             ambient_motion: true,
+            canvas: true,
             visualizer: true,
             visualizer_style: ui::VisualizerStyle::default().id().to_owned(),
             spectrum: None,
@@ -1096,6 +1099,10 @@ impl AppSettings {
     /// Whether fullscreen paints the ambient background sampled from the cover.
     pub fn ambient(&self) -> bool {
         self.values.appearance.ambient
+    }
+
+    pub fn canvas(&self) -> bool {
+        self.values.appearance.canvas
     }
 
     /// Whether the ambient background drifts. Off leaves it a still gradient, which is what
@@ -1716,6 +1723,11 @@ impl AppSettings {
 
     pub fn set_ambient(&mut self, ambient: bool, cx: &mut Context<Self>) {
         self.values.appearance.ambient = ambient;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_canvas(&mut self, canvas: bool, cx: &mut Context<Self>) {
+        self.values.appearance.canvas = canvas;
         self.schedule_save(cx);
     }
 

@@ -10,9 +10,9 @@ use input::{
 };
 use router::{Destination, NavigationEvent, SettingsTab, back, forward, navigate};
 use state::{
-    ArtistDetail, Detail, GenreDetails, Genres, Home, Io, Library, Network, Playback, Profile,
-    Queue, Reconnected, SYSTEM_FONT, Scan, Search, Session, SessionEvent, SessionState, SideTab,
-    SongDetail, Sonora,
+    ArtistDetail, Detail, Discover, GenreDetails, Genres, Home, Io, Library, Network, Playback,
+    Profile, Queue, Reconnected, SYSTEM_FONT, Scan, Search, Session, SessionEvent, SessionState,
+    SideTab, SongDetail, Sonora,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use ui::WindowFrame;
@@ -139,10 +139,27 @@ impl Root {
         .detach();
 
         let io = Io::global(cx);
-        let home_state = cx.new(|cx| Home::new(library.clone(), session.clone(), io.clone(), cx));
-        let home = cx.new(|cx| HomeView::new(home_state, playback.clone(), cx));
-        let history = Sonora::global(cx).history.clone();
-        let history = cx.new(|cx| HistoryView::new(history, playback.clone(), window, cx));
+        let history_state = Sonora::global(cx).history.clone();
+        let home_state = cx.new(|cx| {
+            Home::new(
+                library.clone(),
+                session.clone(),
+                history_state.clone(),
+                io.clone(),
+                cx,
+            )
+        });
+        let discover = cx.new(|cx| {
+            Discover::new(
+                session.clone(),
+                library.clone(),
+                history_state.clone(),
+                io.clone(),
+                cx,
+            )
+        });
+        let home = cx.new(|cx| HomeView::new(home_state, discover, playback.clone(), cx));
+        let history = cx.new(|cx| HistoryView::new(history_state, playback.clone(), window, cx));
 
         let search_library = library.clone();
 

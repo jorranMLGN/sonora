@@ -105,6 +105,10 @@ impl MusicApi for Tagged {
             .await
     }
 
+    async fn canvas(&self, track_id: &str) -> Result<Option<String>> {
+        self.inner.canvas(tag::untag(track_id)).await
+    }
+
     async fn track_tags(&self, track_id: &str) -> Result<TrackTags> {
         self.inner.track_tags(tag::untag(track_id)).await
     }

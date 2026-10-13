@@ -22,9 +22,9 @@ use music::scrobble::{Link, Secret};
 use music::{AccountChoice, SignIn, SignInPrompt, WritingSystem};
 use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
-    AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io, Playback,
-    SYSTEM_FONT, Scan, ScrobbleState, Scrobbling, Session, SessionState, Sleep, Sonora,
-    SpectrumPlace, SpectrumProfile, SpectrumSettings,
+    AppSettings, CdmState, Codec, CodecState, DiscordName, Drm, Failure,
+    FullscreenControlsAutohide, Io, Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling,
+    Session, SessionState, Sleep, Sonora, SpectrumPlace, SpectrumProfile, SpectrumSettings,
 };
 use ui::{ActiveTheme as _, Deck, LEADING, Scrollbar, Scroller, eyebrow, snapped};
 use ui::{
@@ -162,6 +162,8 @@ enum Slot {
     Gapless,
     Sleep,
     Widevine,
+    Canvas,
+    CanvasCodec,
     Equalizer,
     EqualizerPreset,
     EqualizerBands,
@@ -312,6 +314,7 @@ pub struct SettingsView {
     session: Entity<Session>,
     playback: Entity<Playback>,
     drm: Entity<Drm>,
+    codec: Entity<Codec>,
     settings: Entity<AppSettings>,
     tab: SettingsTab,
     search: Entity<Input>,
@@ -374,6 +377,12 @@ impl SettingsView {
         let scrobbling = Sonora::global(cx).scrobbling.clone();
         let drm = Sonora::global(cx).drm.clone();
         cx.observe(&drm, |_, _, cx| cx.notify()).detach();
+        let codec = Sonora::global(cx).codec.clone();
+        cx.observe(&codec, |_, _, cx| cx.notify()).detach();
+        // look once, so the row shows the truth before any canvas has played
+        codec.update(cx, |codec, _| {
+            codec.ready();
+        });
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
         cx.observe(&scrobbling, |_, _, cx| cx.notify()).detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
@@ -415,6 +424,7 @@ impl SettingsView {
             session,
             playback,
             drm,
+            codec,
             settings,
             tab: SettingsTab::General,
             search,
@@ -587,10 +597,9 @@ impl SettingsView {
                     .ambient()
                     .then_some(Slot::AmbientMotion),
             )
-            .chain([
-                Slot::FullscreenControlsAutohide,
-                Slot::Title("settings-group-spectrum-app"),
-            ])
+            .chain([Slot::FullscreenControlsAutohide, Slot::Canvas])
+            .chain(self.codec.read(cx).supported().then_some(Slot::CanvasCodec))
+            .chain([Slot::Title("settings-group-spectrum-app")])
             .chain(self.spectrum_slots(SpectrumPlace::App, cx))
             .chain([Slot::Title("settings-group-spectrum-mini")])
             .chain(self.spectrum_slots(SpectrumPlace::Mini, cx))
@@ -685,6 +694,11 @@ impl SettingsView {
             Slot::Theme => (t!("settings-theme"), t!("settings-theme-detail")),
             Slot::Adaptive => (t!("settings-adaptive"), t!("settings-adaptive-detail")),
             Slot::Ambient => (t!("settings-ambient"), t!("settings-ambient-detail")),
+            Slot::Canvas => (t!("settings-canvas"), t!("settings-canvas-detail")),
+            Slot::CanvasCodec => (
+                t!("settings-canvas-codec"),
+                t!("settings-canvas-codec-missing"),
+            ),
             Slot::AmbientMotion => (
                 t!("settings-ambient-motion"),
                 t!("settings-ambient-motion-detail"),
@@ -912,6 +926,8 @@ impl SettingsView {
             Slot::Theme => self.theme_row(cx).element,
             Slot::Adaptive => self.adaptive_row(cx).element,
             Slot::Ambient => self.ambient_row(cx).element,
+            Slot::Canvas => self.canvas_row(cx).element,
+            Slot::CanvasCodec => self.codec_row(cx).element,
             Slot::AmbientMotion => self.ambient_motion_row(cx).element,
             Slot::Spectrum(place, knob) => self.spectrum_row(place, knob, cx).element,
             Slot::Icons => self.icons_row(cx).element,
@@ -1777,6 +1793,66 @@ impl SettingsView {
                         .update(cx, |settings, cx| settings.set_ambient(!on, cx));
                 }))
                 .into_any_element(),
+        )
+    }
+
+    fn canvas_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).canvas();
+
+        self.row(
+            t!("settings-canvas"),
+            t!("settings-canvas-detail"),
+            muted,
+            small,
+            Switch::new("canvas", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_canvas(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// Cisco's decoder for canvases: where it stands, a download when there is none, and a
+    /// way to remove the one Sonora fetched. The ready detail is Cisco's required attribution.
+    fn codec_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let state = self.codec.read(cx).state();
+        let detail = match state {
+            CodecState::Ready => t!("settings-canvas-codec-ready"),
+            CodecState::Failed => t!("settings-canvas-codec-failed"),
+            CodecState::Installing => t!("settings-canvas-codec-installing"),
+            _ => t!("settings-canvas-codec-missing"),
+        };
+        let action = match state {
+            CodecState::Ready => Button::new("remove-codec")
+                .label(t!("settings-canvas-codec-remove"))
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.codec.update(cx, |codec, cx| codec.uninstall(cx));
+                })),
+            _ => Button::new("fetch-codec")
+                .label(t!("settings-canvas-codec-fetch"))
+                .small()
+                .outline()
+                .disabled(state == CodecState::Installing)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.codec.update(cx, |codec, cx| codec.install(cx));
+                })),
+        };
+
+        self.row(
+            t!("settings-canvas-codec"),
+            detail,
+            muted,
+            small,
+            action.into_any_element(),
         )
     }
 

@@ -1,15 +1,17 @@
 use std::rc::Rc;
 
+mod featured;
+
 use crate::chrome::Chrome;
 use crate::shared::menus::{Item, ItemMenu};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, MouseDownEvent, Pixels, Point, Render, ScrollHandle, WeakEntity,
-    Window, div, px,
+    AnyElement, Context, Entity, Hsla, MouseDownEvent, Pixels, Point, Render, ScrollHandle,
+    SharedString, Task, WeakEntity, Window, div, px,
 };
 use i18n::t;
-use music::GenreItem;
-use state::{Home, Network, Playback, SessionState, Sonora};
+use music::{GenreItem, GenreSection};
+use state::{Discover, Home, Network, Playback, SessionState, Sonora};
 use ui::{ActiveTheme as _, Mode, Popup, Scrollbar, Scroller};
 
 use crate::shared::cells;
@@ -22,6 +24,13 @@ const STEADY: Pixels = px(0.5);
 
 pub(crate) struct HomeView {
     home: Entity<Home>,
+    discover: Entity<Discover>,
+    /// Shelves for New releases, drawn above Quick picks; `shelves` draws the rest.
+    fresh: Entity<Shelves>,
+    resume: Pager,
+    /// The hero's cover and its sampled hue, kept so a cover is sampled once.
+    tint: Option<(String, Option<Hsla>)>,
+    sampling: Option<Task<()>>,
     playback: Entity<Playback>,
     playback_status: PlaybackStatus,
     shelves: Entity<Shelves>,
@@ -53,6 +62,7 @@ impl Pager {
 impl HomeView {
     pub(crate) fn new(
         home: Entity<Home>,
+        discover: Entity<Discover>,
         playback: Entity<Playback>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -66,6 +76,7 @@ impl HomeView {
             cx.notify();
         })
         .detach();
+        cx.observe(&discover, |_, _, cx| cx.notify()).detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 
@@ -74,6 +85,9 @@ impl HomeView {
 
         let shelves = cx.new(|cx| Shelves::new("home-shelf", me, playback.clone(), cx));
         cx.observe(&shelves, |_, _, cx| cx.notify()).detach();
+
+        let fresh = cx.new(|cx| Shelves::new("home-fresh", me, playback.clone(), cx));
+        cx.observe(&fresh, |_, _, cx| cx.notify()).detach();
 
         let current_playback = playback_status(&playback, cx);
         cx.observe(&playback, |this, playback, cx| {
@@ -87,6 +101,11 @@ impl HomeView {
 
         Self {
             home,
+            discover,
+            fresh,
+            resume: Pager::default(),
+            tint: None,
+            sampling: None,
             playback,
             playback_status: current_playback,
             shelves,
@@ -103,6 +122,63 @@ impl HomeView {
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.home
             .update(cx, |home, cx| home.set_visible(visible, cx));
+        self.discover
+            .update(cx, |discover, cx| discover.set_visible(visible, cx));
+    }
+
+    /// Samples the featured cover's hue once per cover; the hero redraws when it lands.
+    fn sample(&mut self, cover: Option<String>, cx: &mut Context<Self>) {
+        let Some(cover) = cover else {
+            self.tint = None;
+            return;
+        };
+        if self
+            .tint
+            .as_ref()
+            .is_some_and(|(sampled, _)| *sampled == cover)
+        {
+            return;
+        }
+        self.tint = Some((cover.clone(), None));
+        let task = ui::tint(SharedString::from(cover.clone()), cx);
+        self.sampling = Some(cx.spawn(async move |this, cx| {
+            let tint = task.await;
+            this.update(cx, |this, cx| {
+                this.tint = Some((cover, tint));
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Jump back in: one page of what the user played last, across every provider.
+    fn resume(&mut self, width: Pixels, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let items = self.home.read(cx).resume(cx);
+        if items.is_empty() {
+            return None;
+        }
+        let shape = Shape::new(width, items.len());
+        let pages = shape.pages;
+        let page = self.resume.fit(shape.columns, shape.pages);
+        let opened = items.clone();
+        let home = cx.entity().downgrade();
+
+        Some(
+            Picks::mixed("home-resume", items, self.playback.clone(), width, page)
+                .title("home-resume")
+                .on_previous(cx.listener(|this, _, _, cx| {
+                    this.resume.page = this.resume.page.saturating_sub(1);
+                    cx.notify();
+                }))
+                .on_next(cx.listener(move |this, _, _, cx| {
+                    this.resume.page = (this.resume.page + 1).min(pages.saturating_sub(1));
+                    cx.notify();
+                }))
+                .on_context_menu(move |place, event, _, cx| {
+                    open_item_menu(&home, &opened, place, event, cx);
+                })
+                .into_any_element(),
+        )
     }
 
     /// The Quick picks deck, headed by the name of the account it was drawn from. It is the
@@ -147,6 +223,14 @@ impl HomeView {
             .into_any_element()
     }
 
+    /// Whether every section of the page is empty, so a failure has nothing to stand beside.
+    fn blank(&self, cx: &Context<Self>) -> bool {
+        let discover = self.discover.read(cx);
+        discover.releases().is_empty()
+            && discover.mixes().is_empty()
+            && self.home.read(cx).resume(cx).is_empty()
+    }
+
     /// The page home shows in place of its shelves: the No connection state the moment the
     /// network is gone, since every row here comes from the provider, and the reason its feed
     /// failed otherwise. Asking for the feed again is the retry, and it starts the pauses
@@ -175,7 +259,9 @@ impl HomeView {
 
 impl Render for HomeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(failure) = self.failure(cx) {
+        if let Some(failure) = self.failure(cx)
+            && self.blank(cx)
+        {
             return div().size_full().child(failure).into_any_element();
         }
 
@@ -192,15 +278,53 @@ impl Render for HomeView {
             }))
         });
 
+        let discover = self.discover.read(cx);
+        let featured = discover.featured();
+        let cover = featured
+            .as_ref()
+            .and_then(|featured| featured::cover(featured, discover));
+        let releases = discover.releases();
+        let mixes = discover.mixes();
+        self.sample(cover, cx);
+        let tint = self.tint.as_ref().and_then(|(_, tint)| *tint);
+        let hero = featured.as_ref().and_then(|featured| {
+            featured::hero(featured, self.discover.read(cx), tint, &self.playback, cx)
+        });
+
+        let resume = self.resume(available, cx);
         let picks = self.quick_picks(available, cx);
-        let sections = self.home.read(cx).sections();
-        let feeding = self.home.read(cx).is_feeding();
         let width = self.width;
+
+        let fresh: Vec<GenreSection> = (!releases.is_empty())
+            .then(|| GenreSection {
+                title: t!("home-new-releases").to_string(),
+                items: releases.iter().cloned().map(GenreItem::Album).collect(),
+                provider: None,
+            })
+            .into_iter()
+            .collect();
+        let fresh = (!fresh.is_empty()).then(|| {
+            self.fresh.update(cx, |shelves, cx| {
+                shelves.render(Rc::new(fresh), Mode::Grid, width, window, cx)
+            })
+        });
+
+        let feed = self.home.read(cx).sections();
+        let feeding = self.home.read(cx).is_feeding();
+        let mut lower: Vec<GenreSection> = mixes
+            .iter()
+            .map(|mix| GenreSection {
+                title: t!("home-because", artist = mix.seed.artists.as_str()).to_string(),
+                items: mix.tracks.iter().cloned().map(GenreItem::Track).collect(),
+                provider: None,
+            })
+            .collect();
+        lower.extend(feed.iter().cloned());
         let shelves = self
             .shelves
-            .update(cx, |shelves, cx| match sections.is_empty() && feeding {
+            .update(cx, |shelves, cx| match lower.is_empty() && feeding {
                 true => shelves.pending(width, cx),
-                false => vec![shelves.render(sections, Mode::Grid, width, window, cx)],
+                false => vec![shelves.render(Rc::new(lower), Mode::Grid, width, window, cx)],
             });
 
         Scroller::new("home-page", &self.scrollbar)
@@ -210,6 +334,9 @@ impl Render for HomeView {
                     .flex()
                     .flex_col()
                     .gap_8()
+                    .children(hero)
+                    .children(resume)
+                    .children(fresh)
                     .child(picks)
                     .children(shelves),
             )

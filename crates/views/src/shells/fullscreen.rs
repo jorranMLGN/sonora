@@ -20,6 +20,7 @@ use ui::{
 };
 
 use crate::chrome::{Aside, TitleBarOptions};
+use crate::shared::canvas::{CanvasArt, canvas_playing};
 use crate::shared::menus::ItemMenu;
 use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon};
 use crate::shared::veil::{Edge, veil};
@@ -100,6 +101,8 @@ pub struct FullscreenView {
     visualizer: VisualizerDrive,
     root_bounds: Rc<Cell<Bounds<Pixels>>>,
     artwork_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The playing track's Canvas, laid over the cover while one plays.
+    canvas_art: Entity<CanvasArt>,
 }
 
 impl FullscreenView {
@@ -111,6 +114,9 @@ impl FullscreenView {
         cx.observe(&library, |_, _, cx| cx.notify()).detach();
         let settings = Sonora::global(cx).settings.clone();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
+        let canvas_state = Sonora::global(cx).canvas.clone();
+        cx.observe(&canvas_state, |_, _, cx| cx.notify()).detach();
+        let canvas_art = cx.new(CanvasArt::new);
         let aside = cx.new(|cx| Aside::new(queue.clone(), playback.clone(), SideTab::Lyrics, cx));
         aside.update(cx, |aside, _| aside.strip());
         let me = cx.entity_id();
@@ -152,6 +158,7 @@ impl FullscreenView {
             visualizer: VisualizerDrive::default(),
             root_bounds: Rc::new(Cell::new(Bounds::default())),
             artwork_bounds: Rc::new(Cell::new(Bounds::default())),
+            canvas_art,
         };
         this.stir(cx);
         this
@@ -357,6 +364,11 @@ impl FullscreenView {
             || small.as_ref().is_some_and(|url| url.starts_with("file://"));
         let waiting = !local && album.is_some() && cover_large.is_none();
         let artwork_bounds = self.artwork_bounds.clone();
+        let canvas_art = canvas_playing(cx).then(|| {
+            self.canvas_art
+                .update(cx, |art, _| art.set_side(raster_side, raster_side, radius));
+            self.canvas_art.clone()
+        });
 
         div()
             .id("fullscreen-artwork")
@@ -405,6 +417,13 @@ impl FullscreenView {
                                     art.opacity(t)
                                 }),
                         )
+                    })
+                    .when_some(canvas_art, |this, art| {
+                        this.child(div().absolute().top(pad).left(pad).child(art).motion(
+                            ("cover-canvas", revision),
+                            Motion::Slow,
+                            |art, t| art.opacity(t),
+                        ))
                     }),
             )
     }

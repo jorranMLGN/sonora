@@ -47,6 +47,7 @@ serde_norway.workspace = true
 storage.workspace = true
 symphonia.workspace = true
 tokio.workspace = true
+video.workspace = true
 widevine.workspace = true
 ytmusic.workspace = true
 

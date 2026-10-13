@@ -4450,6 +4450,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mp4"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "num-rational",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "muda"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4510,6 +4524,7 @@ dependencies = [
  "storage",
  "symphonia",
  "tokio",
+ "video",
  "widevine",
  "ytmusic",
 ]
@@ -4759,6 +4774,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -5229,6 +5245,26 @@ checksum = "a0b3d059e795d52b8a72fef45658620edd4d9c359b338564aa14391ffa511ed5"
 dependencies = [
  "is-wsl",
  "libc",
+]
+
+[[package]]
+name = "openh264"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc9071a0b5f9c501ddd01066c2600d922cc799dc450a52975222bcda7755a08"
+dependencies = [
+ "openh264-sys2",
+ "wide",
+]
+
+[[package]]
+name = "openh264-sys2"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ada29a4cadc13d4d326737af87c13e224210d7d99fe47594e9f3f9b0102fd70"
+dependencies = [
+ "libloading",
+ "sha2",
 ]
 
 [[package]]
@@ -6794,6 +6830,15 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "same-file"
@@ -8892,12 +8937,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "video"
+version = "0.38.0"
+dependencies = [
+ "anyhow",
+ "bzip2",
+ "dirs",
+ "log",
+ "mp4",
+ "openh264",
+ "reqwest 0.13.4",
+]
+
+[[package]]
 name = "views"
 version = "0.38.0"
 dependencies = [
  "gpui",
  "i18n",
  "icons",
+ "image",
  "input",
  "jiff",
  "log",
@@ -9438,6 +9497,16 @@ dependencies = [
  "home",
  "rustix 0.38.44",
  "winsafe",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
 ]
 
 [[package]]

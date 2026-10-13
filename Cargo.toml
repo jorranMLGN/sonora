@@ -20,6 +20,7 @@ router = { path = "crates/router" }
 ui = { path = "crates/ui" }
 views = { path = "crates/views" }
 webview = { path = "crates/webview" }
+video = { path = "crates/video" }
 widevine = { path = "crates/widevine" }
 
 anyhow = "1.0"
@@ -27,6 +28,7 @@ async-trait = "0.1"
 base64 = "0.22"
 blowfish = "0.9"
 bytes = "1"
+bzip2 = "0.6"
 cbc = "0.1"
 cc = "1"
 flate2 = "1"
@@ -88,6 +90,8 @@ ksni = { version = "0.3", default-features = false, features = ["async-io", "blo
 libc = "0.2"
 lofty = "0.25"
 log = "0.4"
+mp4 = "0.14"
+openh264 = { version = "0.9.8", default-features = false, features = ["libloading"] }
 md-5 = "0.10"
 moka = { version = "0.12.15", features = ["future", "sync"] }
 oauth2 = "5.0"

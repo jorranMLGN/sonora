@@ -34,6 +34,11 @@ const TAIL_ROWS: usize = 2;
 const BLUR: f32 = 0.13;
 const BACKGROUND_SINGING_BLUR: Pixels = px(0.75);
 const VEIL: f32 = 0.3;
+/// The tallest the canvas above the queue may be, as a share of the window.
+const CANVAS_SHARE: f32 = 0.55;
+/// How much of the canvas above the queue shows through, so it sits back behind the list the
+/// way a cover would rather than competing with it.
+const CANVAS_DIM: f32 = 0.8;
 const HAZE: f32 = 0.45;
 const VERSE_FADE: f32 = 1.25;
 const PAST: f32 = 0.4;
@@ -254,6 +259,8 @@ impl QueuePosition {
 }
 
 pub(crate) struct Aside {
+    /// The playing track's Canvas, shown above the queue while one plays.
+    canvas_art: Entity<crate::shared::canvas::CanvasArt>,
     queue: Entity<Queue>,
     playback: Entity<Playback>,
     lyrics: Entity<Lyrics>,
@@ -316,6 +323,9 @@ impl Aside {
         tab: SideTab,
         cx: &mut Context<Self>,
     ) -> Self {
+        let canvas_state = Sonora::global(cx).canvas.clone();
+        cx.observe(&canvas_state, |_, _, cx| cx.notify()).detach();
+        let canvas_art = cx.new(crate::shared::canvas::CanvasArt::new);
         cx.observe(&queue, |this, queue, cx| {
             let revision = queue.read(cx).revision();
             if this
@@ -385,6 +395,7 @@ impl Aside {
             arrival: 0,
             departure: 0,
             lyrics_wrap_width: None,
+            canvas_art,
             lyrics_wrap_size: None,
             lyrics_wraps: HashMap::new(),
             lane_rooms: HashMap::new(),
@@ -1805,6 +1816,19 @@ impl Render for Aside {
         if self.anchor && self.tab == SideTab::Queue {
             self.pin(sections, window, cx);
         }
+        let theme = *cx.theme();
+        // only the sidebar's own aside: fullscreen strips its aside and draws the canvas large
+        let canvas_art = (self.titled
+            && self.tab == SideTab::Queue
+            && crate::shared::canvas::canvas_playing(cx))
+        .then(|| {
+            let width = Chrome::sidebar_right(cx) - theme.metrics.pad * 2.;
+            // square, like a cover, cropped from the upright clip
+            let height = width.min(window.viewport_size().height * CANVAS_SHARE);
+            self.canvas_art
+                .update(cx, |art, _| art.set_side(width, height, theme.radius * 2.));
+            self.canvas_art.clone()
+        });
 
         div()
             .id("aside")
@@ -1843,6 +1867,15 @@ impl Render for Aside {
                     })
                     .when(self.tab == SideTab::Jam, |this| {
                         this.child(self.jam.clone())
+                    })
+                    .when_some(canvas_art, |this, art| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .p(theme.metrics.pad)
+                                .opacity(CANVAS_DIM)
+                                .child(art),
+                        )
                     })
                     .when(self.tab == SideTab::Queue && empty, |this| {
                         this.child(vacant(t!("queue-empty"), cx).flex_1())

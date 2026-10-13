@@ -392,6 +392,13 @@ release-meta = { $year } • { $kind }
 # home page
 home-quick-picks = Швидкий вибір
 home-quick-picks-empty = Додайте кілька треків, і вони з'являться тут
+home-featured-release = Новий реліз · { $provider }
+home-featured-mix = Мікс
+home-featured-play = Слухати
+home-featured-open = Відкрити альбом
+home-resume = Продовжити
+home-new-releases = Нове від ваших виконавців
+home-because = Бо ви слухали { $artist }
 
 # search page
 search-placeholder = Що хочете послухати?

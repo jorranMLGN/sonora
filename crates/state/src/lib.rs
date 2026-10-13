@@ -1,8 +1,11 @@
 mod artist;
+mod canvas;
 mod catalog;
+mod codec;
 mod cover;
 mod detail;
 mod discord;
+mod discover;
 mod drm;
 mod genre;
 mod history;
@@ -33,8 +36,11 @@ mod usage;
 mod window_shape;
 
 pub use artist::ArtistDetail;
+pub use canvas::Canvas;
+pub use codec::{Codec, CodecState};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
+pub use discover::{Discover, Featured, Mix};
 pub use drm::{CdmState, Drm};
 pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
@@ -158,6 +164,8 @@ pub struct Sonora {
     pub session: Entity<Session>,
     pub cover: Entity<Cover>,
     pub drm: Entity<Drm>,
+    pub codec: Entity<Codec>,
+    pub canvas: Entity<Canvas>,
     pub library: Entity<Library>,
     pub history: Entity<History>,
     pub jam: Entity<Jam>,
@@ -231,6 +239,17 @@ pub fn init(
     });
     let cover = cx.new(|cx| Cover::new(session.clone(), playback.clone(), io.clone(), cx));
     let drm = cx.new(|cx| Drm::new(session.clone(), io.clone(), cx));
+    let codec = cx.new(|_| Codec::new(io.clone()));
+    let canvas = cx.new(|cx| {
+        Canvas::new(
+            session.clone(),
+            playback.clone(),
+            settings.clone(),
+            codec.clone(),
+            io.clone(),
+            cx,
+        )
+    });
     let updates = cx.new(|cx| Updates::new(settings.clone(), io.clone(), cx));
     let parts = jam::Parts {
         playback: playback.clone(),
@@ -258,6 +277,8 @@ pub fn init(
         session,
         cover,
         drm,
+        codec,
+        canvas,
         library,
         history,
         jam,

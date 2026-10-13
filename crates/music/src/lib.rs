@@ -28,6 +28,7 @@ pub mod tag;
 pub mod tagged;
 mod trim;
 pub mod trouble;
+pub mod video;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -125,6 +126,12 @@ pub trait MusicApi: Send + Sync {
     }
 
     async fn set_track_saved(&self, track_id: &str, saved: bool) -> Result<()>;
+
+    /// The url of the short looping video an artist attached to this track, or `None` when it
+    /// has none. Only Spotify answers; every other provider has no such thing.
+    async fn canvas(&self, _track_id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
 
     /// Reads what the file itself says, for a provider whose tracks are files.
     async fn track_tags(&self, _track_id: &str) -> Result<TrackTags> {

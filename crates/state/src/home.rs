@@ -7,7 +7,9 @@ use std::sync::Arc;
 use gpui::{App, Context, Entity, Task};
 use music::{GenreItem, GenreSection, HomeFeed, MusicApi, Track};
 
-use crate::{Io, Library, LibraryPart, LibraryState, Network, Session, SessionEvent, Shelf, join};
+use crate::{
+    History, Io, Library, LibraryPart, LibraryState, Network, Session, SessionEvent, Shelf, join,
+};
 
 const GROUP_SIZE: usize = 10;
 const LIMIT: usize = GROUP_SIZE * 3;
@@ -22,10 +24,13 @@ const RETRIES: [Duration; 3] = [
 /// How many rows Quick picks holds at most: the provider's own recent items first, then its
 /// picks up to here.
 const PICKS_LIMIT: usize = 30;
+/// How many items Jump back in shows.
+const RESUME: usize = 8;
 
 pub struct Home {
     library: Entity<Library>,
     session: Entity<Session>,
+    history: Entity<History>,
     io: Io,
     /// What the provider listed as played lately, as it came.
     recent: Rc<Vec<GenreItem>>,
@@ -60,6 +65,7 @@ impl Home {
     pub fn new(
         library: Entity<Library>,
         session: Entity<Session>,
+        history: Entity<History>,
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -86,10 +92,12 @@ impl Home {
         .detach();
 
         cx.observe(&library, |this, _, cx| this.mix(cx)).detach();
+        cx.observe(&history, |_, _, cx| cx.notify()).detach();
 
         let mut home = Self {
             library,
             session,
+            history,
             io,
             recent: Rc::new(Vec::new()),
             picks: Rc::new(Vec::new()),
@@ -465,6 +473,22 @@ impl Home {
         self.quick_picks.clone()
     }
 
+    /// What Jump back in shows: every provider's recently played, woven, then the listening
+    /// history, one copy of each, `RESUME` at most.
+    pub fn resume(&self, cx: &App) -> Rc<Vec<GenreItem>> {
+        let mut seen = HashSet::new();
+        let history = self.history.read(cx).tracks().iter().cloned();
+        Rc::new(
+            self.recent
+                .iter()
+                .cloned()
+                .chain(history.map(GenreItem::Track))
+                .filter(|item| seen.insert(item_key(item)))
+                .take(RESUME)
+                .collect(),
+        )
+    }
+
     /// Whether Quick picks are still on their way: the feed is in flight and nothing of it has
     /// landed yet, or the library the picks would otherwise be mixed from is.
     pub fn is_loading(&self, cx: &App) -> bool {
@@ -517,6 +541,17 @@ fn credited(provider: &str, sections: &[GenreSection]) -> Vec<GenreSection> {
             ..section.clone()
         })
         .collect()
+}
+
+/// What tells two shelf items apart, whatever their kind.
+fn item_key(item: &GenreItem) -> String {
+    match item {
+        GenreItem::Playlist(playlist) => format!("playlist:{}", playlist.id),
+        GenreItem::Album(album) => format!("album:{}", album.id),
+        GenreItem::Genre(genre) => format!("genre:{}", genre.id),
+        GenreItem::Artist(artist) => format!("artist:{}", artist.id),
+        GenreItem::Track(track) => format!("track:{}", track.id.as_deref().unwrap_or(&track.name)),
+    }
 }
 
 fn blank(item: &GenreItem) -> bool {
