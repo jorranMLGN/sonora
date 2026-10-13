@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { useStore } from './store';
+import { reason, useStore } from './store';
 
 /** Loads something from the bridge, reporting failures through the store; `reload` retries. */
 export function useLoad<T>(load: () => Promise<T>, deps: unknown[]) {
@@ -13,7 +13,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[]) {
     setLoading(true);
     run()
       .then(setData)
-      .catch((error: Error) => useStore.setState({ error: error.message }))
+      .catch((error: Error) => useStore.setState({ error: reason(error) }))
       .finally(() => setLoading(false));
   }, [run]);
 

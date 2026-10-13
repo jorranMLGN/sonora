@@ -185,8 +185,8 @@ pub fn cancel_sign_in(slug: String) -> Answer<()> {
     Ok(())
 }
 
-/// Signs out of `slug`: its stored credentials, its live session, its tracks in the queue and
-/// its snapshots go. SoundCloud then carries on as a guest, as on a fresh install.
+/// Signs out of `slug`: its stored credentials, its live session, its tracks in the queue, its
+/// library listings, its saved ids and its snapshots go. SoundCloud then carries on as a guest, as on a fresh install.
 #[uniffi::export]
 pub fn sign_out(slug: String) -> Answer<()> {
     let core = core::get()?;
@@ -203,6 +203,7 @@ pub fn sign_out(slug: String) -> Answer<()> {
     core.sessions.set(slug, SessionState::SignedOut);
     core.events.session(slug, SessionState::SignedOut);
     core.send(Command::Forget { slug, tracks: true })?;
+    core.library.forget(slug);
     if slug == "soundcloud" {
         core.restore_one(provider);
     }

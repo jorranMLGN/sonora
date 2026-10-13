@@ -56,6 +56,10 @@ export function startStore(): void {
   bridge.on('onQueue', (queue) => apply({ queue }));
   bridge.on('onSession', ({ slug, state }) => {
     if (state.kind === 'signedIn') loadSaved();
+    if (state.kind === 'signedOut') {
+      dropSaved(slug);
+      loadSaved();
+    }
     apply((s) => ({
       sessions: { ...s.sessions, [slug]: state },
       providers: s.providers.map((p) =>
@@ -111,7 +115,7 @@ export function signIn(provider: ProviderInfo, option: SignInOption): void {
 const SIGN_IN = 'ERR_SIGN_IN_';
 
 /** The core's own words for a failure, without the native module's "Calling … has failed" lead. */
-function reason(error: Error): string {
+export function reason(error: Error): string {
   const parts = error.message.split('Caused by: ');
   return parts[parts.length - 1].trim();
 }
@@ -135,6 +139,17 @@ export function markSaved(kind: LibraryPart, ids: string[]): void {
   });
 }
 
+/** Forgets the hearts of the provider `slug`, whose ids all start with `slug:`. */
+function dropSaved(slug: string): void {
+  useStore.setState((s) => {
+    const saved: Record<string, boolean> = {};
+    Object.entries(s.saved).forEach(([key, on]) => {
+      if (!key.slice(key.indexOf('|') + 1).startsWith(`${slug}:`)) saved[key] = on;
+    });
+    return { saved };
+  });
+}
+
 /** Asks the core for every saved id and replaces what the store knew. */
 export function loadSaved(): void {
   bridge
@@ -146,7 +161,7 @@ export function loadSaved(): void {
       );
       useStore.setState({ saved });
     })
-    .catch((error: Error) => useStore.setState({ error: error.message }));
+    .catch((error: Error) => useStore.setState({ error: reason(error) }));
 }
 
 /** Flips the heart at once and tells the provider; a refusal flips it back. */
@@ -157,6 +172,6 @@ export function toggleSaved(kind: LibraryPart, id: string): void {
   put(next);
   bridge.setSaved(id, kind, next).catch((error: Error) => {
     put(!next);
-    useStore.setState({ error: error.message });
+    useStore.setState({ error: reason(error) });
   });
 }

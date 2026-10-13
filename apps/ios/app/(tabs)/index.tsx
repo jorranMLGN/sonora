@@ -26,11 +26,12 @@ function heading(section: Section): string {
 }
 
 export default function Home() {
-  // Every provider whose session is up feeds Home, so a session coming up loads it again.
+  // Every provider whose session is up feeds Home, so a session coming up, going, or changing
+  // from guest to an account (or to another account) loads it again.
   const live = useStore((s) =>
     s.providers
       .filter((p) => p.session.kind === 'signedIn' || p.session.kind === 'guest')
-      .map((p) => p.slug)
+      .map((p) => `${p.slug}:${p.session.kind}:${p.account ?? ''}`)
       .join(','),
   );
   const { data, loading, reload } = useLoad(() => bridge.home(), [live]);

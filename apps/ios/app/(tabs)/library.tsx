@@ -10,7 +10,7 @@ import { Screen } from '../../src/components/Screen';
 import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
-import { attempt, markSaved, useStore } from '../../src/store';
+import { attempt, markSaved, reason, useStore } from '../../src/store';
 import { colors, radii, sizes, spacing, typography } from '../../src/theme';
 
 const PARTS: LibraryPart[] = ['tracks', 'albums', 'artists', 'playlists'];
@@ -28,7 +28,10 @@ export default function Library() {
   // A guest session has no library, so only accounts get a chip.
   const usable = providers.filter((p) => p.session.kind === 'signedIn');
   const [chosen, setChosen] = useState<string | null>(null);
-  const slug = chosen ?? usable[0]?.slug ?? null;
+  // A chosen provider that signed out falls back to the first one still signed in.
+  const slug = usable.find((p) => p.slug === chosen)?.slug ?? usable[0]?.slug ?? null;
+  // Signing in to another account of the same provider lists the library again.
+  const account = usable.find((p) => p.slug === slug)?.account ?? null;
   const [part, setPart] = useState<LibraryPart>('tracks');
   const [items, setItems] = useState<Track[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -51,9 +54,9 @@ export default function Library() {
         setHasMore(result.hasMore);
         page.current += 1;
       })
-      .catch((error: Error) => useStore.setState({ error: error.message }))
+      .catch((error: Error) => useStore.setState({ error: reason(error) }))
       .finally(() => mine === generation.current && setLoading(false));
-  }, [slug, part]);
+  }, [slug, part, account]);
 
   /** Draws the part's last snapshot at once, then reads the first page from the network. */
   const restart = useCallback(

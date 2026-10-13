@@ -370,8 +370,7 @@ impl Deck {
 
     /// Drops the engine of `slug`, built on a session that is gone, so the next play builds one
     /// on the session there is now. With `tracks`, also takes the provider's tracks out of the
-    /// queue and its snapshots out of the store; a current track that goes leaves the next one
-    /// kept up, paused at its start.
+    /// queue; a current track that goes leaves the next one kept up, paused at its start.
     fn forget(&mut self, slug: &'static str, tracks: bool) {
         if let Some(engine) = self.engines.remove(slug) {
             engine.player.pause();
@@ -385,7 +384,6 @@ impl Deck {
             self.save_position();
         }
         if tracks {
-            self.store.forget(&format!("{}{slug}", store::SNAPSHOT));
             let current = self.queue.current().map(|item| item.id.clone());
             if self.queue.drop_provider(slug) {
                 self.preloaded = None;

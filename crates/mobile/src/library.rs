@@ -3,7 +3,8 @@
 //!
 //! A library part is read through the provider's own paging and handed out in pages of
 //! `PAGE`, so the first rows draw while the rest still arrive. The first page of every part is
-//! kept in `mobile.sqlite`, so Library draws it again before the network answers.
+//! kept in `mobile.sqlite` under the provider's snapshot keys, so Library draws it again before
+//! the network answers and a sign-out drops it with the rest of the provider's data.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -184,6 +185,20 @@ impl Library {
             store.save(&snapshot_key(slug, part), page);
         }
     }
+
+    /// Drops everything known about the library of `slug`: its listings, its saved ids and its
+    /// snapshots. A sign-out calls it, so the next account starts from nothing.
+    pub fn forget(&self, slug: &str) {
+        if let Ok(mut listings) = self.listings.lock() {
+            listings.retain(|(owner, _), _| owner != slug);
+        }
+        if let Ok(mut saved) = self.saved.lock() {
+            saved.retain(|(owner, _), _| owner != slug);
+        }
+        if let Ok(store) = self.store.lock() {
+            store.forget(&Store::snapshots(slug));
+        }
+    }
 }
 
 impl Listing {
@@ -301,7 +316,7 @@ pub async fn page(core: Arc<Core>, slug: &str, part: Part, page: u32) -> Result<
         core.library.replace(slug, part, ids);
     }
     let answer = listing.page(page);
-    if page == 0 {
+    if page == 0 && current(&core, slug, &session.api) {
         core.library.keep(slug, part, &answer);
     }
     Ok(answer)
@@ -475,6 +490,13 @@ fn signed_in(core: &Core, slug: &str) -> bool {
     core.providers()
         .into_iter()
         .any(|info| info.slug == slug && matches!(info.session, SessionState::SignedIn { .. }))
+}
+
+/// Whether `api` is still the live session of `slug`, so a reading that outlived a sign-out
+/// writes nothing back.
+fn current(core: &Core, slug: &str, api: &Arc<dyn MusicApi>) -> bool {
+    core.session(slug)
+        .is_some_and(|session| Arc::ptr_eq(&session.api, api))
 }
 
 /// The slug and the api of the provider the tagged `id` belongs to.
@@ -700,5 +722,5 @@ fn snapshot_key(slug: &str, part: Part) -> String {
         Part::Artists => "artists",
         Part::Playlists => "playlists",
     };
-    format!("library/{slug}/{part}")
+    format!("{}library:{part}", Store::snapshots(slug))
 }

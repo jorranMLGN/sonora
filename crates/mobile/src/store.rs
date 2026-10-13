@@ -1,6 +1,7 @@
 //! `mobile.sqlite`: what the phone keeps between launches, as JSON values under fixed keys.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params};
@@ -19,8 +20,10 @@ pub const QUEUE: &str = "queue";
 /// Where the current track was, in milliseconds.
 pub const POSITION: &str = "position";
 /// What every key holding a copy of a provider's data starts with, followed by the provider's
-/// slug, so a sign-out can drop them all at once.
+/// slug and a colon, so a sign-out can drop them all at once.
 pub const SNAPSHOT: &str = "snapshot:";
+/// How long a write waits for the other connection to the database to finish its own.
+const BUSY: Duration = Duration::from_secs(2);
 
 /// An open connection to the database. The player keeps one for the queue and the library
 /// another for its snapshots.
@@ -32,6 +35,9 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection =
             Connection::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+        connection
+            .busy_timeout(BUSY)
+            .context("cannot set the busy timeout")?;
         connection
             .execute_batch(SCHEMA)
             .context("cannot create the mobile schema")?;
@@ -72,6 +78,11 @@ impl Store {
         if let Err(error) = written {
             log::warn!("store: cannot save {key}: {error:#}");
         }
+    }
+
+    /// The start of every key holding a copy of the data of the provider `slug`.
+    pub fn snapshots(slug: &str) -> String {
+        format!("{SNAPSHOT}{slug}:")
     }
 
     /// Deletes every value whose key starts with `prefix`.
