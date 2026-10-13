@@ -21,6 +21,7 @@ function nativeBridge(core: SonoraCoreModule): Bridge {
     playlist: (id) => core.playlist(id),
     playlistMore: (id, continuation) => core.playlistMore(id, continuation),
     artist: (id) => core.artist(id),
+    canvas: (id) => core.canvas(id),
     play: (ids, index, origin) => core.play(ids, index, origin),
     toggle: () => core.toggle(),
     next: () => core.next(),

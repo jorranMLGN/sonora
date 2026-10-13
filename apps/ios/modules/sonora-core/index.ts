@@ -1,4 +1,6 @@
-import { NativeModule, requireOptionalNativeModule } from 'expo';
+import { NativeModule, requireNativeView, requireOptionalNativeModule } from 'expo';
+import type { ComponentType } from 'react';
+import type { ViewProps } from 'react-native';
 
 /** A track, album, playlist or artist. Its id carries its provider, as `soundcloud:123`. */
 export type Item = {
@@ -151,9 +153,27 @@ export declare class SonoraCoreModule extends NativeModule<Events> {
   playlist(id: string): Promise<PlaylistDetail>;
   playlistMore(id: string, continuation: string): Promise<PlaylistMore>;
   artist(id: string): Promise<ArtistDetail>;
+  /** The url of a track's Canvas, the looping MP4 Spotify shows while it plays, or null. */
+  canvas(id: string): Promise<string | null>;
   playerState(): Promise<PlayerState>;
   queue(): Promise<QueueSnapshot>;
 }
 
 /** The native module, or null where the build does not carry it (Expo Go, the web). */
-export default requireOptionalNativeModule<SonoraCoreModule>('SonoraCore');
+const core = requireOptionalNativeModule<SonoraCoreModule>('SonoraCore');
+export default core;
+
+/**
+ * A track's Canvas: `url` muted, looping and filling the view. `onReady` fires once the first
+ * frame can be drawn, `onFailed` when the video cannot play. `playing` defaults to true.
+ */
+export type CanvasViewProps = ViewProps & {
+  url: string;
+  playing?: boolean;
+  onReady?: () => void;
+  onFailed?: () => void;
+};
+
+/** The native Canvas view, or null where the build does not carry the module. */
+export const CanvasView: ComponentType<CanvasViewProps> | null =
+  core === null ? null : requireNativeView<CanvasViewProps>('SonoraCore');

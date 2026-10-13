@@ -158,6 +158,24 @@ public class SonoraCoreModule: Module {
       Bridge.artist(try await SonoraCore.artist(id: id))
     }
 
+    // The url of a track's Canvas, the looping MP4 Spotify shows while it plays, or nil.
+    AsyncFunction("canvas") { (id: String) async throws -> String? in
+      try await SonoraCore.canvas(id: id)
+    }
+
+    // The Canvas video itself, muted and looping, which leaves the audio session alone.
+    View(CanvasView.self) {
+      Events("onReady", "onFailed")
+
+      Prop("url") { (view: CanvasView, url: String?) in
+        view.setUrl(url)
+      }
+
+      Prop("playing") { (view: CanvasView, playing: Bool?) in
+        view.setPlaying(playing ?? true)
+      }
+    }
+
     AsyncFunction("playerState") { () throws -> [String: Any] in
       Bridge.state(try SonoraCore.playerState())
     }

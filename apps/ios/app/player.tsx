@@ -4,7 +4,7 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from '
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { bridge } from '../src/bridgeImpl';
-import { Artwork } from '../src/components/Artwork';
+import { CanvasArt } from '../src/components/CanvasArt';
 import { ErrorBanner } from '../src/components/Screen';
 import { Scrubber } from '../src/components/Scrubber';
 import { TrackRow } from '../src/components/TrackRow';
@@ -23,7 +23,7 @@ export default function Player() {
 
   const header = (
     <View style={styles.header}>
-      <Artwork uri={player?.track?.artwork ?? null} size={sizes.playerArtwork} />
+      <CanvasArt track={player?.track ?? null} size={sizes.playerArtwork} playing={playing} />
       <View style={styles.titles}>
         <Text numberOfLines={1} style={styles.title}>
           {player?.track?.title ?? t('mobile-nothing-playing')}

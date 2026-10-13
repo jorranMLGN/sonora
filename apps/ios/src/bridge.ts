@@ -159,6 +159,11 @@ export interface Bridge {
   playlist(id: string): Promise<PlaylistDetail>;
   playlistMore(id: string, continuation: string): Promise<PlaylistMore>;
   artist(id: string): Promise<ArtistDetail>;
+  /**
+   * The url of the Canvas of the track `id`, the short looping MP4 Spotify shows while it
+   * plays, or null when it has none. Only Spotify tracks have one.
+   */
+  canvas(id: string): Promise<string | null>;
   /** Replaces the queue with `ids` and plays the one at `index`. */
   play(ids: string[], index: number, origin: string | null): Promise<void>;
   toggle(): Promise<void>;
