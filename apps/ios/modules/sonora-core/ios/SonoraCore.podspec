@@ -19,7 +19,7 @@ Pod::Spec.new do |s|
   s.preserve_paths = 'rust/**/*'
   s.vendored_frameworks = 'rust/SonoraRust.xcframework'
   s.frameworks = 'AudioToolbox', 'CoreAudio', 'AVFoundation', 'AVFAudio', 'CoreFoundation', 'Foundation',
-                 'Security', 'SystemConfiguration'
+                 'MediaPlayer', 'Security', 'SystemConfiguration', 'UIKit'
   s.libraries = 'c++', 'resolv', 'iconv', 'objc'
 
   s.pod_target_xcconfig = {

@@ -13,6 +13,7 @@ enum Bridge {
       "id": item.id,
       "title": item.title,
       "subtitle": item.subtitle,
+      "album": item.album,
       "artwork": optional(item.artwork),
       "durationMs": Double(item.durationMs),
       "explicit": item.explicit,
@@ -126,10 +127,12 @@ final class Listener: EventListener, @unchecked Sendable {
 
   func onState(state: PlayerState) {
     module?.sendEvent("onState", Bridge.state(state))
+    DispatchQueue.main.async { Platform.shared.state(state) }
   }
 
   func onPosition(positionMs: UInt64) {
     module?.sendEvent("onPosition", ["positionMs": Double(positionMs)])
+    DispatchQueue.main.async { Platform.shared.position(positionMs) }
   }
 
   func onQueue(queue: QueueSnapshot) {

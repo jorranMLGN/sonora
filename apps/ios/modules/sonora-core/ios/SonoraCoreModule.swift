@@ -1,4 +1,3 @@
-import AVFoundation
 import ExpoModulesCore
 
 /// The app's own Application Support folder, where the core keeps its files.
@@ -18,14 +17,9 @@ public class SonoraCoreModule: Module {
 
     Events("onState", "onPosition", "onQueue", "onSession", "onPrompt", "onError")
 
+    // The audio session, Now Playing and the remote commands live as long as the process.
     OnCreate {
-      let session = AVAudioSession.sharedInstance()
-      do {
-        try session.setCategory(.playback, mode: .default)
-        try session.setActive(true)
-      } catch {
-        NSLog("sonora: cannot activate the audio session: \(error)")
-      }
+      DispatchQueue.main.async { Platform.shared.start() }
     }
 
     // Registers this module as the listener; the core answers with the providers, the queue and
