@@ -34,3 +34,6 @@ music = { path = "../music", default-features = false, features = ["bundled-sqli
 # QuickJS, which YouTube runs its player script in, ships no prebuilt bindings for iOS, so they
 # are generated at build time.
 rquickjs = { workspace = true, features = ["bindgen"] }
+# What the core logs goes to the unified log, where Console.app on a Mac reads it; stderr goes
+# nowhere on a phone.
+oslog.workspace = true

@@ -79,9 +79,7 @@ pub fn start(dir: PathBuf, listener: Box<dyn EventListener>) -> Result<()> {
         core.replay();
         return Ok(());
     }
-    let _ = env_logger::Builder::new()
-        .parse_filters("warn,music=info,mobile=debug")
-        .try_init();
+    logger();
     // Two rustls backends are compiled in: librespot, oauth2 and ytmusic still ask for ring,
     // while reqwest 0.13 asks for aws-lc-rs. rustls refuses to guess between them, so one is
     // picked here. A second install only means another crate got there first.
@@ -448,6 +446,24 @@ fn youtube(dir: &Path) -> Option<Arc<dyn MusicProvider>> {
 #[cfg(not(feature = "youtube"))]
 fn youtube(_dir: &Path) -> Option<Arc<dyn MusicProvider>> {
     None
+}
+
+/// Sends the core's log to the unified log under the subsystem `dev.sonora.app`, where
+/// Console.app on a Mac shows it for a connected phone.
+#[cfg(target_os = "ios")]
+fn logger() {
+    let _ = oslog::OsLogger::new("dev.sonora.app")
+        .level_filter(log::LevelFilter::Info)
+        .category_level_filter("mobile::account", log::LevelFilter::Debug)
+        .init();
+}
+
+/// Sends the core's log to stderr, for a build run from a terminal.
+#[cfg(not(target_os = "ios"))]
+fn logger() {
+    let _ = env_logger::Builder::new()
+        .parse_filters("warn,music=info,mobile=debug")
+        .try_init();
 }
 
 /// Forwards a provider's sign-in questions to the listener. A secret prompt carries `web`, the

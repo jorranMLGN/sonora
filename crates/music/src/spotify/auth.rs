@@ -109,6 +109,7 @@ pub async fn login(config: &AuthConfig, prompt: PromptSink) -> Result<Session> {
 
     let access_token =
         tokio::task::spawn_blocking(move || authorize(&client_id, &redirect_uri, prompt)).await??;
+    log::info!("auth: exchanged the code, connecting");
 
     let session = session(config)?;
     session
@@ -143,6 +144,7 @@ fn authorize(client_id: &str, redirect_uri: &str, prompt: PromptSink) -> Result<
         .with_context(|| format!("redirect URI has no socket address: {redirect_uri}"))?;
     let listener = TcpListener::bind(&address)
         .with_context(|| format!("cannot listen for Spotify login at {address}"))?;
+    log::info!("auth: waiting for the callback at {address}");
     let mut stream = listener
         .incoming()
         .next()
@@ -157,12 +159,21 @@ fn authorize(client_id: &str, redirect_uri: &str, prompt: PromptSink) -> Result<
     let query = callback
         .query_pairs()
         .collect::<std::collections::HashMap<_, _>>();
+    log::info!(
+        "auth: callback arrived at {} with {:?}",
+        callback.path(),
+        query.keys().collect::<Vec<_>>()
+    );
+    // The page is a courtesy. A browser that gave up waiting, as Safari does while iOS keeps
+    // the app suspended, has closed the socket, but the code it sent is still good.
     let response = "You can return to Sonora.";
-    write!(
+    if let Err(error) = write!(
         stream,
         "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{response}",
         response.len()
-    )?;
+    ) {
+        log::warn!("auth: cannot answer the browser: {error}");
+    }
     if let Some(error) = query.get("error") {
         let problem = match error.as_ref() {
             "access_denied" => SignInProblem::Cancelled,

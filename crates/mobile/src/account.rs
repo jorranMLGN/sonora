@@ -136,7 +136,10 @@ pub async fn sign_in(slug: String, option: SignInOption) -> Answer<()> {
     };
     match task.await {
         Ok(outcome) => outcome,
-        Err(stopped) if stopped.is_cancelled() => Ok(()),
+        Err(stopped) if stopped.is_cancelled() => {
+            log::info!("account: the sign-in to {slug} was called off");
+            Ok(())
+        }
         Err(stopped) => Err(anyhow!("the sign-in stopped: {stopped}").into()),
     }
 }
@@ -305,7 +308,10 @@ fn finish(
         match pending.get(slug) {
             Some(waiting) if waiting.attempt == attempt => pending.remove(slug).map(|p| p.before),
             // Called off or replaced: whoever did that has put the state right.
-            Some(_) => return Ok(()),
+            Some(_) => {
+                log::info!("account: a replaced sign-in to {slug} ended");
+                return Ok(());
+            }
             // Finished before it was even registered; nothing to go back to but signed out.
             None => None,
         }
