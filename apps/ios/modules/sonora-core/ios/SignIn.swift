@@ -40,10 +40,16 @@ final class SignInPresenter: NSObject, SFSafariViewControllerDelegate {
   /// What is on the screen for each provider's sign-in.
   private var open: [String: UIViewController] = [:]
 
+  /// The background time asked for each sign-in that waits on a browser. A browser that takes
+  /// the user out of the app (Safari, after "Continue to the app") would otherwise find the app
+  /// suspended, with the loopback listener and the code exchange frozen mid-way.
+  private var awake: [String: UIBackgroundTaskIdentifier] = [:]
+
   /// Takes every prompt the core sends; the ones without a browser are left to JS.
   func prompt(_ slug: String, _ prompt: Prompt) {
     switch prompt {
     case .url(let url):
+      stayAwake(slug)
       browse(slug, url)
     case .secret(let web?):
       page(slug, web)
@@ -56,6 +62,22 @@ final class SignInPresenter: NSObject, SFSafariViewControllerDelegate {
   func session(_ slug: String, _ state: SessionState) {
     if case .connecting = state { return }
     close(slug)
+    letSleep(slug)
+  }
+
+  /// Asks iOS for time to finish the sign-in of `slug` should the app go to the background.
+  private func stayAwake(_ slug: String) {
+    letSleep(slug)
+    awake[slug] = UIApplication.shared.beginBackgroundTask(withName: "sign-in \(slug)") {
+      [weak self] in
+      MainActor.assumeIsolated { self?.letSleep(slug) }
+    }
+  }
+
+  /// Gives back the background time of the sign-in of `slug`, if it holds any.
+  private func letSleep(_ slug: String) {
+    guard let task = awake.removeValue(forKey: slug), task != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(task)
   }
 
   /// Closes the browser of `slug` without calling the sign-in off.
@@ -71,6 +93,7 @@ final class SignInPresenter: NSObject, SFSafariViewControllerDelegate {
   /// The user closed the browser of `slug` by hand.
   func abandoned(_ slug: String) {
     guard open.removeValue(forKey: slug) != nil else { return }
+    letSleep(slug)
     do {
       try SonoraCore.cancelSignIn(slug: slug)
     } catch {
