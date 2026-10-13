@@ -53,6 +53,12 @@ pub enum Command {
     EnqueueNext(Vec<Item>),
     EnqueueLast(Vec<Item>),
     Remove(usize),
+    /// The session of `slug` changed or ended: its engine goes, and with `tracks` its tracks
+    /// leave the queue and its snapshots the store.
+    Forget {
+        slug: &'static str,
+        tracks: bool,
+    },
     Engine {
         slug: &'static str,
         generation: u64,
@@ -226,6 +232,7 @@ impl Deck {
                     self.queue_changed();
                 }
             }
+            Command::Forget { slug, tracks } => self.forget(slug, tracks),
             Command::Engine {
                 slug,
                 generation,
@@ -358,6 +365,44 @@ impl Deck {
             };
         }
         self.save_position();
+        self.publish();
+    }
+
+    /// Drops the engine of `slug`, built on a session that is gone, so the next play builds one
+    /// on the session there is now. With `tracks`, also takes the provider's tracks out of the
+    /// queue and its snapshots out of the store; a current track that goes leaves the next one
+    /// kept up, paused at its start.
+    fn forget(&mut self, slug: &'static str, tracks: bool) {
+        if let Some(engine) = self.engines.remove(slug) {
+            engine.player.pause();
+        }
+        if self.active == Some(slug) {
+            self.active = None;
+            self.preloaded = None;
+            if matches!(self.status, Status::Playing | Status::Loading) {
+                self.status = Status::Paused;
+            }
+            self.save_position();
+        }
+        if tracks {
+            self.store.forget(&format!("{}{slug}", store::SNAPSHOT));
+            let current = self.queue.current().map(|item| item.id.clone());
+            if self.queue.drop_provider(slug) {
+                self.preloaded = None;
+                if self.queue.current().map(|item| item.id.as_str()) != current.as_deref() {
+                    self.position = Duration::ZERO;
+                    self.duration = self.queue.current().map_or(Duration::ZERO, |item| {
+                        Duration::from_millis(item.duration_ms)
+                    });
+                    self.status = match self.queue.current() {
+                        Some(_) => Status::Paused,
+                        None => Status::Idle,
+                    };
+                    self.save_position();
+                }
+                self.queue_changed();
+            }
+        }
         self.publish();
     }
 

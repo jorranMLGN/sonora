@@ -154,6 +154,38 @@ impl Queue {
         }
     }
 
+    /// Takes out every track of the provider `slug`, the current one included, and answers
+    /// whether anything went. The cursor stays on the current track when it is kept, or else
+    /// moves to the next track kept after it, or else to the last one kept before it.
+    pub fn drop_provider(&mut self, slug: &str) -> bool {
+        let before = self.entries.len();
+        let current = self
+            .at
+            .and_then(|at| self.entries.get(at))
+            .map(|entry| entry.key);
+        let kept_before = self.at.map(|at| {
+            self.entries[..at]
+                .iter()
+                .filter(|entry| entry.item.provider != slug)
+                .count()
+        });
+        self.entries.retain(|entry| entry.item.provider != slug);
+        if self.entries.len() == before {
+            return false;
+        }
+        let kept: std::collections::HashSet<u64> =
+            self.entries.iter().map(|entry| entry.key).collect();
+        self.queued.retain(|key| kept.contains(key));
+        let stayed = current.and_then(|key| self.entries.iter().position(|entry| entry.key == key));
+        self.at = match (stayed, kept_before) {
+            (Some(at), _) => Some(at),
+            (None, Some(next)) if next < self.entries.len() => Some(next),
+            (None, Some(previous)) if previous > 0 => Some(previous - 1),
+            _ => None,
+        };
+        true
+    }
+
     /// Takes out the entry at `index` of the play order. The current track cannot be removed,
     /// so asking for it, or for an index past the end, answers false.
     pub fn remove(&mut self, index: usize) -> bool {

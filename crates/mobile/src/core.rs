@@ -15,6 +15,7 @@ use music::{
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
+use crate::account;
 use crate::player::{self, Command};
 use crate::store::Store;
 use crate::{
@@ -29,10 +30,12 @@ static CORE: Mutex<Option<Arc<Core>>> = Mutex::new(None);
 
 /// The core every exported function works through.
 pub struct Core {
-    runtime: Runtime,
-    events: Arc<Events>,
-    providers: Vec<Arc<dyn MusicProvider>>,
-    sessions: Arc<Sessions>,
+    pub(crate) runtime: Runtime,
+    pub(crate) events: Arc<Events>,
+    pub(crate) providers: Vec<Arc<dyn MusicProvider>>,
+    pub(crate) sessions: Arc<Sessions>,
+    /// The sign-ins under way, one per provider at most.
+    pub(crate) pending: Mutex<HashMap<&'static str, account::Pending>>,
     /// Every track a search or a listing has handed out, so `play` can queue it by id alone.
     known: Mutex<HashMap<String, Item>>,
     commands: mpsc::UnboundedSender<Command>,
@@ -101,6 +104,7 @@ pub fn start(dir: PathBuf, listener: Box<dyn EventListener>) -> Result<()> {
         events,
         providers,
         sessions,
+        pending: Mutex::new(HashMap::new()),
         known: Mutex::new(HashMap::new()),
         commands,
         published,
@@ -160,6 +164,7 @@ impl Core {
                     signed_in: self.sessions.session(provider.slug()).is_some(),
                     account,
                     session,
+                    options: account::options(provider.as_ref()),
                 }
             })
             .collect()
@@ -265,40 +270,45 @@ impl Core {
         self.events.state(state);
     }
 
-    /// Restores every stored session in parallel. SoundCloud signs in as a guest when nothing
-    /// is stored, so search works on a fresh install.
+    /// Restores every stored session in parallel.
     fn restore(&self) {
         for provider in self.providers.clone() {
-            let sessions = self.sessions.clone();
-            let events = self.events.clone();
-            self.runtime.spawn(async move {
-                let slug = provider.slug();
-                let guest = slug == "soundcloud";
-                if !provider.stored() && !guest {
-                    return;
-                }
-                sessions.set(slug, SessionState::Connecting);
-                events.session(slug, SessionState::Connecting);
-                let restored = match provider.restore().await {
-                    Ok(None) if guest => {
-                        let (_keep, input) = mpsc::unbounded_channel();
-                        let prompts = prompt_sink(events.clone(), slug);
-                        provider
-                            .sign_in(SignIn::Anonymous, prompts, input)
-                            .await
-                            .map(Some)
-                    }
-                    other => other,
-                };
-                let state = match restored {
-                    Ok(Some(session)) => sessions.install(slug, session),
-                    Ok(None) => SessionState::SignedOut,
-                    Err(error) => failure(slug, &error),
-                };
-                sessions.set(slug, state.clone());
-                events.session(slug, state);
-            });
+            self.restore_one(provider);
         }
+    }
+
+    /// Restores the stored session of one provider in the background. SoundCloud signs in as a
+    /// guest when nothing is stored, so search works on a fresh install and after a sign-out.
+    pub(crate) fn restore_one(&self, provider: Arc<dyn MusicProvider>) {
+        let sessions = self.sessions.clone();
+        let events = self.events.clone();
+        self.runtime.spawn(async move {
+            let slug = provider.slug();
+            let guest = slug == "soundcloud";
+            if !provider.stored() && !guest {
+                return;
+            }
+            sessions.set(slug, SessionState::Connecting);
+            events.session(slug, SessionState::Connecting);
+            let restored = match provider.restore().await {
+                Ok(None) if guest => {
+                    let (_keep, input) = mpsc::unbounded_channel();
+                    let prompts = prompt_sink(events.clone(), slug, None);
+                    provider
+                        .sign_in(SignIn::Anonymous, prompts, input)
+                        .await
+                        .map(Some)
+                }
+                other => other,
+            };
+            let state = match restored {
+                Ok(Some(session)) => sessions.install(slug, session),
+                Ok(None) => SessionState::SignedOut,
+                Err(error) => failure(slug, &error),
+            };
+            sessions.set(slug, state.clone());
+            events.session(slug, state);
+        });
     }
 }
 
@@ -326,14 +336,21 @@ impl Sessions {
             .unwrap_or(SessionState::SignedOut)
     }
 
-    fn set(&self, slug: &'static str, state: SessionState) {
+    pub(crate) fn set(&self, slug: &'static str, state: SessionState) {
         if let Ok(mut states) = self.states.write() {
             states.insert(slug, state);
         }
     }
 
+    /// Drops the live session of `slug`, if it has one.
+    pub(crate) fn remove(&self, slug: &str) {
+        if let Ok(mut sessions) = self.live.write() {
+            sessions.remove(slug);
+        }
+    }
+
     /// Makes a fresh provider session the live one and says what kind it is.
-    fn install(&self, slug: &'static str, session: ProviderSession) -> SessionState {
+    pub(crate) fn install(&self, slug: &'static str, session: ProviderSession) -> SessionState {
         let state = match (session.authenticated, session.expired) {
             (true, _) => SessionState::SignedIn {
                 account: session.profile.display_name.clone(),
@@ -422,13 +439,18 @@ fn youtube(_dir: &Path) -> Option<Arc<dyn MusicProvider>> {
     None
 }
 
-/// Forwards a provider's sign-in questions to the listener.
-fn prompt_sink(events: Arc<Events>, slug: &'static str) -> music::PromptSink {
+/// Forwards a provider's sign-in questions to the listener. A secret prompt carries `web`, the
+/// browser sign-in that answers it, when the listener chose one.
+pub(crate) fn prompt_sink(
+    events: Arc<Events>,
+    slug: &'static str,
+    web: Option<crate::WebSignIn>,
+) -> music::PromptSink {
     Arc::new(move |prompt| {
         let prompt = match prompt {
             music::SignInPrompt::Url(url) => Prompt::Url { url },
             music::SignInPrompt::Code { code, url } => Prompt::Code { code, url },
-            music::SignInPrompt::Secret => Prompt::Secret,
+            music::SignInPrompt::Secret => Prompt::Secret { web: web.clone() },
             music::SignInPrompt::Accounts(choices) => Prompt::Accounts {
                 choices: choices
                     .into_iter()
@@ -445,12 +467,13 @@ fn prompt_sink(events: Arc<Events>, slug: &'static str) -> music::PromptSink {
 }
 
 /// The state a provider whose session could not be restored is left in.
-fn failure(slug: &str, error: &anyhow::Error) -> SessionState {
+pub(crate) fn failure(slug: &str, error: &anyhow::Error) -> SessionState {
     log::warn!("mobile: cannot restore {slug}: {error:#}");
     match error.downcast_ref::<SignInFailure>() {
         Some(SignInFailure(SignInProblem::Credentials)) => SessionState::Expired,
-        _ => SessionState::Failed {
+        failure => SessionState::Failed {
             message: format!("{error:#}"),
+            problem: failure.map(|SignInFailure(problem)| account::problem(*problem)),
         },
     }
 }

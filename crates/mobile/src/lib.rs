@@ -5,9 +5,11 @@
 //! intent straight to these functions; what happens next comes back through the
 //! `EventListener` it registered with `init`.
 
+mod account;
 mod core;
 mod library;
 mod player;
+mod potoken;
 mod queue;
 mod store;
 
@@ -16,7 +18,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+pub use account::{Problem, SignInOption, WebSignIn, answer, cancel_sign_in, sign_in, sign_out};
 pub use library::{LibraryPage, Part};
+pub use potoken::{PoTokenAsk, po_token, po_token_wanted};
 
 use crate::player::Command;
 
@@ -60,6 +64,8 @@ pub struct ProviderInfo {
     /// The account's display name, when signed in to one rather than as a guest.
     pub account: Option<String>,
     pub session: SessionState,
+    /// The ways the listener may sign in to this provider, in the order to offer them.
+    pub options: Vec<SignInOption>,
 }
 
 /// Where a provider's session stands.
@@ -77,6 +83,8 @@ pub enum SessionState {
     Expired,
     Failed {
         message: String,
+        /// What went wrong, when the provider said, so the app can explain it in its own words.
+        problem: Option<Problem>,
     },
 }
 
@@ -141,8 +149,11 @@ pub enum Prompt {
         code: String,
         url: String,
     },
-    /// Run the provider's cookie sign-in and send back the cookie header.
-    Secret,
+    /// Send back the secret the sign-in asks for. With `web`, the app runs that cookie sign-in
+    /// in its own browser and sends the cookie header; without, the user pastes the value.
+    Secret {
+        web: Option<WebSignIn>,
+    },
     Accounts {
         choices: Vec<AccountChoice>,
     },
@@ -151,13 +162,20 @@ pub enum Prompt {
 /// Why a call failed, in words fit for a log or a toast.
 #[derive(Debug, uniffi::Error)]
 pub enum CoreError {
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
+    /// A sign-in the provider turned down, with the reason it gave.
+    SignIn {
+        problem: Problem,
+        message: String,
+    },
 }
 
 impl fmt::Display for CoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Failed { message } => f.write_str(message),
+            Self::Failed { message } | Self::SignIn { message, .. } => f.write_str(message),
         }
     }
 }

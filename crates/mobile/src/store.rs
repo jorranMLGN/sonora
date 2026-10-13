@@ -18,6 +18,9 @@ const SCHEMA: &str = "
 pub const QUEUE: &str = "queue";
 /// Where the current track was, in milliseconds.
 pub const POSITION: &str = "position";
+/// What every key holding a copy of a provider's data starts with, followed by the provider's
+/// slug, so a sign-out can drop them all at once.
+pub const SNAPSHOT: &str = "snapshot:";
 
 /// The open database. Only the player writes to it, from its own task.
 pub struct Store {
@@ -67,6 +70,17 @@ impl Store {
             });
         if let Err(error) = written {
             log::warn!("store: cannot save {key}: {error:#}");
+        }
+    }
+
+    /// Deletes every value whose key starts with `prefix`.
+    pub fn forget(&self, prefix: &str) {
+        let deleted = self.connection.execute(
+            "DELETE FROM state WHERE substr(key, 1, length(?1)) = ?1",
+            [prefix],
+        );
+        if let Err(error) = deleted {
+            log::warn!("store: cannot forget {prefix}: {error}");
         }
     }
 }
