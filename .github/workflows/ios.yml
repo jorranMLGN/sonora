@@ -56,6 +56,18 @@ jobs:
             -output "$MODULE/rust/SonoraRust.xcframework"
           find "$MODULE/rust/SonoraRust.xcframework" -maxdepth 2
 
+      # Settings shows which build this is. Expo inlines EXPO_PUBLIC_* when it bundles the JS,
+      # which happens inside "Build the app".
+      - name: Stamp the build
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          {
+            echo "EXPO_PUBLIC_SONORA_VERSION=$VERSION"
+            echo "EXPO_PUBLIC_SONORA_BUILD=${{ github.run_number }}"
+            echo "EXPO_PUBLIC_SONORA_COMMIT=${GITHUB_SHA::7}"
+          } >> "$GITHUB_ENV"
+          cat "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
