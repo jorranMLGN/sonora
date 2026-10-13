@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 
-import { colors, radii } from '../theme';
+import { makeStyles, useTheme } from '../styles';
 
 /** Square artwork with a flat placeholder when there is no image. */
 export function Artwork({
@@ -13,6 +13,8 @@ export function Artwork({
   size: number;
   round?: boolean;
 }) {
+  const { radii } = useTheme();
+  const styles = useStyles();
   const box = { width: size, height: size, borderRadius: round ? size / 2 : radii.small };
   return uri ? (
     <Image source={{ uri }} style={[styles.image, box]} contentFit="cover" transition={150} />
@@ -21,6 +23,6 @@ export function Artwork({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors }) => ({
   image: { backgroundColor: colors.placeholder },
-});
+}));

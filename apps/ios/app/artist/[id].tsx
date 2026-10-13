@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Text, View } from 'react-native';
 
 import { bridge } from '../../src/bridgeImpl';
 import { DetailHeader, Loading, useCurrentId } from '../../src/components/Detail';
@@ -8,13 +8,15 @@ import { Shelf } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
 import { attempt } from '../../src/store';
-import { colors, spacing, typography } from '../../src/theme';
+import { makeStyles } from '../../src/styles';
+import { spacing } from '../../src/theme';
 import { useLoad } from '../../src/useLoad';
 
 export default function ArtistPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data, loading, reload } = useLoad(() => bridge.artist(id), [id]);
   const currentId = useCurrentId();
+  const styles = useStyles();
   return (
     <Screen back miniPlayer>
       {!data ? (
@@ -63,7 +65,7 @@ export default function ArtistPage() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   heading: {
     color: colors.text,
     fontSize: typography.heading,
@@ -71,4 +73,4 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.lg,
   },
   footer: { marginTop: spacing.xl },
-});
+}));

@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { PanResponder, StyleSheet, View } from 'react-native';
+import { PanResponder, View } from 'react-native';
 
-import { colors, radii, sizes } from '../theme';
+import { makeStyles } from '../styles';
+import { sizes } from '../theme';
 
 /** A draggable progress bar; reports the position once, when the finger lifts. */
 export function Scrubber({
@@ -13,6 +14,7 @@ export function Scrubber({
   max: number;
   onSeek: (ms: number) => void;
 }) {
+  const styles = useStyles();
   const [width, setWidth] = useState(1);
   const [drag, setDrag] = useState<number | null>(null);
   const live = useRef({ width: 1, max: 1, onSeek });
@@ -55,7 +57,7 @@ export function Scrubber({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii }) => ({
   hit: { height: sizes.scrubberHit, justifyContent: 'center' },
   track: {
     height: sizes.scrubberTrack,
@@ -71,4 +73,4 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
     backgroundColor: colors.text,
   },
-});
+}));

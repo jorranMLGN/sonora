@@ -1,4 +1,4 @@
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Text, View } from 'react-native';
 
 import type { Section } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
@@ -9,7 +9,8 @@ import { Shelf } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
 import { attempt, useStore } from '../../src/store';
-import { colors, spacing, typography } from '../../src/theme';
+import { makeStyles } from '../../src/styles';
+import { spacing } from '../../src/theme';
 import { useLoad } from '../../src/useLoad';
 
 const TRACKS_SHOWN = 5;
@@ -37,6 +38,7 @@ export default function Home() {
   );
   const { data, loading, reload } = useLoad(() => bridge.home(), [live]);
   const currentId = useStore((s) => s.player?.track?.id ?? null);
+  const styles = useStyles();
   return (
     <Screen title={t('mobile-tab-home')} right={<SettingsButton />}>
       {loading && !data && <Loading />}
@@ -85,7 +87,7 @@ export default function Home() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   section: { marginTop: spacing.md },
   provider: {
     color: colors.textDim,
@@ -102,4 +104,4 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   empty: { color: colors.textDim, textAlign: 'center', marginTop: spacing.xxl },
-});
+}));

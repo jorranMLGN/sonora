@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { FlatList, Pressable, ScrollView, Text } from 'react-native';
 
 import type { LibraryPart, Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
@@ -10,7 +10,8 @@ import type { Kind } from '../../src/components/Shelf';
 import { TrackRow } from '../../src/components/TrackRow';
 import { t } from '../../src/i18n';
 import { attempt, markSaved, reason, useStore } from '../../src/store';
-import { colors, radii, spacing, typography } from '../../src/theme';
+import { makeStyles } from '../../src/styles';
+import { spacing } from '../../src/theme';
 
 const PARTS: LibraryPart[] = ['tracks', 'albums', 'artists', 'playlists'];
 
@@ -22,6 +23,7 @@ const KINDS: Record<Exclude<LibraryPart, 'tracks'>, Kind> = {
 
 export default function Library() {
   const providers = useStore((s) => s.providers);
+  const styles = useStyles();
   const currentId = useStore((s) => s.player?.track?.id ?? null);
   // A guest session has no library, so only accounts get a chip.
   const usable = providers.filter((p) => p.session.kind === 'signedIn');
@@ -140,6 +142,7 @@ export default function Library() {
 }
 
 function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const styles = useStyles();
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress}>
       <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
@@ -147,7 +150,7 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   chips: { flexGrow: 0, marginBottom: spacing.sm },
   chipsContent: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   chip: {
@@ -160,4 +163,4 @@ const styles = StyleSheet.create({
   chipText: { color: colors.text, fontSize: typography.body },
   chipTextOn: { color: colors.onAccent, fontWeight: '600' },
   empty: { color: colors.textDim, textAlign: 'center', marginTop: spacing.xxl },
-});
+}));

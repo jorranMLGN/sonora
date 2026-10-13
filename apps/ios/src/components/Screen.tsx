@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { type ReactNode, useEffect } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { t } from '../i18n';
 import { useStore } from '../store';
-import { colors, sizes, spacing, typography } from '../theme';
+import { makeStyles, useTheme } from '../styles';
+import { sizes, spacing } from '../theme';
 import { MiniPlayer } from './MiniPlayer';
 
 /** How long an error stays up before it goes by itself. */
@@ -16,6 +17,7 @@ const ERROR_SHOWN_MS = 6000;
 export function ErrorBanner() {
   const error = useStore((s) => s.error);
   const clear = useStore((s) => s.clearError);
+  const styles = useStyles();
   // A toast: it goes by itself after a while, or at once on a tap.
   useEffect(() => {
     if (!error) return;
@@ -48,6 +50,8 @@ export function Screen({
   children: ReactNode;
 }) {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useStyles();
   return (
     <SafeAreaView style={styles.screen} edges={miniPlayer ? ['top', 'bottom'] : ['top']}>
       {(back || title) && (
@@ -76,7 +80,7 @@ export function Screen({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, typography }) => ({
   screen: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
@@ -89,4 +93,4 @@ const styles = StyleSheet.create({
   body: { flex: 1 },
   error: { backgroundColor: colors.danger, padding: spacing.md },
   errorText: { color: colors.onAccent, fontSize: typography.caption },
-});
+}));

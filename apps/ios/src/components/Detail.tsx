@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import type { LibraryPart, Track } from '../bridge';
 import { bridge } from '../bridgeImpl';
 import { t } from '../i18n';
 import { attempt, toggleSaved, useSaved, useStore } from '../store';
-import { colors, radii, sizes, spacing, typography } from '../theme';
+import { makeStyles, useTheme } from '../styles';
+import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
 
 /** Artwork, title, play / shuffle buttons and a save toggle, shared by the detail pages. */
@@ -24,6 +25,8 @@ export function DetailHeader({
   round?: boolean;
 }) {
   const saved = useSaved(kind, item.id);
+  const { colors } = useTheme();
+  const styles = useStyles();
   const play = (shuffle: boolean) => {
     if (tracks.length === 0) return;
     attempt(
@@ -68,6 +71,8 @@ export function DetailHeader({
 
 /** Spinner shown while a detail page loads. */
 export function Loading() {
+  const { colors } = useTheme();
+  const styles = useStyles();
   return <ActivityIndicator color={colors.textDim} style={styles.loading} />;
 }
 
@@ -76,7 +81,7 @@ export function useCurrentId(): string | null {
   return useStore((s) => s.player?.track?.id ?? null);
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   header: { alignItems: 'center', gap: spacing.sm, padding: spacing.lg },
   title: {
     color: colors.text,
@@ -108,4 +113,4 @@ const styles = StyleSheet.create({
   },
   secondaryText: { color: colors.text, fontWeight: '600', fontSize: typography.body },
   loading: { marginTop: spacing.xxl },
-});
+}));

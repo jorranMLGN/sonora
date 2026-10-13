@@ -18,7 +18,8 @@ import { ErrorBanner } from '../src/components/Screen';
 import { t } from '../src/i18n';
 import { setFlag } from '../src/preferences';
 import { useStore } from '../src/store';
-import { colors, radii, sizes, spacing, typography } from '../src/theme';
+import { makeStyles, useTheme } from '../src/styles';
+import { sizes, spacing } from '../src/theme';
 
 /** The intro's pages, in order. */
 const STEPS = ['welcome', 'connect', 'done'] as const;
@@ -80,6 +81,7 @@ function Rise({ delay = 0, children }: { delay?: number; children: ReactNode }) 
 
 /** A soft accent glow that slowly breathes behind a page. */
 function Glow() {
+  const styles = useStyles();
   const breath = useLoop((value) =>
     Animated.loop(
       Animated.sequence([
@@ -110,6 +112,7 @@ function Glow() {
 
 /** One bar of the equalizer, rising and falling on its own beat. */
 function Bar({ period, offset }: { period: number; offset: number }) {
+  const styles = useStyles();
   const level = useLoop(
     (value) =>
       Animated.loop(
@@ -136,6 +139,7 @@ function Bar({ period, offset }: { period: number; offset: number }) {
 
 /** One ring that swells out of the mark and fades, then starts over. */
 function Ring({ index }: { index: number }) {
+  const styles = useStyles();
   const swell = useLoop((value) =>
     Animated.loop(
       Animated.sequence([
@@ -157,6 +161,7 @@ function Ring({ index }: { index: number }) {
 
 /** Sonora's mark for the intro: an equalizer at play, with rings pulsing out of it. */
 function Mark() {
+  const styles = useStyles();
   const entrance = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.spring(entrance, {
@@ -182,6 +187,8 @@ function Mark() {
 
 /** A check in a circle that springs in, with a ring bursting out of it. */
 function Check() {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const pop = useRef(new Animated.Value(0)).current;
   const burst = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -212,6 +219,8 @@ function Check() {
 
 /** A small badge that springs onto a provider's card once it is connected. */
 function Connected({ on }: { on: boolean }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const shown = useRef(new Animated.Value(on ? 1 : 0)).current;
   useEffect(() => {
     Animated.spring(shown, {
@@ -233,6 +242,8 @@ function Connected({ on }: { on: boolean }) {
 
 /** The step dots: the current one stretches into a pill, the others wait as dots. */
 function Dots({ step }: { step: number }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const at = useRef(new Animated.Value(step)).current;
   useEffect(() => {
     Animated.spring(at, { toValue: step, friction: 8, useNativeDriver: false }).start();
@@ -266,6 +277,7 @@ function Action({
   onPress: () => void;
   quiet?: boolean;
 }) {
+  const styles = useStyles();
   const pressed = useRef(new Animated.Value(1)).current;
   const to = (value: number) =>
     Animated.spring(pressed, { toValue: value, friction: 6, tension: 200, useNativeDriver: true }).start();
@@ -281,6 +293,7 @@ function Action({
 }
 
 function Welcome({ onNext }: { onNext: () => void }) {
+  const styles = useStyles();
   return (
     <View style={styles.page}>
       <View style={styles.hero}>
@@ -300,6 +313,7 @@ function Welcome({ onNext }: { onNext: () => void }) {
 }
 
 function Connect({ onNext }: { onNext: () => void }) {
+  const styles = useStyles();
   const providers = useStore((s) => s.providers);
   const any = providers.some(connected);
   return (
@@ -337,6 +351,8 @@ function Connect({ onNext }: { onNext: () => void }) {
 }
 
 function Done({ onFinish }: { onFinish: () => void }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   const providers = useStore((s) => s.providers);
   const linked = providers.filter(connected);
   return (
@@ -374,6 +390,7 @@ function Done({ onFinish }: { onFinish: () => void }) {
  * launch, and again from Settings; finishing or skipping it marks it seen.
  */
 export default function Intro() {
+  const styles = useStyles();
   const router = useRouter();
   const [step, setStep] = useState(0);
   const page = useRef(new Animated.Value(1)).current;
@@ -431,7 +448,7 @@ export default function Intro() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   screen: { flex: 1, backgroundColor: colors.background },
   top: {
     flexDirection: 'row',
@@ -555,4 +572,4 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs + 2,
   },
   chipText: { color: colors.text, fontSize: typography.caption, fontWeight: '600' },
-});
+}));

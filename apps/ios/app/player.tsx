@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { bridge } from '../src/bridgeImpl';
@@ -11,7 +11,8 @@ import { TrackRow } from '../src/components/TrackRow';
 import { clock } from '../src/format';
 import { t } from '../src/i18n';
 import { attempt, useStore } from '../src/store';
-import { colors, radii, sizes, spacing, typography } from '../src/theme';
+import { makeStyles, useTheme } from '../src/styles';
+import { sizes, spacing } from '../src/theme';
 
 /** The full player sheet: artwork, scrubber, transport and the queue below. */
 export default function Player() {
@@ -20,6 +21,8 @@ export default function Player() {
   const positionMs = useStore((s) => s.positionMs);
   const queue = useStore((s) => s.queue);
   const playing = player?.status === 'playing';
+  const { colors } = useTheme();
+  const styles = useStyles();
 
   const header = (
     <View style={styles.header}>
@@ -161,6 +164,8 @@ function IconButton({
   label: string;
   onPress: () => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useStyles();
   return (
     <Pressable hitSlop={spacing.sm} onPress={onPress} accessibilityLabel={label}>
       <Ionicons name={name} size={size} color={on ? colors.accent : colors.text} />
@@ -169,7 +174,7 @@ function IconButton({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(({ colors, radii, typography }) => ({
   screen: { flex: 1, backgroundColor: colors.background },
   close: { alignSelf: 'center', padding: spacing.sm },
   header: { alignItems: 'center', gap: spacing.lg, paddingHorizontal: spacing.lg },
@@ -211,4 +216,4 @@ const styles = StyleSheet.create({
   queueTrack: { flex: 1 },
   remove: { paddingRight: spacing.lg },
   empty: { color: colors.textDim, textAlign: 'center', marginTop: spacing.lg },
-});
+}));

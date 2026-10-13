@@ -4,10 +4,11 @@ import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { startStore } from '../src/store';
-import { colors } from '../src/theme';
+import { useTheme } from '../src/styles';
 
 export default function RootLayout() {
   useEffect(startStore, []);
+  const { colors } = useTheme();
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
