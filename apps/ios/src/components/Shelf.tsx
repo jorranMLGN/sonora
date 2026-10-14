@@ -1,10 +1,13 @@
 import { useRouter } from 'expo-router';
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { memo } from 'react';
+import { FlatList, Text, View } from 'react-native';
 
 import type { Track } from '../bridge';
+import { pressScale } from '../motion';
 import { makeStyles } from '../styles';
 import { sizes, spacing } from '../theme';
 import { Artwork } from './Artwork';
+import { Press } from './Press';
 
 export type Kind = 'album' | 'playlist' | 'artist';
 
@@ -14,24 +17,47 @@ export function useOpen() {
   return (kind: Kind, id: string) => router.push({ pathname: `/${kind}/[id]`, params: { id } });
 }
 
-/** A tile in a horizontal shelf; artists are round. */
-export function Tile({ item, kind }: { item: Track; kind: Kind }) {
+/**
+ * A cover with its title and subtitle under it, for a shelf or the library's grid; artists are
+ * round and centred. `size` is the cover's side, the shelf's tile size unless a grid sets it.
+ */
+export const Tile = memo(function Tile({
+  item,
+  kind,
+  size = sizes.tileArtwork,
+}: {
+  item: Track;
+  kind: Kind;
+  size?: number;
+}) {
   const open = useOpen();
   const styles = useStyles();
+  const artist = kind === 'artist';
   return (
-    <Pressable style={styles.tile} onPress={() => open(kind, item.id)}>
-      <Artwork uri={item.artwork} size={sizes.tileArtwork} round={kind === 'artist'} />
-      <Text numberOfLines={1} style={styles.title}>
+    <Press
+      scale={pressScale.tile}
+      style={[{ width: size }, artist && styles.centred]}
+      onPress={() => open(kind, item.id)}
+    >
+      <View style={styles.cover}>
+        <Artwork uri={item.artwork} size={size} round={artist} kind={kind} seed={item.title} />
+      </View>
+      <Text numberOfLines={1} style={[styles.title, artist && styles.centredText]}>
         {item.title}
       </Text>
-      <Text numberOfLines={1} style={styles.subtitle}>
-        {item.subtitle}
-      </Text>
-    </Pressable>
+      {item.subtitle !== '' && (
+        <Text numberOfLines={1} style={[styles.subtitle, artist && styles.centredText]}>
+          {item.subtitle}
+        </Text>
+      )}
+    </Press>
   );
-}
+});
 
-/** A titled horizontal list of albums, playlists or artists. */
+/**
+ * A titled horizontal list of albums, playlists or artists. It snaps tile by tile, so a flick
+ * always comes to rest on a cover's edge.
+ */
 export function Shelf({ title, items, kind }: { title: string; items: Track[]; kind: Kind }) {
   const styles = useStyles();
   if (items.length === 0) return null;
@@ -44,6 +70,8 @@ export function Shelf({ title, items, kind }: { title: string; items: Track[]; k
         data={items}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.content}
+        snapToInterval={sizes.tileArtwork + spacing.md}
+        decelerationRate="fast"
         renderItem={({ item }) => <Tile item={item} kind={kind} />}
       />
     </View>
@@ -56,11 +84,24 @@ const useStyles = makeStyles(({ colors, typography }) => ({
     color: colors.text,
     fontSize: typography.heading,
     fontWeight: '700',
+    letterSpacing: -0.4,
     marginHorizontal: spacing.lg,
     marginBottom: spacing.md,
   },
   content: { paddingHorizontal: spacing.lg, gap: spacing.md },
-  tile: { width: sizes.tileArtwork },
-  title: { color: colors.text, fontSize: typography.body, marginTop: spacing.sm },
-  subtitle: { color: colors.textDim, fontSize: typography.caption },
+  cover: {
+    shadowColor: colors.overlay,
+    shadowOpacity: 1,
+    shadowRadius: spacing.md,
+    shadowOffset: { width: 0, height: spacing.xs },
+  },
+  centred: { alignItems: 'center' },
+  centredText: { textAlign: 'center' },
+  title: {
+    color: colors.text,
+    fontSize: typography.label,
+    fontWeight: '600',
+    marginTop: spacing.sm,
+  },
+  subtitle: { color: colors.textDim, fontSize: typography.caption, marginTop: spacing.xs / 2 },
 }));

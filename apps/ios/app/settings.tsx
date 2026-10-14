@@ -129,6 +129,13 @@ export default function Settings() {
             locked={settings.systemReduceMotion}
             onChange={set('reduceMotion')}
           />
+          <SwitchRow
+            icon="radio-button-on-outline"
+            label={t('mobile-settings-haptics')}
+            detail={t('mobile-settings-haptics-detail')}
+            value={settings.haptics}
+            onChange={set('haptics')}
+          />
         </Group>
 
         <Group title={t('mobile-settings-content')}>

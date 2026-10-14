@@ -13,6 +13,10 @@ export type Corners = Look['corners'];
 export type TextSize = Look['textSize'];
 /** The shape of the artwork on the full player. */
 export type ArtworkShape = 'square' | 'rounded' | 'circle';
+/** How the library draws albums, artists and playlists: rows, or a grid of covers. */
+export type LibraryLayout = 'list' | 'grid';
+/** The order the library lists a part in: as the service gives it, by title, or by creator. */
+export type LibrarySort = 'recent' | 'title' | 'creator';
 
 /** Everything the listener can set, each with its default below. */
 export type Settings = {
@@ -24,6 +28,8 @@ export type Settings = {
   artwork: ArtworkShape;
   /** Calms decorative animations; the system's Reduce Motion does the same on its own. */
   reduceMotion: boolean;
+  /** Small taps under the finger when something is chosen, saved or played. */
+  haptics: boolean;
   hideExplicit: boolean;
   /** Shows the service a track, album, artist or playlist comes from beside its name. */
   providerBadges: boolean;
@@ -31,6 +37,8 @@ export type Settings = {
   homeHidden: string[];
   /** The part the library opens on. */
   libraryTab: LibraryPart;
+  libraryLayout: LibraryLayout;
+  librarySort: LibrarySort;
 };
 
 export type SettingKey = keyof Settings;
@@ -39,10 +47,13 @@ export const DEFAULTS: Settings = {
   ...defaultLook,
   artwork: 'square',
   reduceMotion: false,
+  haptics: true,
   hideExplicit: false,
   providerBadges: false,
   homeHidden: [],
   libraryTab: 'tracks',
+  libraryLayout: 'list',
+  librarySort: 'recent',
 };
 
 /** The values a setting with a fixed set of choices takes, in the order Settings offers them. */
@@ -52,6 +63,8 @@ export const CHOICES = {
   textSize: ['small', 'default', 'large'],
   artwork: ['square', 'rounded', 'circle'],
   libraryTab: ['tracks', 'albums', 'artists', 'playlists'],
+  libraryLayout: ['list', 'grid'],
+  librarySort: ['recent', 'title', 'creator'],
 } as const satisfies { [K in SettingKey]?: readonly Settings[K][] };
 
 /** What every setting's key in the user defaults starts with, after the module's `sonora.`. */

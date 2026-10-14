@@ -1,11 +1,17 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { FlatList } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 import type { Track } from '../../src/bridge';
 import { bridge } from '../../src/bridgeImpl';
-import { DetailHeader, Loading, useCurrentId } from '../../src/components/Detail';
-import { Screen } from '../../src/components/Screen';
+import {
+  DETAIL_REVEAL,
+  DetailHeader,
+  Loading,
+  SaveButton,
+  useCurrentId,
+} from '../../src/components/Detail';
+import { Page, framed } from '../../src/components/Page';
 import { TrackRow } from '../../src/components/TrackRow';
 import { useVisible } from '../../src/settings';
 import { attempt, useStore } from '../../src/store';
@@ -43,42 +49,54 @@ export default function PlaylistPage() {
   };
 
   return (
-    <Screen back miniPlayer>
-      {!data ? (
-        <Loading />
-      ) : (
-        <FlatList
-          data={shown}
-          keyExtractor={(track, index) => `${index}:${track.id}`}
-          refreshing={loading}
-          onRefresh={reload}
-          onEndReachedThreshold={0.5}
-          onEndReached={more}
-          ListHeaderComponent={
-            <DetailHeader
-              item={data.playlist}
-              kind="playlists"
-              tracks={shown}
-              origin={`playlist:${id}`}
-            />
-          }
-          renderItem={({ item, index }) => (
-            <TrackRow
-              track={item}
-              current={item.id === currentId}
-              onPress={() =>
-                attempt(
-                  bridge.play(
-                    shown.map((track) => track.id),
-                    index,
-                    `playlist:${id}`,
-                  ),
-                )
-              }
-            />
-          )}
-        />
-      )}
-    </Screen>
+    <Page
+      back
+      title={data?.playlist.title}
+      revealAt={DETAIL_REVEAL}
+      right={<SaveButton id={id} kind="playlists" />}
+    >
+      {(frame) =>
+        !data ? (
+          <Loading top={frame.top} />
+        ) : (
+          <Animated.FlatList
+            {...framed(frame)}
+            data={shown}
+            keyExtractor={(track, index) => `${index}:${track.id}`}
+            refreshing={loading}
+            onRefresh={reload}
+            onEndReachedThreshold={0.5}
+            onEndReached={more}
+            ListHeaderComponent={
+              <DetailHeader
+                item={data.playlist}
+                kind="playlist"
+                tracks={shown}
+                origin={`playlist:${id}`}
+                scrollY={frame.scrollY}
+                top={frame.top}
+                // The count is only worth saying once every page of the playlist is in.
+                count={continuation === null ? shown.length : undefined}
+              />
+            }
+            renderItem={({ item, index }) => (
+              <TrackRow
+                track={item}
+                current={item.id === currentId}
+                onPress={() =>
+                  attempt(
+                    bridge.play(
+                      shown.map((track) => track.id),
+                      index,
+                      `playlist:${id}`,
+                    ),
+                  )
+                }
+              />
+            )}
+          />
+        )
+      }
+    </Page>
   );
 }

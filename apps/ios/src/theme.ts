@@ -25,6 +25,7 @@ const backgrounds = {
     surfaceRaised: '#222228',
     border: '#2c2c33',
     placeholder: '#2a2a31',
+    glass: 'rgba(13, 13, 15, 0.55)',
   },
   black: {
     background: '#000000',
@@ -32,6 +33,7 @@ const backgrounds = {
     surfaceRaised: '#1a1a1e',
     border: '#242429',
     placeholder: '#1f1f24',
+    glass: 'rgba(0, 0, 0, 0.6)',
   },
   dim: {
     background: '#1c1d23',
@@ -39,8 +41,31 @@ const backgrounds = {
     surfaceRaised: '#31323b',
     border: '#3b3c46',
     placeholder: '#383943',
+    glass: 'rgba(28, 29, 35, 0.55)',
   },
 } as const;
+
+/**
+ * The gradients a missing cover is drawn with, dark enough for white type, picked by a hash of
+ * the item so the same playlist always gets the same one.
+ */
+const artworkWashes = [
+  ['#4a3a8c', '#1d1838'],
+  ['#1f5f70', '#0f2730'],
+  ['#7a3352', '#2a1420'],
+  ['#36633a', '#152414'],
+  ['#7a5a26', '#2a1f0f'],
+  ['#2f4c8a', '#121b33'],
+  ['#5e3878', '#22142c'],
+  ['#2a6a64', '#0e2523'],
+] as const;
+
+/** Each service's own colour, for the dot on its chip. */
+const brands: Record<string, string> = {
+  spotify: '#1ed760',
+  youtube: '#ff0033',
+  soundcloud: '#ff5500',
+};
 
 /** Corner radii per roundness. `pill` stays round in every one. */
 const corners = {
@@ -58,9 +83,15 @@ const typeRamp = {
   tag: 10,
   caption: 12,
   body: 15,
+  /** A row's subtitle and a chip's label. */
+  label: 13,
+  /** A row's title. */
+  row: 16,
   title: 17,
   heading: 22,
   display: 28,
+  /** The large title a page opens with, before it collapses into the bar. */
+  hero: 34,
 } as const;
 
 /** Text on the accent: white, or near black on a light accent such as yellow. */
@@ -94,13 +125,29 @@ export type Colors = {
   overlay: string;
   placeholder: string;
   transparent: string;
+  /** The tint over a blurred bar, so what scrolls under it stays legible. */
+  glass: string;
+  /** The wash a row takes while a finger is on it. */
+  pressed: string;
+  /** The shade over blurred artwork behind the player and a page's header. */
+  scrim: string;
+  /** The white of a glyph drawn on a cover. */
+  onArtwork: string;
 };
 
 export type Radii = { small: number; medium: number; large: number; pill: number };
 export type Typography = { [K in keyof typeof typeRamp]: number };
 
 /** One complete look. Built once per combination of settings and shared, so it can key caches. */
-export type Theme = { colors: Colors; radii: Radii; typography: Typography };
+export type Theme = {
+  colors: Colors;
+  radii: Radii;
+  typography: Typography;
+  /** The gradients a missing cover is drawn with; see `artworkWash`. */
+  washes: readonly (readonly [string, string])[];
+  /** Each service's colour by slug; `brand` reads it with a fallback. */
+  brands: Record<string, string>;
+};
 
 /** Builds the theme for a look; `./styles` caches it, so call that rather than this. */
 export function buildTheme(look: Look): Theme {
@@ -121,9 +168,14 @@ export function buildTheme(look: Look): Theme {
       danger: '#ff5a5f',
       overlay: 'rgba(0, 0, 0, 0.6)',
       transparent: 'transparent',
+      pressed: 'rgba(255, 255, 255, 0.07)',
+      scrim: 'rgba(0, 0, 0, 0.35)',
+      onArtwork: 'rgba(255, 255, 255, 0.55)',
     },
     radii: { ...corners[look.corners] },
     typography,
+    washes: artworkWashes,
+    brands,
   };
 }
 
@@ -152,14 +204,32 @@ export const spacing = {
 } as const;
 
 export const sizes = {
-  rowArtwork: 48,
-  miniArtwork: 40,
-  tileArtwork: 140,
-  headerArtwork: 200,
+  rowArtwork: 52,
+  miniArtwork: 42,
+  tileArtwork: 148,
+  headerArtwork: 224,
   playerArtwork: 300,
   tabBar: 52,
-  miniPlayer: 60,
+  miniPlayer: 62,
+  /** The bar at the top of a page, under the status bar. */
+  topBar: 44,
+  /** A filter chip, fixed so a page's header has a known height. */
+  chip: 34,
+  /** The search field at the top of Search. */
+  field: 40,
+  /** The glyph on a missing cover, as a share of the cover's side. */
+  glyphShare: 0.38,
+  /** The bars of the now-playing mark over a row's artwork. */
+  equalizerBar: 3,
+  equalizerHeight: 14,
+  /** The grabber at the top of the player sheet. */
+  grabberWidth: 36,
+  grabberHeight: 5,
+  /** A round button beside a page's play button. */
+  roundButton: 48,
   icon: 24,
+  /** A glyph beside a label, such as the sort button's. */
+  iconSmall: 16,
   iconLarge: 32,
   toggle: 64,
   scrubberTrack: 4,
@@ -185,6 +255,22 @@ export const sizes = {
   /** The inset of a segmented control's sliding thumb. */
   segmentInset: 2,
 } as const;
+
+/** The gradient a missing cover with `seed` is drawn with, the same one every time. */
+export function artworkWash(theme: Theme, seed: string): readonly [string, string] {
+  // FNV-1a: cheap, and spreads short titles evenly over the washes.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return theme.washes[(hash >>> 0) % theme.washes.length];
+}
+
+/** The colour of the service `slug`, or the accent for one without its own. */
+export function brand(theme: Theme, slug: string): string {
+  return theme.brands[slug] ?? theme.colors.accent;
+}
 
 /** `hex` (`#rrggbb`) at `alpha`, as an rgba string. */
 function wash(hex: string, alpha: number): string {

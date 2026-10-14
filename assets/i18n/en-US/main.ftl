@@ -1102,12 +1102,44 @@ mobile-search-tracks = Songs
 mobile-search-albums = Albums
 mobile-search-artists = Artists
 mobile-search-playlists = Playlists
+mobile-search-all = All
+mobile-search-recent = Recent searches
+mobile-search-clear = Clear
+mobile-search-start = Find songs, albums, artists and playlists across your services
 mobile-library-tracks = Songs
 mobile-library-albums = Albums
 mobile-library-artists = Artists
 mobile-library-playlists = Playlists
 mobile-library-empty = Your library is empty
 mobile-library-sign-in = Sign in to a service under Accounts to see your library
+mobile-library-filter = Find in your library
+mobile-library-no-match = Nothing matches “{ $query }”
+mobile-library-sort = Sort by
+mobile-library-sort-recent = Recents
+mobile-library-sort-title = Title
+mobile-library-sort-creator = Creator
+mobile-library-grid = Show as a grid
+mobile-library-list = Show as a list
+mobile-library-count-tracks = { $count ->
+    [one] 1 song
+   *[other] { $count } songs
+}
+mobile-library-count-albums = { $count ->
+    [one] 1 album
+   *[other] { $count } albums
+}
+mobile-library-count-artists = { $count ->
+    [one] 1 artist
+   *[other] { $count } artists
+}
+mobile-library-count-playlists = { $count ->
+    [one] 1 playlist
+   *[other] { $count } playlists
+}
+mobile-track-count = { $count ->
+    [one] 1 song
+   *[other] { $count } songs
+}
 mobile-artist-top-tracks = Top songs
 mobile-artist-albums = Albums
 mobile-accounts = Accounts
@@ -1147,6 +1179,8 @@ mobile-remove = Remove from queue
 mobile-save = Save
 mobile-unsave = Remove from library
 mobile-explicit = Explicit
+# The one-letter mark beside an explicit song's artist.
+mobile-explicit-mark = E
 mobile-back = Back
 mobile-close = Close
 mobile-dismiss = Dismiss
@@ -1184,6 +1218,8 @@ mobile-settings-artwork-circle = Circle
 mobile-settings-reduce-motion = Reduce motion
 mobile-settings-reduce-motion-detail = Keeps the intro and other decorative animations still
 mobile-settings-reduce-motion-system = On, because Reduce Motion is on in the iPhone's settings
+mobile-settings-haptics = Haptics
+mobile-settings-haptics-detail = Small taps under your finger when you choose, save or play
 mobile-settings-content = Playback and content
 mobile-settings-hide-explicit = Hide explicit songs
 mobile-settings-hide-explicit-detail = Leaves them out of Home, Search, your library and every album, artist and playlist
