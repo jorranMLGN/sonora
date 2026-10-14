@@ -945,6 +945,16 @@ hours; the throwaway session has no tab left to do that.
 **Filtering.** Implement `chrome::Searchable` on the view; `Toolbar::bind` binds it to the search
 field in the title bar. Don't build a second search box.
 
+**The search screen narrows through a lens.** `state::Search` holds a `Lens`: one kind or all,
+the providers switched off (a deny list, so a provider that signs in later takes part), library
+only, and an order. `Parts` says which of a provider's three search calls a kind needs and
+`Served` records what the last fetch asked, so a lens change that only narrows reranks the hits
+already held and only a wider kind, a new provider or a new query goes back to the network.
+`narrowed` applies kind, library and order after ranking; hidden providers leave through `lanes`,
+and `sources` still lists them so the filter menu can switch them back on. `state::SearchHistory`
+keeps the last 20 queries as one JSON row under `search-history` in `app_state`, and the view
+records a query only when it is acted on (Enter, opening or playing a hit), never while typing.
+
 **Actions and keys.** Declare actions in `crates/input/src/lib.rs` (`actions!` macro), bind them in
 `bindings()`, handle them with `cx.on_action` (global, in `sonora/src/actions.rs`) or
 `.on_action(cx.listener(…))` (scoped). Key contexts: `Workspace`, `Input`, `Table`. Both `cmd-` and

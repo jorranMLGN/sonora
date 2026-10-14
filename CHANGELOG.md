@@ -48,6 +48,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out of another, and signing out of one leaves the rest playing.
 - Search asks every connected provider at once and gives each one its own column. Local files keep
   their own filter on the Local Music screen.
+- Search can now be narrowed to songs, artists, albums or playlists, limited to chosen providers or
+  your library, and sorted by title, artist, duration or year. Alt and a digit from 1 to 5 switch
+  between the tabs.
+- Recent searches show up when the search field is empty.
 - Home weaves its feed from every connected provider instead of only the one you last signed in to.
 - Tracks, search results and quick pick cards show which provider they came from, and the library
   rows in the sidebar carry their provider's logo.
