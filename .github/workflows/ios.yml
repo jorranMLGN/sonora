@@ -32,7 +32,6 @@ jobs:
       - name: Toolchain
         run: |
           rustup show active-toolchain || rustup toolchain install
-          rustup target add aarch64-apple-ios
           xcodebuild -version
           node --version
 
@@ -44,27 +43,8 @@ jobs:
             . -> target
             crates/mobile/bindgen -> target
 
-      - name: Build the Rust core
-        run: |
-          cargo rustc --locked -p mobile --release --target aarch64-apple-ios --crate-type staticlib -- --print native-static-libs
-          ls -la target/aarch64-apple-ios/release/libmobile.a
-
-      - name: Generate the Swift bindings
-        run: |
-          cargo run --locked --release --manifest-path crates/mobile/bindgen/Cargo.toml -- \
-            generate --library target/aarch64-apple-ios/release/libmobile.a \
-            --language swift --out-dir build/swift
-          ls -la build/swift
-          mkdir -p "$MODULE/generated"
-          cp build/swift/mobile.swift build/swift/mobileFFI.h "$MODULE/generated/"
-
-      - name: Package the XCFramework
-        run: |
-          rm -rf "$MODULE/rust/SonoraRust.xcframework"
-          xcodebuild -create-xcframework \
-            -library target/aarch64-apple-ios/release/libmobile.a \
-            -output "$MODULE/rust/SonoraRust.xcframework"
-          find "$MODULE/rust/SonoraRust.xcframework" -maxdepth 2
+      - name: Build the Rust core and package the XCFramework
+        run: apps/ios/scripts/build-core.sh aarch64-apple-ios
 
       # Settings shows which build this is. Expo inlines EXPO_PUBLIC_* when it bundles the JS,
       # which happens inside "Build the app".
@@ -141,5 +121,113 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: xcode-log
+          path: build-xcode.log
+          if-no-files-found: ignore
+
+  simulator:
+    runs-on: macos-latest
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "16.4"
+      CARGO_TERM_COLOR: always
+      MODULE: apps/ios/modules/sonora-core/ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          xcodebuild -version
+          node --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-sim
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            crates/mobile/bindgen -> target
+
+      - name: Build the Rust core and package the XCFramework
+        run: apps/ios/scripts/build-core.sh aarch64-apple-ios-sim
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/ios/package-lock.json
+
+      - name: Prebuild
+        working-directory: apps/ios
+        run: |
+          npm ci
+          npm run prebuild:ftl
+          npx tsc --noEmit -p .
+          npx expo prebuild --platform ios --clean --no-install
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/ios/ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-sim-${{ runner.os }}-${{ hashFiles('apps/ios/package-lock.json', 'apps/ios/modules/sonora-core/ios/SonoraCore.podspec') }}
+          restore-keys: pods-sim-${{ runner.os }}-
+
+      - name: Install pods
+        working-directory: apps/ios/ios
+        run: pod install
+
+      - name: Build the app for the simulator
+        working-directory: apps/ios/ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          set -o pipefail
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$GITHUB_WORKSPACE/build/dd" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > "$GITHUB_WORKSPACE/build-xcode.log" 2>&1 || {
+              grep -E "error:|BUILD FAILED" "$GITHUB_WORKSPACE/build-xcode.log" | head -80
+              exit 1
+            }
+          test -d "$GITHUB_WORKSPACE/build/dd/Build/Products/Release-iphonesimulator/$SCHEME.app"
+
+      - name: Boot a simulator and launch the app
+        run: |
+          set -euo pipefail
+          APP=$(ls -d build/dd/Build/Products/Release-iphonesimulator/*.app | head -1)
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)['devices']
+          c=[(r,x['udid']) for r,l in d.items() if 'iOS' in r for x in l if x['name'].startswith('iPhone') and 'Pro' in x['name'] and 'Max' not in x['name']]
+          c.sort(key=lambda t:[int(n) for n in t[0].split('iOS-')[-1].split('-')])
+          print(c[-1][1])")
+          echo "device=$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install booted "$APP"
+          mkdir -p shots
+          xcrun simctl launch booted dev.sonora.app
+          sleep 20
+          xcrun simctl spawn booted launchctl list | grep dev.sonora.app || { echo "app crashed or did not start"; ls ~/Library/Logs/DiagnosticReports 2>/dev/null || true; exit 1; }
+          xcrun simctl io booted screenshot shots/1-home.png
+          for pair in search:2-search library:3-library accounts:4-accounts; do
+            xcrun simctl openurl booted "sonora:///${pair%%:*}"
+            sleep 4
+            xcrun simctl io booted screenshot "shots/${pair##*:}.png"
+          done
+          xcrun simctl spawn booted launchctl list | grep dev.sonora.app || { echo "app crashed during navigation"; exit 1; }
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshots
+          path: shots/*.png
+          if-no-files-found: ignore
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-xcode-log
           path: build-xcode.log
           if-no-files-found: ignore
