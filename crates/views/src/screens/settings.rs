@@ -169,6 +169,7 @@ enum Slot {
     Widevine,
     Canvas,
     CanvasCodec,
+    Waveform,
     Equalizer,
     EqualizerPreset,
     EqualizerBands,
@@ -616,6 +617,7 @@ impl SettingsView {
             .chain([
                 Slot::Blur,
                 Slot::Corners,
+                Slot::Waveform,
                 Slot::Title("settings-group-fullscreen"),
                 Slot::Ambient,
             ])
@@ -738,6 +740,7 @@ impl SettingsView {
             Slot::Adaptive => (t!("settings-adaptive"), t!("settings-adaptive-detail")),
             Slot::Ambient => (t!("settings-ambient"), t!("settings-ambient-detail")),
             Slot::Canvas => (t!("settings-canvas"), t!("settings-canvas-detail")),
+            Slot::Waveform => (t!("settings-waveform"), t!("settings-waveform-detail")),
             Slot::CanvasCodec => (
                 t!("settings-canvas-codec"),
                 t!("settings-canvas-codec-missing"),
@@ -1010,6 +1013,7 @@ impl SettingsView {
             Slot::Adaptive => self.adaptive_row(cx).element,
             Slot::Ambient => self.ambient_row(cx).element,
             Slot::Canvas => self.canvas_row(cx).element,
+            Slot::Waveform => self.waveform_row(cx).element,
             Slot::CanvasCodec => self.codec_row(cx).element,
             Slot::AmbientMotion => self.ambient_motion_row(cx).element,
             Slot::Spectrum(place, knob) => self.spectrum_row(place, knob, cx).element,
@@ -2021,6 +2025,26 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_canvas(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn waveform_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).waveform();
+
+        self.row(
+            t!("settings-waveform"),
+            t!("settings-waveform-detail"),
+            muted,
+            small,
+            Switch::new("waveform", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_waveform(!on, cx));
                 }))
                 .into_any_element(),
         )

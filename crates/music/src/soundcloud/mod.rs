@@ -7,6 +7,7 @@ mod playlists;
 mod search;
 mod stream;
 mod users;
+mod waveform;
 mod wire;
 
 use std::path::PathBuf;

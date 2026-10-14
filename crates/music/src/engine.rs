@@ -29,6 +29,7 @@ use crate::audio::{Chain, Volume};
 use crate::cast::CastSink;
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
+use crate::waveform::{self, Analysis};
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
 
 /// How many frames the decoder hands over at a time. Small enough that a skip is heard at once,
@@ -118,6 +119,13 @@ pub trait Fetch: Send + Sync + 'static {
     fn reopen_to_seek(&self) -> bool {
         false
     }
+
+    /// Whether a track may be decoded a second time, once all of it is in, to measure the
+    /// waveform its seek bar draws. A provider whose every read costs something beyond the
+    /// bytes, as a CDM decrypting each sample does, says no.
+    fn measurable(&self) -> bool {
+        true
+    }
 }
 
 /// Starts an engine for `fetch`. The pair it hands back is what a `PlaybackFactory` returns.
@@ -131,6 +139,8 @@ pub fn start<F: Fetch>(
     let (events, event_rx) = unbounded_channel();
     let spectrum = Spectrum::new();
     let engine_spectrum = spectrum.clone();
+    let analysis = Analysis::default();
+    let engine_analysis = analysis.clone();
     let name = fetch.name();
     let spawned = std::thread::Builder::new()
         .name(format!("{name}-playback"))
@@ -140,7 +150,10 @@ pub fn start<F: Fetch>(
                 config,
                 command_rx,
                 events,
-                engine_spectrum,
+                Taps {
+                    spectrum: engine_spectrum,
+                    analysis: engine_analysis,
+                },
                 slug,
                 cast,
             )
@@ -149,7 +162,11 @@ pub fn start<F: Fetch>(
         log::error!("playback: cannot spawn the {name} engine thread: {error}");
     }
     (
-        Box::new(Handle { commands, spectrum }),
+        Box::new(Handle {
+            commands,
+            spectrum,
+            analysis,
+        }),
         Box::new(Events(event_rx)),
     )
 }
@@ -196,9 +213,17 @@ enum Job<F: Fetch> {
     Gain(f32),
 }
 
+/// What the engine shares with its `Handle` while it plays: the spectrum the output feeds and
+/// the waveforms measured from finished downloads.
+struct Taps {
+    spectrum: Spectrum,
+    analysis: Analysis,
+}
+
 struct Handle {
     commands: UnboundedSender<Command>,
     spectrum: Spectrum,
+    analysis: Analysis,
 }
 
 impl Player for Handle {
@@ -252,6 +277,10 @@ impl Player for Handle {
     fn spectrum(&self) -> Option<Spectrum> {
         Some(self.spectrum.clone())
     }
+
+    fn analysis(&self) -> Option<Analysis> {
+        Some(self.analysis.clone())
+    }
 }
 
 struct Events(UnboundedReceiver<PlaybackEvent>);
@@ -292,7 +321,7 @@ fn run<F: Fetch>(
     config: PlaybackConfig,
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
-    spectrum: Spectrum,
+    taps: Taps,
     slug: &'static str,
     cast: Option<CastSink>,
 ) {
@@ -307,7 +336,7 @@ fn run<F: Fetch>(
         }
     };
     runtime.block_on(engine_loop(
-        fetch, config, commands, events, spectrum, slug, cast,
+        fetch, config, commands, events, taps, slug, cast,
     ));
 }
 
@@ -316,10 +345,11 @@ async fn engine_loop<F: Fetch>(
     config: PlaybackConfig,
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
-    spectrum: Spectrum,
+    taps: Taps,
     slug: &'static str,
     cast: Option<CastSink>,
 ) {
+    let Taps { spectrum, analysis } = taps;
     let (cue, mut written) = Cue::new();
     let (changed, mut gone) = unbounded_channel();
     // The user's gain, the shared equalizer and the spectrum tap: what every engine hands the
@@ -383,7 +413,7 @@ async fn engine_loop<F: Fetch>(
     let (fetched, mut arrivals) = unbounded_channel::<Fetched<F>>();
     // the wait on the current track's download, so the state hears when all of it is in
     let mut watching: Option<tokio::task::AbortHandle> = None;
-    let (downloads, mut downloaded) = unbounded_channel::<String>();
+    let (downloads, mut downloaded) = unbounded_channel::<(String, F::Loaded)>();
 
     loop {
         tokio::select! {
@@ -407,6 +437,7 @@ async fn engine_loop<F: Fetch>(
                         segued = None;
                         waiting = None;
                         epoch += 1;
+                        analysis.bump();
                         if let Some(handle) = inflight.take() {
                             handle.abort();
                         }
@@ -584,8 +615,9 @@ async fn engine_loop<F: Fetch>(
                 }
             }
             done = downloaded.recv() => {
-                let Some(id) = done else { break };
+                let Some((id, loaded)) = done else { break };
                 if current.as_deref() == Some(id.as_str()) {
+                    measure(&fetch, &id, loaded, &analysis);
                     events.send(PlaybackEvent::Downloaded { id: Some(id) }).ok();
                 }
             }
@@ -643,7 +675,7 @@ fn watch<F: Fetch>(
     fetch: &Arc<F>,
     id: &str,
     loaded: &F::Loaded,
-    downloads: &UnboundedSender<String>,
+    downloads: &UnboundedSender<(String, F::Loaded)>,
 ) -> tokio::task::AbortHandle {
     let (fetch, id, loaded, downloads) = (
         fetch.clone(),
@@ -653,7 +685,7 @@ fn watch<F: Fetch>(
     );
     tokio::spawn(async move {
         fetch.downloaded(&loaded).await;
-        downloads.send(id).ok();
+        downloads.send((id, loaded)).ok();
     })
     .abort_handle()
 }
@@ -665,7 +697,7 @@ fn watch_ahead<F: Fetch>(
     fetch: &Arc<F>,
     current: &Option<String>,
     ahead: &Option<(String, F::Loaded)>,
-    downloads: &UnboundedSender<String>,
+    downloads: &UnboundedSender<(String, F::Loaded)>,
     watching: &mut Option<tokio::task::AbortHandle>,
 ) {
     if let Some(handle) = watching.take() {
@@ -676,6 +708,33 @@ fn watch_ahead<F: Fetch>(
     };
     if let Some((_, loaded)) = ahead.as_ref().filter(|(cached, _)| cached == id) {
         *watching = Some(watch(fetch, id, loaded, downloads));
+    }
+}
+
+/// Measures the waveform of a track that has fully arrived, on a thread of its own, and files
+/// it in `analysis`. A track measured already, or a provider that says no, costs nothing; a load
+/// before the measurement ends stops it.
+fn measure<F: Fetch>(fetch: &Arc<F>, id: &str, loaded: F::Loaded, analysis: &Analysis) {
+    if !fetch.measurable() || analysis.has(id) {
+        return;
+    }
+    let (fetch, id, analysis) = (fetch.clone(), id.to_owned(), analysis.clone());
+    let started = analysis.epoch();
+    let spawned = std::thread::Builder::new()
+        .name(format!("{}-waveform", fetch.name()))
+        .spawn(move || {
+            let Some(source) = fetch.open(&id, &loaded, Duration::ZERO) else {
+                return;
+            };
+            let gone = || analysis.epoch() != started;
+            match waveform::measure(source, gone) {
+                Some(measured) => analysis.keep(id, measured),
+                None if !gone() => log::debug!("playback: {id} decoded to nothing to measure"),
+                None => {}
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("playback: cannot spawn the waveform thread: {error}");
     }
 }
 

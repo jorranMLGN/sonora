@@ -119,6 +119,12 @@ impl Fetch for Apple {
         true
     }
 
+    /// Every sample of an Apple track goes through the CDM, so measuring one would decrypt the
+    /// whole of it a second time. Its seek bar stays a plain line.
+    fn measurable(&self) -> bool {
+        false
+    }
+
     /// Builds a decoder over a licensed track and places it at `at`. Only the header is read
     /// here; the rest decrypts as it is pulled.
     ///

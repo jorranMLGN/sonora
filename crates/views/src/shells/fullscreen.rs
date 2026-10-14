@@ -22,7 +22,7 @@ use ui::{
 use crate::chrome::{Aside, TitleBarOptions};
 use crate::shared::canvas::{CanvasArt, canvas_playing};
 use crate::shared::menus::ItemMenu;
-use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon};
+use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon, waveform};
 use crate::shared::veil::{Edge, veil};
 use crate::shared::visualizer::VisualizerDrive;
 use crate::shared::{self, ambient};
@@ -121,6 +121,8 @@ impl FullscreenView {
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         let canvas_state = Sonora::global(cx).canvas.clone();
         cx.observe(&canvas_state, |_, _, cx| cx.notify()).detach();
+        let waveforms = Sonora::global(cx).waveforms.clone();
+        cx.observe(&waveforms, |_, _, cx| cx.notify()).detach();
         let canvas_art = cx.new(CanvasArt::new);
         let panel = settings.read(cx).fullscreen_tab();
         let shown = panel.unwrap_or(SideTab::Lyrics);
@@ -673,6 +675,7 @@ impl FullscreenView {
         let muted = theme.muted_foreground;
         let empty = muted.opacity(0.3);
         let text = theme.text(Text::Tiny);
+        let wave = waveform(cx);
         let playback = self.playback.read(cx);
         let seekable = playback.track().is_some();
         let progress = self.pending.unwrap_or_else(|| playback.progress());
@@ -714,6 +717,9 @@ impl FullscreenView {
                     Scrubber::new(&self.seek, progress)
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .enabled(seekable)
+                        .when_some(wave, |this, levels| {
+                            this.waveform(levels).h(theme.metrics.control)
+                        })
                         .when_some(bubble, |this, (at, text)| this.bubble(at, text))
                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
                             this.pending = Some(*fraction);

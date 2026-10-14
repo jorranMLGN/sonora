@@ -109,6 +109,10 @@ impl MusicApi for Tagged {
         self.inner.canvas(tag::untag(track_id)).await
     }
 
+    async fn waveform(&self, track_id: &str) -> Result<Option<crate::Waveform>> {
+        self.inner.waveform(tag::untag(track_id)).await
+    }
+
     async fn track_tags(&self, track_id: &str) -> Result<TrackTags> {
         self.inner.track_tags(tag::untag(track_id)).await
     }

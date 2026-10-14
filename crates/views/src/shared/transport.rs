@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gpui::prelude::*;
 use gpui::{App, Entity, SharedString, div};
 use i18n::t;
@@ -20,6 +22,16 @@ pub(crate) fn volume_icon(level: f32) -> &'static str {
 
 pub(crate) fn percent(fraction: f32) -> SharedString {
     t!("player-percent", value = (fraction * 100.).round())
+}
+
+/// The playing track's waveform for a seek bar to draw, while the setting is on and one is
+/// known. A view that draws it observes `Sonora::global(cx).waveforms`.
+pub(crate) fn waveform(cx: &App) -> Option<Arc<[f32]>> {
+    Sonora::global(cx)
+        .waveforms
+        .read(cx)
+        .current(cx)
+        .map(music::Waveform::shared)
 }
 
 pub(crate) fn like(track: Option<music::Track>, cx: &App) -> Button {

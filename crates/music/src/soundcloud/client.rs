@@ -5,10 +5,10 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 
 use super::http::Http;
-use super::{GUEST_ID, fetch_profile, library, playlists, search, users};
+use super::{GUEST_ID, fetch_profile, library, playlists, search, users, waveform};
 use crate::{
     Album, AlbumDetail, Artist, ArtistProfile, MediaKind, MusicApi, Playlist, PlaylistDetail,
-    SavedArtist, Track, UserDetail, UserProfile,
+    SavedArtist, Track, UserDetail, UserProfile, Waveform,
 };
 
 /// How far a library listing reaches. The trait has no limit any more, so the
@@ -88,6 +88,10 @@ impl MusicApi for SoundCloudClient {
 
     async fn track_playcount(&self, track_id: &str) -> Result<Option<u64>> {
         users::track_playcount(&self.http, track_id).await
+    }
+
+    async fn waveform(&self, track_id: &str) -> Result<Option<Waveform>> {
+        waveform::waveform(&self.http, track_id).await
     }
 
     async fn playlists(&self) -> Result<Vec<Playlist>> {

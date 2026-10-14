@@ -18,7 +18,7 @@ use ui::{
 
 use crate::chrome::SidebarRight;
 use crate::shared::menus::ItemMenu;
-use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon};
+use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon, waveform};
 
 const SEEK_MAX: f32 = 560.;
 const VOLUME_WIDTH: f32 = 110.;
@@ -45,7 +45,9 @@ impl PlayerBar {
     pub fn new(playback: Entity<Playback>, queue: Entity<Queue>, cx: &mut Context<Self>) -> Self {
         let library = Sonora::global(cx).library.clone();
         let settings = Sonora::global(cx).settings.clone();
+        let waveforms = Sonora::global(cx).waveforms.clone();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
+        cx.observe(&waveforms, |_, _, cx| cx.notify()).detach();
         cx.observe(&queue, |_, _, cx| cx.notify()).detach();
         cx.observe(&library, |_, _, cx| cx.notify()).detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
@@ -385,6 +387,7 @@ impl Render for PlayerBar {
             false => None,
         };
 
+        let wave = waveform(cx);
         let playback = self.playback.read(cx);
         let seekable = playback.track().is_some();
         let progress = self.pending.unwrap_or_else(|| playback.progress());
@@ -427,6 +430,7 @@ impl Render for PlayerBar {
                     Scrubber::new(&self.seek, progress)
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .enabled(seekable)
+                        .when_some(wave, Scrubber::waveform)
                         .when_some(seek_bubble, |this, (at, text)| this.bubble(at, text))
                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
                             this.pending = Some(*fraction);
