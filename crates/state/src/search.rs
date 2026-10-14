@@ -11,6 +11,8 @@ use crate::{Io, Library, Network, Session, SessionEvent, Shelf, join};
 
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const LIMIT: usize = 20;
+/// How many hits of one kind a lane keeps when the lens shows only that kind.
+const FOCUSED: usize = 50;
 const EXACT: u32 = 100;
 const PREFIX: u32 = 80;
 const WORD: u32 = 60;
@@ -157,6 +159,8 @@ pub enum Hit {
 pub struct Found {
     pub slug: &'static str,
     pub hit: Hit,
+    /// Whether the hit is in the user's library rather than only in the catalog.
+    pub mine: bool,
 }
 
 impl Found {
@@ -207,6 +211,7 @@ impl Query {
 struct Scored {
     score: u32,
     popularity: u32,
+    mine: bool,
     hit: Hit,
 }
 
@@ -520,6 +525,10 @@ impl Search {
             let state = held.state(Shelf::Streaming);
             let (tracks, albums, playlists) = (state.tracks(), state.albums(), state.playlists());
 
+            let limit = match self.lens.kind {
+                None => LIMIT,
+                Some(_) => FOCUSED,
+            };
             let empty = Catalog::default();
             let mut all: Vec<(Scored, &'static str)> = Vec::new();
             for slug in self.lanes(cx) {
@@ -545,9 +554,17 @@ impl Search {
                     .collect();
 
                 all.extend(
-                    rank(&mine, &sleeves, &lists, catalog, &self.portraits, query)
-                        .into_iter()
-                        .map(|scored| (scored, slug)),
+                    rank(
+                        &mine,
+                        &sleeves,
+                        &lists,
+                        catalog,
+                        &self.portraits,
+                        query,
+                        limit,
+                    )
+                    .into_iter()
+                    .map(|scored| (scored, slug)),
                 );
             }
             all.sort_by(|(left, _), (right, _)| {
@@ -560,6 +577,7 @@ impl Search {
             all.into_iter()
                 .map(|(scored, slug)| Found {
                     slug,
+                    mine: scored.mine,
                     hit: scored.hit,
                 })
                 .collect()
@@ -576,16 +594,24 @@ fn rank(
     catalog: &Catalog,
     portraits: &HashMap<String, String>,
     asked: &str,
+    limit: usize,
 ) -> Vec<Scored> {
     let query = Query::new(asked);
     if query.terms.is_empty() {
         return Vec::new();
     }
 
-    let mut all = songs(library, &catalog.tracks, &query);
-    all.extend(artists(library, &catalog.tracks, albums, portraits, &query));
-    all.extend(albums_of(albums, library, catalog, &query));
-    all.extend(playlists_of(playlists, &catalog.playlists, &query));
+    let mut all = songs(library, &catalog.tracks, &query, limit);
+    all.extend(artists(
+        library,
+        &catalog.tracks,
+        albums,
+        portraits,
+        &query,
+        limit,
+    ));
+    all.extend(albums_of(albums, library, catalog, &query, limit));
+    all.extend(playlists_of(playlists, &catalog.playlists, &query, limit));
     order(&mut all);
 
     all
@@ -595,7 +621,7 @@ fn owns(slug: &str, id: Option<&str>) -> bool {
     id.and_then(music::tag::slug_of) == Some(slug)
 }
 
-fn songs(library: &[Track], catalog: &[Track], query: &Query) -> Vec<Scored> {
+fn songs(library: &[Track], catalog: &[Track], query: &Query, limit: usize) -> Vec<Scored> {
     let mut scored: Vec<Scored> = Vec::new();
 
     for (track, rank) in sources(library, catalog) {
@@ -615,14 +641,21 @@ fn songs(library: &[Track], catalog: &[Track], query: &Query) -> Vec<Scored> {
         scored.push(Scored {
             score,
             popularity: track.popularity,
+            mine: rank.is_none(),
             hit: Hit::Song(track.clone()),
         });
     }
 
-    capped(scored)
+    capped(scored, limit)
 }
 
-fn albums_of(albums: &[Album], library: &[Track], catalog: &Catalog, query: &Query) -> Vec<Scored> {
+fn albums_of(
+    albums: &[Album],
+    library: &[Track],
+    catalog: &Catalog,
+    query: &Query,
+    limit: usize,
+) -> Vec<Scored> {
     let saved = albums.iter().map(|album| {
         (
             &album.id,
@@ -679,6 +712,7 @@ fn albums_of(albums: &[Album], library: &[Track], catalog: &Catalog, query: &Que
         scored.push(Scored {
             score,
             popularity,
+            mine: rank.is_none(),
             hit: Hit::Album(AlbumHit {
                 id: id.clone(),
                 name: name.clone(),
@@ -690,10 +724,15 @@ fn albums_of(albums: &[Album], library: &[Track], catalog: &Catalog, query: &Que
         });
     }
 
-    capped(scored)
+    capped(scored, limit)
 }
 
-fn playlists_of(playlists: &[Playlist], catalog: &[Playlist], query: &Query) -> Vec<Scored> {
+fn playlists_of(
+    playlists: &[Playlist],
+    catalog: &[Playlist],
+    query: &Query,
+    limit: usize,
+) -> Vec<Scored> {
     let total = catalog.len();
     let saved = playlists.iter().map(|playlist| (playlist, None));
     let found = catalog
@@ -719,6 +758,7 @@ fn playlists_of(playlists: &[Playlist], catalog: &[Playlist], query: &Query) -> 
         scored.push(Scored {
             score,
             popularity: 0,
+            mine: rank.is_none(),
             hit: Hit::Playlist(PlaylistHit {
                 id: playlist.id.clone(),
                 name: playlist.name.clone(),
@@ -728,7 +768,7 @@ fn playlists_of(playlists: &[Playlist], catalog: &[Playlist], query: &Query) -> 
         });
     }
 
-    capped(scored)
+    capped(scored, limit)
 }
 
 fn artists(
@@ -737,6 +777,7 @@ fn artists(
     albums: &[Album],
     portraits: &HashMap<String, String>,
     query: &Query,
+    limit: usize,
 ) -> Vec<Scored> {
     let mut tallies: Vec<(u32, u32, ArtistHit)> = Vec::new();
 
@@ -798,9 +839,11 @@ fn artists(
             .map(|(score, popularity, artist)| Scored {
                 score,
                 popularity,
+                mine: artist.saved > 0,
                 hit: Hit::Artist(artist),
             })
             .collect(),
+        limit,
     )
 }
 
@@ -846,9 +889,9 @@ fn order(scored: &mut [Scored]) {
     });
 }
 
-fn capped(mut scored: Vec<Scored>) -> Vec<Scored> {
+fn capped(mut scored: Vec<Scored>, limit: usize) -> Vec<Scored> {
     order(&mut scored);
-    scored.truncate(LIMIT);
+    scored.truncate(limit);
     scored
 }
 
@@ -979,10 +1022,18 @@ mod tests {
             ..Catalog::default()
         };
 
-        super::rank(library, albums, &[], &catalog, &HashMap::new(), asked)
-            .into_iter()
-            .map(|scored| scored.hit)
-            .collect()
+        super::rank(
+            library,
+            albums,
+            &[],
+            &catalog,
+            &HashMap::new(),
+            asked,
+            LIMIT,
+        )
+        .into_iter()
+        .map(|scored| scored.hit)
+        .collect()
     }
 
     fn track(name: &str, artists: &str, album: &str) -> Track {
@@ -1169,6 +1220,7 @@ mod tests {
             &Catalog::default(),
             &portraits,
             "echo",
+            LIMIT,
         );
 
         let Some(Hit::Artist(artist)) = hits
@@ -1179,5 +1231,52 @@ mod tests {
             panic!("expected an artist hit");
         };
         assert_eq!(artist.cover.as_deref(), Some("https://portrait"));
+    }
+
+    #[test]
+    fn one_kind_lifts_the_cap() {
+        let catalog = Catalog {
+            tracks: (0..30)
+                .map(|at| track(&format!("Song {at}"), "Band", "Record"))
+                .collect(),
+            ..Catalog::default()
+        };
+        let songs = |limit| {
+            super::rank(&[], &[], &[], &catalog, &HashMap::new(), "song", limit)
+                .iter()
+                .filter(|scored| scored.hit.kind() == Kind::Song)
+                .count()
+        };
+        assert_eq!(songs(LIMIT), 20);
+        assert_eq!(songs(FOCUSED), 30);
+    }
+
+    #[test]
+    fn library_hits_are_marked_mine() {
+        let catalog = Catalog {
+            tracks: vec![track(
+                "Bohemian Like You",
+                "The Dandy Warhols",
+                "Thirteen Tales",
+            )],
+            ..Catalog::default()
+        };
+        let scored = super::rank(
+            &[rhapsody()],
+            &[],
+            &[],
+            &catalog,
+            &HashMap::new(),
+            "bohemian",
+            LIMIT,
+        );
+        let mine = |name: &str| {
+            scored.iter().find_map(|scored| match &scored.hit {
+                Hit::Song(track) if track.name == name => Some(scored.mine),
+                _ => None,
+            })
+        };
+        assert_eq!(mine("Bohemian Rhapsody"), Some(true));
+        assert_eq!(mine("Bohemian Like You"), Some(false));
     }
 }
