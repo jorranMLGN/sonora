@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useNavigation, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -26,6 +27,14 @@ export default function Player() {
   const { colors } = useTheme();
   const styles = useStyles();
   const artwork = useSettings((s) => s.artwork);
+  // Where the finger holds the scrubber, so the time under it follows the drag.
+  const [scrub, setScrub] = useState<number | null>(null);
+  const scrubbing = scrub !== null;
+  const navigation = useNavigation();
+  // While the scrubber is held, the sheet must not take the drag as a swipe down to close.
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !scrubbing });
+  }, [navigation, scrubbing]);
 
   const header = (
     <View style={styles.header}>
@@ -47,10 +56,12 @@ export default function Player() {
         <Scrubber
           value={positionMs}
           max={player?.durationMs ?? 0}
+          playing={playing}
           onSeek={(ms) => attempt(bridge.seek(ms))}
+          onScrub={setScrub}
         />
         <View style={styles.times}>
-          <Text style={styles.subtitle}>{clock(positionMs)}</Text>
+          <Text style={styles.subtitle}>{clock(scrub ?? positionMs)}</Text>
           <Text style={styles.subtitle}>{clock(player?.durationMs ?? 0)}</Text>
         </View>
       </View>
@@ -116,6 +127,7 @@ export default function Player() {
       <ErrorBanner />
       <FlatList
         data={queue?.items ?? []}
+        scrollEnabled={!scrubbing}
         keyExtractor={(item, index) => `${index}:${item.id}`}
         ListHeaderComponent={header}
         ListEmptyComponent={<Text style={styles.empty}>{t('mobile-queue-empty')}</Text>}

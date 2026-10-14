@@ -164,7 +164,11 @@ export const sizes = {
   toggle: 64,
   scrubberTrack: 4,
   scrubberThumb: 14,
-  scrubberHit: 32,
+  /** The scrubber's touch area: tall, so a drag lands on it rather than on the page. */
+  scrubberHit: 48,
+  /** The time bubble over the scrubber's thumb while it is dragged. */
+  scrubberTipWidth: 64,
+  scrubberTipGap: 8,
   hairline: 1,
   /** The intro: its equalizer mark, the rings that pulse out of it, the glow behind a page. */
   introMark: 120,
