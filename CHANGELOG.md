@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The seek bar now shows a song's waveform, SoundCloud style, so you can see the quiet and loud
   parts and where you are in them. It works for SoundCloud, local files, YouTube, Deezer and
   Subsonic, and can be turned off under Appearance.
+- Choose how the waveform looks, as mirrored bars, plain bars or a smooth wave, how fine it is,
+  and whether it shows in the player bar, fullscreen and the mini player. Turn off measuring to
+  save the work of reading each song twice and keep only SoundCloud's own waveforms.
 - Spotify songs with a Canvas now play its looping video in fullscreen and above the queue.
 - The sidebar now shows the cover above the queue for songs without a Canvas, like SoundCloud and
   YouTube tracks.

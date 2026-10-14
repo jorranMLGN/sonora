@@ -9,8 +9,8 @@ use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::cast::CastSink;
 use music::equalizer::{Equalizer, Gains};
 use music::{
-    MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents, PlaybackFactory,
-    Player, Spectrum, Track,
+    Measuring, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
+    PlaybackFactory, Player, Spectrum, Track,
 };
 use ui::{Pin, PinKind};
 
@@ -404,6 +404,9 @@ pub struct Playback {
     gapless: bool,
     /// Shared with every engine started here, so a change reaches the output without a restart.
     equalizer: Equalizer,
+    /// Shared with every engine started here and kept in step with the settings, so switching
+    /// waveform measuring off stops the next decode without a restart.
+    measuring: Measuring,
     repeat: Repeat,
     radio: bool,
     /// The track the current similar-tracks suggestions were drawn from.
@@ -508,6 +511,10 @@ impl Playback {
             this.suggest_similar(cx);
         })
         .detach();
+        cx.observe(&settings, |this, settings, cx| {
+            this.measuring.set(settings.read(cx).measures_waveforms());
+        })
+        .detach();
 
         let level = settings.read(cx).volume();
         let normalisation = settings.read(cx).normalisation();
@@ -518,6 +525,7 @@ impl Playback {
         );
         let repeat = settings.read(cx).repeat();
         let radio = settings.read(cx).radio();
+        let measuring = Measuring::new(settings.read(cx).measures_waveforms());
 
         let mut playback = Self {
             state: PlaybackState::Idle,
@@ -533,6 +541,7 @@ impl Playback {
             normalisation,
             gapless,
             equalizer,
+            measuring,
             repeat,
             radio,
             seeded: None,
@@ -2238,6 +2247,7 @@ impl Playback {
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
             equalizer: self.equalizer.clone(),
+            measuring: self.measuring.clone(),
         };
         let (engine, events) = playback.start(config, self.cast.clone());
 

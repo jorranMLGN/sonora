@@ -6,11 +6,11 @@ use gpui::{
     SharedString, Window, WindowControlArea, div, px, relative, svg,
 };
 use i18n::t;
-use state::{AppSettings, Playback, PlaybackState, Queue, Sonora};
+use state::{AppSettings, Playback, PlaybackState, Queue, Sonora, WaveformPlace};
 use ui::{ActiveTheme as _, Artwork, Button, Scrubber, ScrubberState, Text, Visualizer, clock};
 
 use crate::shared::provider_mark;
-use crate::shared::transport::{next, previous, toggle, volume_icon};
+use crate::shared::transport::{drawn, next, previous, toggle, volume_icon, waveform};
 use crate::shared::visualizer::VisualizerDrive;
 
 const ART: gpui::Pixels = px(64.);
@@ -34,7 +34,9 @@ impl MiniPlayer {
         let playback = Sonora::global(cx).playback.clone();
         let queue = Sonora::global(cx).queue.clone();
         let settings = Sonora::global(cx).settings.clone();
+        let waveforms = Sonora::global(cx).waveforms.clone();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
+        cx.observe(&waveforms, |_, _, cx| cx.notify()).detach();
         cx.observe(&queue, |_, _, cx| cx.notify()).detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
 
@@ -111,6 +113,7 @@ impl MiniPlayer {
 impl Render for MiniPlayer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
+        let wave = waveform(WaveformPlace::Mini, cx);
         let held = self.playback.read(cx);
         let track = held.track().cloned();
         let seekable = track.is_some();
@@ -256,6 +259,7 @@ impl Render for MiniPlayer {
                                                     theme.foreground,
                                                 )
                                                 .enabled(seekable)
+                                                .when_some(wave, drawn)
                                                 .on_move(cx.listener(
                                                     |this, fraction: &f32, _, cx| {
                                                         this.pending = Some(*fraction);

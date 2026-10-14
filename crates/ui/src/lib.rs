@@ -97,7 +97,7 @@ pub use scrollbar::{
     update_middle_scroll,
 };
 pub use scroller::{Scroller, middle_scroll, perch_room, perched, return_to, return_top};
-pub use scrubber::{Scrubber, ScrubberState};
+pub use scrubber::{Scrubber, ScrubberState, WaveDensity, WaveStyle};
 pub use separator::Separator;
 pub use shield::Shield;
 pub use skeleton::{Initials, Skeleton};

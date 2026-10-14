@@ -29,7 +29,7 @@ use crate::audio::{Chain, Volume};
 use crate::cast::CastSink;
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
-use crate::waveform::{self, Analysis};
+use crate::waveform::{self, Analysis, Measuring};
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
 
 /// How many frames the decoder hands over at a time. Small enough that a skip is heard at once,
@@ -141,6 +141,7 @@ pub fn start<F: Fetch>(
     let engine_spectrum = spectrum.clone();
     let analysis = Analysis::default();
     let engine_analysis = analysis.clone();
+    let measuring = config.measuring.clone();
     let name = fetch.name();
     let spawned = std::thread::Builder::new()
         .name(format!("{name}-playback"))
@@ -153,6 +154,7 @@ pub fn start<F: Fetch>(
                 Taps {
                     spectrum: engine_spectrum,
                     analysis: engine_analysis,
+                    measuring,
                 },
                 slug,
                 cast,
@@ -218,6 +220,7 @@ enum Job<F: Fetch> {
 struct Taps {
     spectrum: Spectrum,
     analysis: Analysis,
+    measuring: Measuring,
 }
 
 struct Handle {
@@ -349,7 +352,11 @@ async fn engine_loop<F: Fetch>(
     slug: &'static str,
     cast: Option<CastSink>,
 ) {
-    let Taps { spectrum, analysis } = taps;
+    let Taps {
+        spectrum,
+        analysis,
+        measuring,
+    } = taps;
     let (cue, mut written) = Cue::new();
     let (changed, mut gone) = unbounded_channel();
     // The user's gain, the shared equalizer and the spectrum tap: what every engine hands the
@@ -617,7 +624,7 @@ async fn engine_loop<F: Fetch>(
             done = downloaded.recv() => {
                 let Some((id, loaded)) = done else { break };
                 if current.as_deref() == Some(id.as_str()) {
-                    measure(&fetch, &id, loaded, &analysis);
+                    measure(&fetch, &id, loaded, &analysis, &measuring);
                     events.send(PlaybackEvent::Downloaded { id: Some(id) }).ok();
                 }
             }
@@ -712,11 +719,18 @@ fn watch_ahead<F: Fetch>(
 }
 
 /// Measures the waveform of a track that has fully arrived, on a thread of its own, and files
-/// it in `analysis`. A track measured already, or a provider that says no, costs nothing; a load
-/// before the measurement ends stops it.
-fn measure<F: Fetch>(fetch: &Arc<F>, id: &str, loaded: F::Loaded, analysis: &Analysis) {
-    if !fetch.measurable() || analysis.has(id) {
-        return;
+/// it in `analysis`. With measuring switched off, a track measured already, or a provider that
+/// says no, no thread is started and nothing is decoded; a load before the measurement ends
+/// stops it. Hands back the thread it started.
+fn measure<F: Fetch>(
+    fetch: &Arc<F>,
+    id: &str,
+    loaded: F::Loaded,
+    analysis: &Analysis,
+    measuring: &Measuring,
+) -> Option<std::thread::JoinHandle<()>> {
+    if !measuring.on() || !fetch.measurable() || analysis.has(id) {
+        return None;
     }
     let (fetch, id, analysis) = (fetch.clone(), id.to_owned(), analysis.clone());
     let started = analysis.epoch();
@@ -733,9 +747,9 @@ fn measure<F: Fetch>(fetch: &Arc<F>, id: &str, loaded: F::Loaded, analysis: &Ana
                 None => {}
             }
         });
-    if let Err(error) = spawned {
-        log::warn!("playback: cannot spawn the waveform thread: {error}");
-    }
+    spawned
+        .inspect_err(|error| log::warn!("playback: cannot spawn the waveform thread: {error}"))
+        .ok()
 }
 
 /// Hands the audio thread a join that was waiting for the track it follows to start.
@@ -1196,5 +1210,43 @@ mod tests {
         let (cue, _written) = Cue::new();
         cue.arm();
         assert_eq!(mark.at(&cue), Duration::from_secs(10));
+    }
+    /// A provider whose tracks open to nothing, counting how often one is opened.
+    struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+
+    #[async_trait]
+    impl Fetch for Counted {
+        type Loaded = ();
+        type Source = rodio::source::Empty;
+
+        fn name(&self) -> &'static str {
+            "counted"
+        }
+
+        async fn load(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn open(&self, _id: &str, _loaded: &(), _at: Duration) -> Option<Self::Source> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+    }
+
+    #[test]
+    fn measuring_switched_off_starts_no_thread_and_decodes_nothing() {
+        let opened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fetch = Arc::new(Counted(opened.clone()));
+        let analysis = Analysis::default();
+        let measuring = Measuring::new(false);
+
+        assert!(measure(&fetch, "a", (), &analysis, &measuring).is_none());
+        assert_eq!(opened.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+        measuring.set(true);
+        let thread = measure(&fetch, "a", (), &analysis, &measuring)
+            .expect("measuring switched on starts a thread");
+        thread.join().expect("the measuring thread ends");
+        assert_eq!(opened.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 }
