@@ -205,13 +205,13 @@ fn firefox_root(home: &Path) -> PathBuf {
     home.to_path_buf()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 fn firefox_root(home: &Path) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        return roaming_dir(home);
-    }
-    #[cfg(not(target_os = "windows"))]
+    roaming_dir(home)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn firefox_root(home: &Path) -> PathBuf {
     home.to_path_buf()
 }
 
@@ -337,6 +337,7 @@ fn home_dir() -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
+#[cfg(target_os = "linux")]
 fn config_dir(home: &Path) -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
