@@ -19,17 +19,26 @@ permissions:
 jobs:
   announce:
     runs-on: ubuntu-latest
+    # A fork without the webhook has nowhere to announce to, so it skips rather than fails.
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
 
     steps:
+      - name: Check for the webhook
+        if: env.DISCORD_WEBHOOK_URL == ''
+        run: echo "::notice::DISCORD_RELEASE_WEBHOOK is not set, so the release is not announced"
+
       - uses: actions/checkout@v5
+        if: env.DISCORD_WEBHOOK_URL != ''
         with:
           ref: ${{ inputs.tag }}
 
       - uses: taiki-e/install-action@parse-changelog
+        if: env.DISCORD_WEBHOOK_URL != ''
 
       - name: Send release announcement
+        if: env.DISCORD_WEBHOOK_URL != ''
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
           RELEASE_TAG: ${{ inputs.tag }}
           REPO: ${{ github.repository }}
         run: |

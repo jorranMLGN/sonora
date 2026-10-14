@@ -4,9 +4,18 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  # nightly.yml reuses this workflow for its builds. Nothing here publishes anything outside a
+  # tag, so a nightly run only ever leaves workflow artifacts behind.
+  workflow_call:
+    inputs:
+      nightly:
+        description: build only the x86_64 Linux and Windows targets, with short-lived artifacts
+        type: boolean
+        default: false
 
+# github.workflow is the caller's name when nightly.yml calls in, so the two never share a group.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -17,29 +26,50 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
+  # The targets to build, as matrices the jobs below read. A nightly keeps the ones marked so.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      appimage: ${{ steps.plan.outputs.appimage }}
+    steps:
+      - name: pick the targets
+        id: plan
+        env:
+          NIGHTLY: ${{ inputs.nightly == true }}
+        run: |
+          set -euo pipefail
+          targets='[
+            {"target": "x86_64-unknown-linux-gnu", "os": "ubuntu-22.04", "nightly": true},
+            {"target": "aarch64-unknown-linux-gnu", "os": "ubuntu-22.04-arm"},
+            {"target": "aarch64-apple-darwin", "os": "macos-15"},
+            {"target": "x86_64-apple-darwin", "os": "macos-15-intel"},
+            {"target": "x86_64-pc-windows-msvc", "os": "windows-latest",
+             "arch": "x64compatible", "setup": "Sonora-Setup", "nightly": true},
+            {"target": "aarch64-pc-windows-msvc", "os": "windows-11-arm",
+             "arch": "arm64", "setup": "Sonora-Setup-arm64"}
+          ]'
+          if [ "$NIGHTLY" = true ]; then
+            targets="$(jq 'map(select(.nightly))' <<< "$targets")"
+          fi
+          build="$(jq -c 'map(del(.nightly))' <<< "$targets")"
+          appimage="$(jq -c '
+            map(select(.target | endswith("-linux-gnu"))
+              | {arch: (.target | split("-")[0]), target, runner: .os})
+          ' <<< "$targets")"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "appimage=$appimage" >> "$GITHUB_OUTPUT"
+          echo "build: $build"
+          echo "appimage: $appimage"
+
   build:
     name: ${{ matrix.target }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
-          - target: aarch64-apple-darwin
-            os: macos-15
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            arch: x64compatible
-            setup: Sonora-Setup
-          - target: aarch64-pc-windows-msvc
-            os: windows-11-arm
-            arch: arm64
-            setup: Sonora-Setup-arm64
+        include: ${{ fromJSON(needs.plan.outputs.build) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -108,6 +138,33 @@ jobs:
               ;;
           esac
 
+      - name: install cargo-deb
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@cargo-deb
+
+      - name: build the Debian package
+        if: runner.os == 'Linux'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: ./scripts/build-deb.sh "$TARGET" "$VERSION" dist
+
+      # Installing it on the runner is what proves its Depends resolve against the archive the
+      # package was built on, which is the oldest Ubuntu it is meant for.
+      - name: inspect the Debian package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          deb="$(echo dist/*.deb)"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          sudo apt-get install -y --no-install-recommends "./$deb"
+          test -x /usr/bin/sonora
+          test -f /usr/share/applications/sonora.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/sonora.svg
+          test -f /usr/share/metainfo/io.github.nolight132.sonora.metainfo.xml
+          test -f /usr/share/doc/sonora/THIRD-PARTY.md
+
       - name: install Inno Setup
         if: runner.os == 'Windows'
         shell: pwsh
@@ -136,10 +193,12 @@ jobs:
           name: "${{ runner.os == 'macOS' && format('darwin-{0}', matrix.target) || format('release-{0}', matrix.target) }}"
           path: dist/*
           if-no-files-found: error
+          retention-days: ${{ inputs.nightly && 7 || 0 }}
 
   bundle:
     name: macos app bundle
     needs: build
+    if: ${{ !inputs.nightly }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -258,17 +317,11 @@ jobs:
 
   appimage:
     name: "AppImage (${{ matrix.variant.arch }})"
-    needs: build
+    needs: [plan, build]
     strategy:
       fail-fast: false
       matrix:
-        variant:
-          - arch: x86_64
-            target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04
-          - arch: aarch64
-            target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04-arm
+        variant: ${{ fromJSON(needs.plan.outputs.appimage) }}
 
     runs-on: ${{ matrix.variant.runner }}
 
@@ -440,10 +493,12 @@ jobs:
           name: release-appimage-${{ matrix.variant.arch }}
           path: dist/*
           if-no-files-found: error
+          retention-days: ${{ inputs.nightly && 7 || 0 }}
 
   # Build flatpak, see: https://github.com/flatpak/flatpak-github-actions
   flatpak:
     name: "Flatpak (${{ matrix.variant.arch }})"
+    if: ${{ !inputs.nightly }}
     strategy:
       fail-fast: false
       matrix:
@@ -499,6 +554,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # A fork without the signing key has no repo to publish to, so it attaches the bundles the
+    # flatpak job built, unsigned and without a remote, and leaves the flatpak-repo branch alone.
+    env:
+      SIGNED: ${{ secrets.FLATPAK_GPG_KEY != '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -508,12 +567,22 @@ jobs:
           path: bundles
           merge-multiple: true
 
+      - name: attach the unsigned bundles
+        if: env.SIGNED != 'true'
+        run: |
+          set -euo pipefail
+          echo "::warning::FLATPAK_GPG_KEY is not set, so the release carries unsigned Flatpak bundles and no repo is published"
+          mkdir -p dist
+          cp bundles/*.flatpak dist/
+
       - name: system dependencies
+        if: env.SIGNED == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends flatpak ostree
 
       - name: import the signing key
+        if: env.SIGNED == 'true'
         id: key
         env:
           KEY: ${{ secrets.FLATPAK_GPG_KEY }}
@@ -527,6 +596,7 @@ jobs:
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
       - name: fetch the published repo
+        if: env.SIGNED == 'true'
         run: |
           set -euo pipefail
           git clone --depth 1 --branch flatpak-repo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" site \
@@ -534,6 +604,7 @@ jobs:
           rm -rf site/.git
 
       - name: publish the bundles
+        if: env.SIGNED == 'true'
         env:
           FINGERPRINT: ${{ steps.key.outputs.fingerprint }}
         run: |
@@ -560,6 +631,7 @@ jobs:
           cp -R flatpak/pages/. site/
 
       - name: export the bundles
+        if: env.SIGNED == 'true'
         env:
           VERSION: ${{ github.ref_name }}
         run: ./flatpak/export-bundles.sh site/repo "$VERSION" dist
@@ -571,6 +643,7 @@ jobs:
           if-no-files-found: error
 
       - name: push the repo
+        if: env.SIGNED == 'true'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.ref_name }}

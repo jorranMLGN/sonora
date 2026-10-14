@@ -3,6 +3,8 @@ name = "sonora"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "A native music streaming client, built with Rust and GPUI"
 
 [features]
 # the gpui frame overlay and repaint wash, off in normal builds
@@ -61,3 +63,37 @@ embed.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
 winresource.workspace = true
+
+# The .deb that `scripts/build-deb.sh` packages from a release build. Paths are relative to this
+# crate. The metainfo is the Flatpak's, which that script versions and points at sonora.desktop.
+[package.metadata.deb]
+maintainer = "Sonora contributors"
+copyright = "Sonora contributors"
+license-file = ["../../COPYING", "0"]
+extended-description = """\
+Sonora streams Spotify and YouTube Music and plays your local files from one native desktop \
+app built with Rust and GPUI, with lyrics, artist pages, playlists and system media controls."""
+section = "sound"
+priority = "optional"
+# The Vulkan loader and libwayland-client are opened at runtime, out of dpkg-shlibdeps' sight.
+depends = "$auto, libvulkan1, libwayland-client0"
+# A Vulkan driver is what draws the window. WebKitGTK only backs the cookie sign-in window.
+recommends = "mesa-vulkan-drivers | vulkan-icd, libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37"
+assets = [
+    ["target/release/sonora", "usr/bin/", "755"],
+    ["../../assets/linux/sonora.desktop", "usr/share/applications/", "644"],
+    ["../../assets/linux/icons/hicolor/16x16/apps/sonora.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/24x24/apps/sonora.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/32x32/apps/sonora.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/48x48/apps/sonora.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/64x64/apps/sonora.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/128x128/apps/sonora.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/256x256/apps/sonora.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../../assets/linux/icons/hicolor/512x512/apps/sonora.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["../../assets/linux/sonora.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../THIRD-PARTY.md", "usr/share/doc/sonora/", "644"],
+    ["../../assets/fonts/LICENSE.txt", "usr/share/doc/sonora/LICENSE.Inter", "644"],
+    # Staged by scripts/build-deb.sh, since a glob flattens the directories it matches.
+    ["../../target/deb/io.github.nolight132.sonora.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../target/deb/icons/*", "usr/share/doc/sonora/icons/", "644"],
+]
