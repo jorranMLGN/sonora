@@ -417,6 +417,11 @@ search-results = Results
 search-songs = Songs
 search-artists = Artists
 search-albums-playlists = Albums & playlists
+search-all = All
+search-albums = Albums
+search-playlists = Playlists
+search-mine-only = Only in your library
+search-filtered-empty = Nothing matches these filters
 search-tag = { $kind } ·
 search-saved =
     { $count ->
