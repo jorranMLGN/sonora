@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { TextInput, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
   cancelAnimation,
+  useAnimatedProps,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -11,7 +12,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
-import { clock } from '../format';
 import { useReduceMotion } from '../settings';
 import { makeStyles } from '../styles';
 import { sizes } from '../theme';
@@ -27,15 +27,26 @@ const ARRIVED_MS = 1500;
 /** How much the thumb grows under a finger. */
 const DRAG_SCALE = 1.6;
 /** How long the time bubble takes to come up over the thumb, and how far it rises as it does. */
-const TIP_MS = 140;
+const TIP_MS = 80;
 const TIP_RISE = 6;
 /** The spring of the thumb growing under a finger and settling back. */
 const GROW_SPRING = { damping: 14, stiffness: 260 };
 
+/** A read-only text field: its text can be set from the UI thread, which a Text's cannot. */
+const AnimatedText = Animated.createAnimatedComponent(TextInput);
+
+/** `ms` as m:ss, on the UI thread; the same format as `clock` in `../format`. */
+function time(ms: number): string {
+  'worklet';
+  const whole = Math.max(0, Math.floor(ms / 1000));
+  const seconds = whole % 60;
+  return `${Math.floor(whole / 60)}:${seconds < 10 ? '0' : ''}${seconds}`;
+}
+
 /**
- * A draggable progress bar. The finger, the thumb and the time bubble all run on the UI thread
- * through Gesture Handler and Reanimated, so a drag stays smooth however busy JS is; only the
- * bubble's text crosses to JS, once a second. Between the core's position reports it glides, and
+ * A draggable progress bar. The finger, the thumb and the time bubble, its text included, all run
+ * on the UI thread through Gesture Handler and Reanimated, so a drag stays smooth however busy
+ * JS is. Between the core's position reports it glides, and
  * after a seek it holds the new place until the core catches up, so the thumb never jumps back.
  * `onScrub` hears the position while dragging (once a second) and null after.
  */
@@ -54,7 +65,6 @@ export function Scrubber({
 }) {
   const styles = useStyles();
   const still = useReduceMotion();
-  const [label, setLabel] = useState('0:00');
 
   const progress = useSharedValue(0);
   const width = useSharedValue(0);
@@ -95,11 +105,8 @@ export function Scrubber({
     // `fractionOf` reads `max`, which is a dependency.
   }, [value, max, playing, still, progress, dragging]);
 
-  // The JS side of a drag: the bubble's text and `onScrub`, at most once a second.
-  const scrubbed = (ms: number | null) => {
-    if (ms !== null) setLabel(clock(ms));
-    onScrub?.(ms);
-  };
+  // The JS side of a drag: `onScrub`, at most once a second.
+  const scrubbed = (ms: number | null) => onScrub?.(ms);
   const released = (ms: number) => {
     pending.current = { ms, since: Date.now() };
     shown.current = ms;
@@ -163,6 +170,12 @@ export function Scrubber({
     };
   });
 
+  const tipText = useAnimatedProps(() => {
+    const text = time(progress.value * total.value);
+    // `text` is not a public prop of TextInput, but it is what the native view draws.
+    return { text, defaultValue: text } as Record<string, string>;
+  });
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <GestureDetector gesture={pan}>
@@ -177,7 +190,12 @@ export function Scrubber({
           </View>
           <Animated.View pointerEvents="none" style={[styles.thumb, thumbStyle]} />
           <Animated.View pointerEvents="none" style={[styles.tip, tipStyle]}>
-            <Text style={styles.tipText}>{label}</Text>
+            <AnimatedText
+              editable={false}
+              underlineColorAndroid="transparent"
+              style={styles.tipText}
+              animatedProps={tipText}
+            />
           </Animated.View>
         </View>
       </GestureDetector>
@@ -219,5 +237,7 @@ const useStyles = makeStyles(({ colors, radii, typography }) => ({
     fontSize: typography.caption,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
+    textAlign: 'center',
+    padding: 0,
   },
 }));
