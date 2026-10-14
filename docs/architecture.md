@@ -230,6 +230,31 @@ reruns that export for an existing release and swaps its bundles and checksum li
 of the `FLATPAK_GPG_KEY` secret embedded — a new key means regenerating both. Flathub is not an
 option: its requirements forbid AI-assisted code.
 
+A release without the `FLATPAK_GPG_KEY` secret, as on a fork, skips the repo and its branch and
+attaches the unsigned bundles the flatpak job built instead. `announce.yml` likewise skips without
+`DISCORD_RELEASE_WEBHOOK`.
+
+#### Debian package
+
+Each Linux build job in `release.yml` also packages its executable as
+`sonora-<version>-<amd64|arm64>.deb`. `scripts/build-deb.sh <target> <version> <out dir>` runs
+`cargo deb --no-build` from `[package.metadata.deb]` in `crates/sonora/Cargo.toml`, after staging
+under `target/deb/` what a glob would flatten: the Flatpak's metainfo, versioned and pointed at
+`sonora.desktop`, and one licence per icon pack. `depends` names `libvulkan1` and
+`libwayland-client0` by hand because both are `dlopen`ed, so `dpkg-shlibdeps` never sees them; the
+rest comes from `$auto`. Building on `ubuntu-22.04` is what sets the oldest Ubuntu it installs on.
+The job installs the package on the runner to prove its dependencies resolve. Locally, with
+`cargo install cargo-deb` and a `cargo build --release --target <target>`, the script runs as is.
+
+#### Nightly builds
+
+`nightly.yml` calls `release.yml` with `nightly: true` on every push to `main`. The `plan` job then
+keeps only the targets marked `nightly` (x86_64 Linux and Windows), the macOS bundle and Flatpak
+jobs skip, and the executable, `.deb`, AppImage and installer stay as workflow artifacts for seven
+days. Setting the repository variable `NIGHTLY_RELEASE` to `true` also recreates a `nightly`
+prerelease, tag included, at that commit. The in-app updater reads `releases/latest`, which never
+returns a prerelease, so a nightly is never offered as an update.
+
 #### macOS / Windows
 
 Released, but not developed against here. `.github/workflows/release.yml` builds both Apple targets

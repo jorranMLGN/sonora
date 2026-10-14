@@ -54,6 +54,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A mini player: press M, or the button in the player bar, for a small window with artwork and
   transport. Settings > General > Window chooses whether it stays above other windows and which
   corner it opens in.
+- Sonora is now available as a .deb package for Ubuntu and Debian, for both x86_64 and ARM.
 
 ### Changed
 
