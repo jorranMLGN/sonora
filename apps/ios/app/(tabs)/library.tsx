@@ -158,7 +158,8 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
 }
 
 const useStyles = makeStyles(({ colors, radii, typography }) => ({
-  chips: { flexGrow: 0, marginBottom: spacing.sm },
+  // A horizontal ScrollView may shrink by default, which squeezed the chips and cut their text.
+  chips: { flexGrow: 0, flexShrink: 0, marginBottom: spacing.sm },
   chipsContent: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   chip: {
     paddingHorizontal: spacing.lg,
