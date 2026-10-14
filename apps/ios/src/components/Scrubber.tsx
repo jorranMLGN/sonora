@@ -26,15 +26,12 @@ const SETTLE_MS = 3000;
 const ARRIVED_MS = 1500;
 /** How much the thumb grows under a finger. */
 const DRAG_SCALE = 1.6;
-/** How long the time bubble takes to come up over the thumb, and how far it rises as it does. */
+/** How long the time bubble takes to fade once the finger lifts; it comes up at once. */
 const TIP_MS = 80;
 const TIP_RISE = 6;
 /** The spring of the thumb growing under a finger and settling back, without overshoot. */
 const GROW_SPRING = { damping: 22, stiffness: 320 };
-/** How long a tap takes to slide the thumb to the tapped place. */
-const TAP_MS = 120;
-/** How far a finger must move before the thumb follows it directly instead of sliding. */
-const FOLLOW_PX = 2;
+
 
 /** A read-only text field: its text can be set from the UI thread, which a Text's cannot. */
 const AnimatedText = Animated.createAnimatedComponent(TextInput);
@@ -131,19 +128,17 @@ export function Scrubber({
       cancelAnimation(progress);
       const fraction = width.value > 0 ? Math.min(1, Math.max(0, event.x / width.value)) : 0;
       target.value = fraction;
-      // A tap slides the thumb over; a drag takes over from `onUpdate` once the finger moves.
-      progress.value = withTiming(fraction, { duration: TAP_MS, easing: Easing.out(Easing.quad) });
+      // The thumb and the bubble are under the finger in the same frame as the touch.
+      progress.value = fraction;
       held.value = withSpring(1, GROW_SPRING);
-      tip.value = withTiming(1, { duration: TIP_MS });
+      tip.value = 1;
       const ms = fraction * total.value;
       second.value = Math.floor(ms / 1000);
       scheduleOnRN(scrubbed, ms);
     })
     .onUpdate((event) => {
-      if (Math.abs(event.translationX) < FOLLOW_PX) return;
       const fraction = width.value > 0 ? Math.min(1, Math.max(0, event.x / width.value)) : 0;
       target.value = fraction;
-      cancelAnimation(progress);
       progress.value = fraction;
       const ms = fraction * total.value;
       const now = Math.floor(ms / 1000);
