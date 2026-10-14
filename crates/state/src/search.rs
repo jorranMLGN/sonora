@@ -62,10 +62,11 @@ pub enum Axis {
 }
 
 impl Axis {
-    /// The axes that mean something for `kind`; `None` is the mixed All tab.
+    /// The axes that mean something for `kind`; `None` is the mixed All tab, where an axis only
+    /// some kinds carry orders those hits and leaves the rest in relevance order.
     pub fn of(kind: Option<Kind>) -> &'static [Axis] {
         match kind {
-            None => &[Axis::Title, Axis::Artist],
+            None => &[Axis::Title, Axis::Artist, Axis::Duration],
             Some(Kind::Song) => &[Axis::Title, Axis::Artist, Axis::Duration],
             Some(Kind::Album) => &[Axis::Title, Axis::Artist, Axis::Year],
             Some(Kind::Artist | Kind::Playlist) => &[Axis::Title],
@@ -1550,8 +1551,18 @@ mod tests {
         let lens = Lens::default()
             .with_kind(Some(Kind::Song))
             .cycled(Axis::Duration)
-            .with_kind(None);
+            .with_kind(Some(Kind::Album));
         assert_eq!(lens.order, None);
+    }
+
+    #[test]
+    fn the_all_tab_sorts_by_length_too() {
+        assert!(Axis::of(None).contains(&Axis::Duration));
+        let lens = Lens::default()
+            .with_kind(Some(Kind::Song))
+            .cycled(Axis::Duration)
+            .with_kind(None);
+        assert_eq!(lens.order, Some((Axis::Duration, Sort::Ascending)));
     }
 
     #[test]
