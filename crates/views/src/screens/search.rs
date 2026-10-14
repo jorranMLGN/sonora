@@ -890,6 +890,9 @@ impl SearchView {
 
     /// Narrows the results to one kind, or back to all of them.
     fn show(&mut self, kind: Option<Kind>, cx: &mut Context<Self>) {
+        if self.search.read(cx).query().trim().is_empty() {
+            return;
+        }
         self.relens(|lens| lens.with_kind(kind), cx);
     }
 
@@ -971,7 +974,7 @@ impl SearchView {
                                 ..lens
                             },
                             FilterChange::Flag(slug, on) => lens.with_source(slug, on),
-                            FilterChange::Reset => Lens::default(),
+                            FilterChange::Reset => lens.unfiltered(),
                             FilterChange::Range(..) => lens,
                         },
                         cx,
@@ -986,7 +989,8 @@ impl SearchView {
     /// What a lane or the mixed list shows when nothing is left: a plain "No matches", or,
     /// when the lens narrowed it, why, with a way back.
     fn empty(&self, cx: &Context<Self>) -> AnyElement {
-        match *self.search.read(cx).lens() == Lens::default() {
+        let lens = self.search.read(cx).lens();
+        match lens.hidden.is_empty() && !lens.mine_only {
             true => vacant(t!("search-no-matches"), cx)
                 .flex_none()
                 .into_any_element(),
@@ -1001,7 +1005,7 @@ impl SearchView {
                         .label(t!("filter-reset"))
                         .small()
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.relens(|_| Lens::default(), cx);
+                            this.relens(Lens::unfiltered, cx);
                         })),
                 )
                 .into_any_element(),

@@ -100,6 +100,15 @@ impl Lens {
         self
     }
 
+    /// This lens with the provider and library filters dropped, keeping the tab and the order.
+    pub fn unfiltered(self) -> Self {
+        Self {
+            kind: self.kind,
+            order: self.order,
+            ..Self::default()
+        }
+    }
+
     /// Drops `slug` from the hidden sources, for a provider that signed out.
     pub fn forget(mut self, slug: &str) -> Self {
         self.hidden.retain(|known| *known != slug);
@@ -289,6 +298,7 @@ impl Search {
             SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
                 if let SessionEvent::SignedOut(slug) = event {
                     this.lens = std::mem::take(&mut this.lens).forget(slug);
+                    this.portraits.clear();
                 }
                 let pending = this.query.clone();
                 this.query.clear();
@@ -432,6 +442,7 @@ impl Search {
 
         let asking = self.providers(cx);
         if asking.is_empty() {
+            self.task = None;
             self.loading = false;
             cx.notify();
             return;
@@ -1154,6 +1165,24 @@ mod tests {
     fn a_new_source_needs_a_fetch() {
         let one = served("queen", None, &["spotify"]);
         assert!(!one.covers(&served("queen", None, &["spotify", "youtube"])));
+    }
+
+    #[test]
+    fn resetting_filters_keeps_the_tab_and_order() {
+        let lens = Lens {
+            kind: Some(Kind::Album),
+            hidden: vec!["spotify"],
+            mine_only: true,
+            order: Some((Axis::Year, Sort::Descending)),
+        };
+        assert_eq!(
+            lens.unfiltered(),
+            Lens {
+                kind: Some(Kind::Album),
+                order: Some((Axis::Year, Sort::Descending)),
+                ..Lens::default()
+            }
+        );
     }
 
     #[test]
