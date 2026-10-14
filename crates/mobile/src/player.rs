@@ -504,8 +504,15 @@ impl Deck {
             | PlaybackEvent::Throttled { .. }
             | PlaybackEvent::Refused
             | PlaybackEvent::Gated => {
+                // Each reason says something different about what went wrong, so name it.
+                let why = match event {
+                    PlaybackEvent::Refused => "the provider refused the audio key",
+                    PlaybackEvent::Throttled { .. } => "the provider is throttling playback",
+                    PlaybackEvent::Gated => "the provider gates it behind a check",
+                    _ => "the provider has no playable file for it",
+                };
                 if let Some(item) = self.queue.current().cloned() {
-                    self.failed(&item, "the provider would not play it");
+                    self.failed(&item, why);
                 }
             }
             PlaybackEvent::OutputChanged => {
