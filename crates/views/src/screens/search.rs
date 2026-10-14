@@ -7,7 +7,7 @@ use gpui::{
     MouseDownEvent, Pixels, Point, Render, ScrollHandle, SharedString, WeakEntity, Window, div,
 };
 use i18n::t;
-use input::SEARCH_CONTEXT;
+use input::{SEARCH_CONTEXT, SearchAlbums, SearchAll, SearchArtists, SearchPlaylists, SearchSongs};
 use music::{Album, Playlist, ReleaseType, SavedArtist, Track};
 use router::{Destination, NavEntry, navigate};
 use ui::Input;
@@ -1411,6 +1411,17 @@ impl Render for SearchView {
             .on_action(cx.listener(Self::activate_hit))
             .on_action(cx.listener(Self::deselect_hit))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(|this, _: &SearchAll, _, cx| this.show(None, cx)))
+            .on_action(cx.listener(|this, _: &SearchSongs, _, cx| this.show(Some(Kind::Song), cx)))
+            .on_action(
+                cx.listener(|this, _: &SearchArtists, _, cx| this.show(Some(Kind::Artist), cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SearchAlbums, _, cx| this.show(Some(Kind::Album), cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SearchPlaylists, _, cx| this.show(Some(Kind::Playlist), cx)),
+            )
             .child(
                 div()
                     .flex()

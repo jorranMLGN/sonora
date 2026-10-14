@@ -34,7 +34,12 @@ actions!(
         ToggleWindowFullscreen,
         Hide,
         HideOthers,
-        ShowAll
+        ShowAll,
+        SearchAll,
+        SearchSongs,
+        SearchArtists,
+        SearchAlbums,
+        SearchPlaylists
     ]
 );
 
@@ -82,6 +87,11 @@ fn shared() -> Vec<KeyBinding> {
         KeyBinding::new("escape", Deselect, Some(&browsing)),
         KeyBinding::new("down", SelectNext, search),
         KeyBinding::new("up", SelectPrevious, search),
+        KeyBinding::new("alt-1", SearchAll, search),
+        KeyBinding::new("alt-2", SearchSongs, search),
+        KeyBinding::new("alt-3", SearchArtists, search),
+        KeyBinding::new("alt-4", SearchAlbums, search),
+        KeyBinding::new("alt-5", SearchPlaylists, search),
         KeyBinding::new("left", SelectLeft, Some(&results)),
         KeyBinding::new("right", SelectRight, Some(&results)),
         KeyBinding::new("enter", Activate, Some(&results)),
