@@ -16,8 +16,8 @@ use state::{
     Shelf, SideTab, Sonora, Whence,
 };
 use ui::{
-    ActiveTheme as _, Button, Card, DraggedPin, Edge, Motion, Motioned as _, Pin, Pinnable as _,
-    Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy, drop_gap, drop_marker,
+    ActiveTheme as _, Artwork, Button, Card, DraggedPin, Edge, Motion, Motioned as _, Pin,
+    Pinnable as _, Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy, drop_gap, drop_marker,
     ease_out_cubic, ease_out_expo, eyebrow, faint, mix, snapped, vacant,
 };
 
@@ -34,9 +34,9 @@ const TAIL_ROWS: usize = 2;
 const BLUR: f32 = 0.13;
 const BACKGROUND_SINGING_BLUR: Pixels = px(0.75);
 const VEIL: f32 = 0.3;
-/// The tallest the canvas above the queue may be, as a share of the window.
+/// The tallest the canvas or cover above the queue may be, as a share of the window.
 const CANVAS_SHARE: f32 = 0.55;
-/// How much of the canvas above the queue shows through, so it sits back behind the list the
+/// How much of the canvas or cover above the queue shows through, so it sits back behind the list the
 /// way a cover would rather than competing with it.
 const CANVAS_DIM: f32 = 0.8;
 const HAZE: f32 = 0.45;
@@ -258,8 +258,34 @@ impl QueuePosition {
     }
 }
 
+/// What sits in the slot above the queue: the playing track's Canvas, or its cover when it has
+/// none, so every provider's tracks fill the sidebar the same way.
+#[derive(Debug, PartialEq)]
+enum QueueArt {
+    Canvas,
+    Cover(SharedString),
+}
+
+impl QueueArt {
+    /// Chooses the slot's art. `shown` is whether the slot exists at all (titled aside, Queue
+    /// tab), `canvas` whether a Canvas plays, and `large` an upgraded cover for the playing
+    /// track that wins over its own `small` one.
+    fn pick(shown: bool, canvas: bool, small: Option<&str>, large: Option<&str>) -> Option<Self> {
+        if !shown {
+            return None;
+        }
+        match canvas {
+            true => Some(Self::Canvas),
+            false => large
+                .or(small)
+                .map(|url| Self::Cover(SharedString::from(url.to_owned()))),
+        }
+    }
+}
+
 pub(crate) struct Aside {
-    /// The playing track's Canvas, shown above the queue while one plays.
+    /// The playing track's Canvas, shown above the queue while one plays; its cover stands in
+    /// otherwise.
     canvas_art: Entity<crate::shared::canvas::CanvasArt>,
     queue: Entity<Queue>,
     playback: Entity<Playback>,
@@ -325,6 +351,8 @@ impl Aside {
     ) -> Self {
         let canvas_state = Sonora::global(cx).canvas.clone();
         cx.observe(&canvas_state, |_, _, cx| cx.notify()).detach();
+        let cover = Sonora::global(cx).cover.clone();
+        cx.observe(&cover, |_, _, cx| cx.notify()).detach();
         let canvas_art = cx.new(crate::shared::canvas::CanvasArt::new);
         cx.observe(&queue, |this, queue, cx| {
             let revision = queue.read(cx).revision();
@@ -1823,16 +1851,45 @@ impl Render for Aside {
         }
         let theme = *cx.theme();
         // only the sidebar's own aside: fullscreen strips its aside and draws the canvas large
-        let canvas_art = (self.titled
-            && self.tab == SideTab::Queue
-            && crate::shared::canvas::canvas_playing(cx))
-        .then(|| {
-            let width = Chrome::sidebar_right(cx) - theme.metrics.pad * 2.;
-            // square, like a cover, cropped from the upright clip
-            let height = width.min(window.viewport_size().height * CANVAS_SHARE);
-            self.canvas_art
-                .update(cx, |art, _| art.set_side(width, height, theme.radius * 2.));
-            self.canvas_art.clone()
+        let shown = self.titled && self.tab == SideTab::Queue;
+        let track = self.playback.read(cx).track();
+        let small = track.and_then(|track| track.cover.as_deref());
+        // a local cover is already full size, and the track's own beats its album's
+        let local = track
+            .and_then(|track| track.id.as_deref())
+            .is_some_and(music::is_local_id)
+            || small.is_some_and(|url| url.starts_with("file://"));
+        let large = track
+            .and_then(|track| track.album_id.as_deref())
+            .filter(|_| !local)
+            .and_then(|album| Sonora::global(cx).cover.read(cx).large_for(album));
+        let art = QueueArt::pick(
+            shown,
+            crate::shared::canvas::canvas_playing(cx),
+            small,
+            large,
+        );
+        let width = Chrome::sidebar_right(cx) - theme.metrics.pad * 2.;
+        // square, like a cover, cropped from the upright clip or a wide thumbnail
+        let height = width.min(window.viewport_size().height * CANVAS_SHARE);
+        let radius = theme.radius * 2.;
+        let queue_art = art.map(|art| match art {
+            QueueArt::Canvas => {
+                self.canvas_art
+                    .update(cx, |art, _| art.set_side(width, height, radius));
+                self.canvas_art.clone().into_any_element()
+            }
+            // the box clips the loading skeleton, which is square, on a short window
+            QueueArt::Cover(url) => div()
+                .h(height)
+                .overflow_hidden()
+                .child(
+                    Artwork::new(Some(url))
+                        .size(width)
+                        .h(height)
+                        .corner_radius(radius),
+                )
+                .into_any_element(),
         });
 
         div()
@@ -1873,7 +1930,7 @@ impl Render for Aside {
                     .when(self.tab == SideTab::Jam, |this| {
                         this.child(self.jam.clone())
                     })
-                    .when_some(canvas_art, |this, art| {
+                    .when_some(queue_art, |this, art| {
                         this.child(
                             div()
                                 .flex_none()
@@ -2852,12 +2909,12 @@ mod tests {
     use ui::Springs;
 
     use super::{
-        QueuePosition, Sections, Slot, active_lyrics_row, anchored_lyrics_offset,
+        QueueArt, QueuePosition, Sections, Slot, active_lyrics_row, anchored_lyrics_offset,
         background_line_singing, karaoke_fragments, karaoke_window, lag_spring, line_has_passed,
         line_row, lyric_row_count, plain_lyrics_fragments, primary_karaoke_fade,
         primary_karaoke_visible, secondary_karaoke_visible, wrap_fragment_widths,
     };
-    use gpui::px;
+    use gpui::{SharedString, px};
     use ui::Motion;
 
     fn slots(sections: Sections) -> Vec<Slot> {
@@ -3322,5 +3379,36 @@ mod tests {
         };
 
         assert!(line_has_passed(&line, Duration::from_secs(8)));
+    }
+
+    #[test]
+    fn a_playing_canvas_takes_the_slot_over_the_cover() {
+        assert_eq!(
+            QueueArt::pick(true, true, Some("small"), Some("large")),
+            Some(QueueArt::Canvas)
+        );
+    }
+
+    #[test]
+    fn a_track_without_a_canvas_shows_its_cover() {
+        assert_eq!(
+            QueueArt::pick(true, false, Some("small"), None),
+            Some(QueueArt::Cover(SharedString::from("small")))
+        );
+    }
+
+    #[test]
+    fn the_large_cover_wins_over_the_small_one() {
+        assert_eq!(
+            QueueArt::pick(true, false, Some("small"), Some("large")),
+            Some(QueueArt::Cover(SharedString::from("large")))
+        );
+    }
+
+    #[test]
+    fn nothing_shows_without_a_cover_or_off_the_queue() {
+        assert_eq!(QueueArt::pick(true, false, None, None), None);
+        assert_eq!(QueueArt::pick(false, true, Some("small"), None), None);
+        assert_eq!(QueueArt::pick(false, false, Some("small"), None), None);
     }
 }
