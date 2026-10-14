@@ -15,7 +15,7 @@ public class SonoraCoreModule: Module {
   public func definition() -> ModuleDefinition {
     Name("SonoraCore")
 
-    Events("onState", "onPosition", "onQueue", "onSession", "onPrompt", "onError")
+    Events("onState", "onPosition", "onQueue", "onSession", "onPrompt", "onError", "onLog")
 
     // The audio session, Now Playing and the remote commands live as long as the process.
     OnCreate {

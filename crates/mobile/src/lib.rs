@@ -203,6 +203,9 @@ pub trait EventListener: Send + Sync {
     fn on_session(&self, slug: String, state: SessionState);
     fn on_prompt(&self, slug: String, prompt: Prompt);
     fn on_error(&self, message: String);
+    /// A warning or error from the core's log, librespot's included, for the app's own log: on
+    /// a phone nothing else shows it without a Mac. Never shown to the listener.
+    fn on_log(&self, level: String, target: String, message: String);
 }
 
 type Answer<T> = Result<T, CoreError>;

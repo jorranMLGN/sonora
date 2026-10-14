@@ -29,6 +29,9 @@ const STORE: &str = "mobile.sqlite";
 
 static CORE: Mutex<Option<Arc<Core>>> = Mutex::new(None);
 
+/// Where the logger forwards warnings and errors, once the core has a listener.
+static FORWARD: std::sync::OnceLock<Arc<Events>> = std::sync::OnceLock::new();
+
 /// The core every exported function works through.
 pub struct Core {
     pub(crate) runtime: Runtime,
@@ -95,9 +98,11 @@ pub fn start(dir: PathBuf, listener: Box<dyn EventListener>) -> Result<()> {
         .context("cannot build the runtime")?;
     let store = Store::open(&dir.join(STORE))?;
     let library = Library::open(&dir.join(STORE))?;
-    let events = Arc::new(Events {
+    let events: Arc<Events> = Arc::new(Events {
         listener: RwLock::new(listener),
     });
+    // From here on the log's warnings and errors reach the app too.
+    let _ = FORWARD.set(events.clone());
     let sessions = Arc::new(Sessions::default());
     let providers = providers(&dir);
     for provider in &providers {
@@ -406,6 +411,11 @@ impl Events {
         self.with(|listener| listener.on_prompt(slug.to_owned(), prompt));
     }
 
+    /// Hands a log record to the listener; see `EventListener::on_log`.
+    pub fn log(&self, level: &str, target: &str, message: String) {
+        self.with(|listener| listener.on_log(level.to_owned(), target.to_owned(), message));
+    }
+
     pub fn error(&self, message: String) {
         log::warn!("mobile: {message}");
         self.with(|listener| listener.on_error(message));
@@ -449,13 +459,47 @@ fn youtube(_dir: &Path) -> Option<Arc<dyn MusicProvider>> {
 }
 
 /// Sends the core's log to the unified log under the subsystem `dev.sonora.app`, where
-/// Console.app on a Mac shows it for a connected phone.
+/// Console.app on a Mac shows it for a connected phone, and its warnings and errors to the app
+/// as well, where the dev server's log shows them without a Mac.
 #[cfg(target_os = "ios")]
 fn logger() {
-    let _ = oslog::OsLogger::new("dev.sonora.app")
+    let unified = oslog::OsLogger::new("dev.sonora.app")
         .level_filter(log::LevelFilter::Info)
-        .category_level_filter("mobile::account", log::LevelFilter::Debug)
-        .init();
+        .category_level_filter("mobile::account", log::LevelFilter::Debug);
+    let _ = log::set_boxed_logger(Box::new(Forward { unified }));
+}
+
+/// The phone's logger: everything to the unified log, warnings and errors also to the app.
+#[cfg(target_os = "ios")]
+struct Forward {
+    unified: oslog::OsLogger,
+}
+
+#[cfg(target_os = "ios")]
+impl log::Log for Forward {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        log::Log::enabled(&self.unified, metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        log::Log::log(&self.unified, record);
+        if record.level() > log::Level::Warn {
+            return;
+        }
+        // The core's own error events already reach the app; only the rest is forwarded.
+        if record.target() == "mobile::core" {
+            return;
+        }
+        if let Some(events) = FORWARD.get() {
+            events.log(
+                record.level().as_str(),
+                record.target(),
+                record.args().to_string(),
+            );
+        }
+    }
+
+    fn flush(&self) {}
 }
 
 /// Sends the core's log to stderr, for a build run from a terminal.

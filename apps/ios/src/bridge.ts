@@ -128,6 +128,8 @@ export type BridgeEvents = {
   onSession: { slug: string; state: SessionState };
   onPrompt: { slug: string; prompt: Prompt };
   onError: { message: string };
+  /** A warning or error from the core's log; for the log, never for the listener. */
+  onLog: { level: string; target: string; message: string };
 };
 
 export type Unsubscribe = () => void;

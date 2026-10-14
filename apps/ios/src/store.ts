@@ -79,6 +79,10 @@ export function startStore(): void {
     apply((s) => ({ prompts: { ...s.prompts, [slug]: prompt } })),
   );
   bridge.on('onError', ({ message }) => apply({ error: message }));
+  // The core's own warnings and errors, librespot's included, for whoever follows the dev server.
+  bridge.on('onLog', ({ level, target, message }) =>
+    console.warn(`core ${level.toLowerCase()} ${target}: ${message}`),
+  );
   // Every error the banner shows also goes to the log, for whoever follows the app from the
   // dev server; the banner alone is gone after a few seconds.
   useStore.subscribe((now, before) => {

@@ -282,6 +282,11 @@ final class Listener: EventListener, @unchecked Sendable {
   func onError(message: String) {
     module?.sendEvent("onError", ["message": message])
   }
+
+  /// A warning or error from the core's log, for the JS log only.
+  func onLog(level: String, target: String, message: String) {
+    module?.sendEvent("onLog", ["level": level, "target": target, "message": message])
+  }
 }
 
 /// Starts the core. It lives out here because inside a class `init` names the initialiser,

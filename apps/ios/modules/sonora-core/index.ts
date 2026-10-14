@@ -109,6 +109,8 @@ type Events = {
   onSession(event: { slug: string; state: SessionState }): void;
   onPrompt(event: { slug: string; prompt: Prompt }): void;
   onError(event: { message: string }): void;
+  /** A warning or error from the core's log; for the log, never for the listener. */
+  onLog(event: { level: string; target: string; message: string }): void;
 };
 
 export declare class SonoraCoreModule extends NativeModule<Events> {
