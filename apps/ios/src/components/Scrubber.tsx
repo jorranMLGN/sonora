@@ -29,8 +29,12 @@ const DRAG_SCALE = 1.6;
 /** How long the time bubble takes to come up over the thumb, and how far it rises as it does. */
 const TIP_MS = 80;
 const TIP_RISE = 6;
-/** The spring of the thumb growing under a finger and settling back. */
-const GROW_SPRING = { damping: 14, stiffness: 260 };
+/** The spring of the thumb growing under a finger and settling back, without overshoot. */
+const GROW_SPRING = { damping: 22, stiffness: 320 };
+/** How long a tap takes to slide the thumb to the tapped place. */
+const TAP_MS = 120;
+/** How far a finger must move before the thumb follows it directly instead of sliding. */
+const FOLLOW_PX = 2;
 
 /** A read-only text field: its text can be set from the UI thread, which a Text's cannot. */
 const AnimatedText = Animated.createAnimatedComponent(TextInput);
@@ -70,6 +74,10 @@ export function Scrubber({
   const width = useSharedValue(0);
   const total = useSharedValue(max);
   const held = useSharedValue(0);
+  // The bubble's own fade, started only on touch and release, never per frame.
+  const tip = useSharedValue(0);
+  // Where the finger put the thumb: what a release seeks to, even while the thumb still slides.
+  const target = useSharedValue(0);
   const dragging = useSharedValue(false);
   const second = useSharedValue(-1);
 
@@ -122,14 +130,20 @@ export function Scrubber({
       dragging.value = true;
       cancelAnimation(progress);
       const fraction = width.value > 0 ? Math.min(1, Math.max(0, event.x / width.value)) : 0;
-      progress.value = fraction;
+      target.value = fraction;
+      // A tap slides the thumb over; a drag takes over from `onUpdate` once the finger moves.
+      progress.value = withTiming(fraction, { duration: TAP_MS, easing: Easing.out(Easing.quad) });
       held.value = withSpring(1, GROW_SPRING);
+      tip.value = withTiming(1, { duration: TIP_MS });
       const ms = fraction * total.value;
       second.value = Math.floor(ms / 1000);
       scheduleOnRN(scrubbed, ms);
     })
     .onUpdate((event) => {
+      if (Math.abs(event.translationX) < FOLLOW_PX) return;
       const fraction = width.value > 0 ? Math.min(1, Math.max(0, event.x / width.value)) : 0;
+      target.value = fraction;
+      cancelAnimation(progress);
       progress.value = fraction;
       const ms = fraction * total.value;
       const now = Math.floor(ms / 1000);
@@ -138,14 +152,13 @@ export function Scrubber({
         scheduleOnRN(scrubbed, ms);
       }
     })
-    .onEnd(() => {
-      scheduleOnRN(released, progress.value * total.value);
-    })
-    .onFinalize((_event, success) => {
+    // A tap may end without the pan ever activating, so the seek happens on every release.
+    .onFinalize(() => {
       dragging.value = false;
       second.value = -1;
       held.value = withSpring(0, GROW_SPRING);
-      if (!success) scheduleOnRN(scrubbed, null);
+      tip.value = withTiming(0, { duration: TIP_MS });
+      scheduleOnRN(released, target.value * total.value);
     });
 
   const fillStyle = useAnimatedStyle(() => ({
@@ -165,8 +178,8 @@ export function Scrubber({
       Math.max(0, progress.value * width.value - sizes.scrubberTipWidth / 2),
     );
     return {
-      opacity: withTiming(held.value > 0.5 ? 1 : 0, { duration: TIP_MS }),
-      transform: [{ translateX: x }, { translateY: (1 - Math.min(1, held.value)) * TIP_RISE }],
+      opacity: tip.value,
+      transform: [{ translateX: x }, { translateY: (1 - tip.value) * TIP_RISE }],
     };
   });
 
