@@ -32,6 +32,7 @@ pub mod tagged;
 mod trim;
 pub mod trouble;
 pub mod video;
+mod waveform;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -55,6 +56,7 @@ pub use models::{
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use spectrum::Spectrum;
+pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Waveform};
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
 pub const LOCAL_ALBUM_PREFIX: &str = "local-album:";
@@ -163,6 +165,13 @@ pub trait MusicApi: Send + Sync {
     /// The url of the short looping video an artist attached to this track, or `None` when it
     /// has none. Only Spotify answers; every other provider has no such thing.
     async fn canvas(&self, _track_id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// The track's level over its length as the provider publishes it, or `None` when it
+    /// publishes none. Only SoundCloud answers; a track played through `engine` is measured
+    /// from its own audio instead, through `Player::analysis`.
+    async fn waveform(&self, _track_id: &str) -> Result<Option<Waveform>> {
         Ok(None)
     }
 
@@ -453,6 +462,12 @@ pub trait Player: Send + Sync {
     fn set_gain(&self, gain: f32);
 
     fn spectrum(&self) -> Option<Spectrum> {
+        None
+    }
+
+    /// The waveforms this engine measured from the tracks it decoded, read by the provider's
+    /// own track id. `None` for an engine that measures nothing.
+    fn analysis(&self) -> Option<Analysis> {
         None
     }
 }

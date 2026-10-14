@@ -53,6 +53,9 @@ pub struct Track {
     pub permalink_url: Option<String>,
     #[serde(default)]
     pub genre: Option<String>,
+    /// The json file on `wave.sndcdn.com` holding the waveform SoundCloud drew for the track.
+    #[serde(default)]
+    pub waveform_url: Option<String>,
     #[serde(default)]
     pub media: Media,
     pub user: User,

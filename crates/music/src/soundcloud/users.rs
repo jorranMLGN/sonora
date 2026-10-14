@@ -77,6 +77,14 @@ pub async fn track_playcount(http: &Http, id: &str) -> Result<Option<u64>> {
     Ok(fetch_track(http, id).await?.playback_count)
 }
 
+/// Where the track's waveform file lives, when it has one.
+pub async fn waveform_url(http: &Http, id: &str) -> Result<Option<String>> {
+    Ok(fetch_track(http, id)
+        .await?
+        .waveform_url
+        .filter(|url| !url.is_empty()))
+}
+
 pub async fn related(http: &Http, track_id: &str) -> Result<Vec<crate::Track>> {
     let page: Page<wire::Track> = http
         .get_json(&format!("/tracks/{track_id}/related"), &[])
