@@ -61,7 +61,7 @@ pub use queue::{Named, Queue, Resume, Stub};
 pub use remote::{Remote, attach as attach_remote};
 pub use scan::Scan;
 pub use scrobble::{ScrobbleRow, ScrobbleState, Scrobbling};
-pub use search::{AlbumHit, ArtistHit, Found, Hit, Kind, PlaylistHit, Search};
+pub use search::{AlbumHit, ArtistHit, Axis, Found, Hit, Kind, Lens, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, MiniCorner, Reloaded,

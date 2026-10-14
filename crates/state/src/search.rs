@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
 use music::{Album, ArtistRef, MusicApi, Playlist, Track};
+use ui::Sort;
 
 use crate::{Io, Library, Network, Session, SessionEvent, Shelf, join};
 
@@ -23,7 +24,7 @@ const TAIL: u32 = 35;
 const DERIVED: u32 = 80;
 const MINE: u32 = 60;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Song,
     Artist,
@@ -33,6 +34,89 @@ pub enum Kind {
 
 impl Kind {
     pub const ALL: [Kind; 4] = [Kind::Song, Kind::Artist, Kind::Album, Kind::Playlist];
+}
+
+/// What the search screen narrows its hits to. The default shows every kind from every
+/// signed-in provider, ranked by relevance.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lens {
+    pub kind: Option<Kind>,
+    /// Providers the user switched off. A deny list, so a provider that signs in later takes
+    /// part without touching the lens.
+    pub hidden: Vec<&'static str>,
+    pub mine_only: bool,
+    /// `None` is relevance.
+    pub order: Option<(Axis, Sort)>,
+}
+
+/// Which value of a hit the search screen orders by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Title,
+    Artist,
+    Duration,
+    Year,
+}
+
+/// Which of a provider's three search calls a lens needs. Artists come from tracks and
+/// albums, since no provider is asked for artists directly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Parts {
+    songs: bool,
+    albums: bool,
+    playlists: bool,
+}
+
+impl Parts {
+    fn of(kind: Option<Kind>) -> Self {
+        match kind {
+            None => Self {
+                songs: true,
+                albums: true,
+                playlists: true,
+            },
+            Some(Kind::Song) => Self {
+                songs: true,
+                ..Self::default()
+            },
+            Some(Kind::Artist) => Self {
+                songs: true,
+                albums: true,
+                ..Self::default()
+            },
+            Some(Kind::Album) => Self {
+                albums: true,
+                ..Self::default()
+            },
+            Some(Kind::Playlist) => Self {
+                playlists: true,
+                ..Self::default()
+            },
+        }
+    }
+
+    fn covers(self, other: Self) -> bool {
+        (self.songs || !other.songs)
+            && (self.albums || !other.albums)
+            && (self.playlists || !other.playlists)
+    }
+}
+
+/// What one search fetched: the query, the calls and the providers it asked.
+#[derive(Clone, Debug, PartialEq)]
+struct Served {
+    query: String,
+    parts: Parts,
+    slugs: Vec<&'static str>,
+}
+
+impl Served {
+    /// Whether this answer already holds everything `wanted` asks for, so no fetch is needed.
+    fn covers(&self, wanted: &Served) -> bool {
+        self.query == wanted.query
+            && self.parts.covers(wanted.parts)
+            && wanted.slugs.iter().all(|slug| self.slugs.contains(slug))
+    }
 }
 
 #[derive(Clone)]
@@ -128,7 +212,8 @@ struct Scored {
 
 pub struct Search {
     query: String,
-    served: Option<String>,
+    served: Option<Served>,
+    lens: Lens,
     catalogs: Vec<(&'static str, Catalog)>,
     portraits: HashMap<String, String>,
     hits: Vec<Found>,
@@ -164,6 +249,7 @@ impl Search {
         Self {
             query: String::new(),
             served: None,
+            lens: Lens::default(),
             catalogs: Vec::new(),
             portraits: HashMap::new(),
             hits: Vec::new(),
@@ -202,6 +288,23 @@ impl Search {
         self.hits.first()
     }
 
+    pub fn lens(&self) -> &Lens {
+        &self.lens
+    }
+
+    /// What answering `query` under the current lens asks for.
+    fn wanted(&self, query: &str, cx: &Context<Self>) -> Served {
+        Served {
+            query: query.to_owned(),
+            parts: Parts::of(self.lens.kind),
+            slugs: self
+                .providers(cx)
+                .into_iter()
+                .map(|(slug, _, _)| slug)
+                .collect(),
+        }
+    }
+
     pub fn is_loading(&self) -> bool {
         self.loading
     }
@@ -212,7 +315,12 @@ impl Search {
 
     pub fn ask(&mut self, query: &str, cx: &mut Context<Self>) {
         let query = query.trim().to_owned();
-        let answered = self.loading || self.served.as_deref() == Some(query.as_str());
+        let wanted = self.wanted(&query, cx);
+        let answered = self.loading
+            || self
+                .served
+                .as_ref()
+                .is_some_and(|served| served.covers(&wanted));
         if query == self.query && answered {
             return;
         }
@@ -222,7 +330,7 @@ impl Search {
         if query.is_empty() {
             self.task = None;
             self.catalogs.clear();
-            self.served = Some(String::new());
+            self.served = Some(wanted);
             self.loading = false;
             self.rank(cx);
             return;
@@ -241,24 +349,27 @@ impl Search {
         cx.notify();
 
         let io = self.io.clone();
+        let parts = wanted.parts;
         self.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
 
             let sent: Vec<_> = asking
                 .into_iter()
                 .map(|(slug, name, client)| {
-                    let songs = {
+                    let songs = parts.songs.then(|| {
                         let client = client.clone();
                         let asked = query.clone();
                         io.spawn(async move { client.search(&asked).await })
-                    };
-                    let albums = {
+                    });
+                    let albums = parts.albums.then(|| {
                         let client = client.clone();
                         let asked = query.clone();
                         io.spawn(async move { client.search_albums(&asked).await })
-                    };
-                    let asked = query.clone();
-                    let playlists = io.spawn(async move { client.search_playlists(&asked).await });
+                    });
+                    let playlists = parts.playlists.then(|| {
+                        let asked = query.clone();
+                        io.spawn(async move { client.search_playlists(&asked).await })
+                    });
                     (slug, name, songs, albums, playlists)
                 })
                 .collect();
@@ -268,9 +379,9 @@ impl Search {
                 answered.push((
                     slug,
                     name,
-                    join(songs).await,
-                    join(albums).await,
-                    join(playlists).await,
+                    awaited(songs).await,
+                    awaited(albums).await,
+                    awaited(playlists).await,
                 ));
             }
 
@@ -306,7 +417,7 @@ impl Search {
                     Some(reason) => Network::failed(reason, cx),
                     None => {
                         Network::reached(cx);
-                        this.served = Some(query);
+                        this.served = Some(wanted);
                     }
                 }
                 this.error = (!trouble.is_empty() && bare).then(|| trouble.join(" · "));
@@ -806,9 +917,61 @@ fn named(value: &str, query: &Query) -> Option<u32> {
     fit(&[(NAME, value)], query)
 }
 
+/// The rows a search part answered with, or none for a part the lens did not ask for.
+async fn awaited<T>(handle: Option<tokio::task::JoinHandle<Result<Vec<T>>>>) -> Result<Vec<T>> {
+    match handle {
+        Some(handle) => join(handle).await,
+        None => Ok(Vec::new()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn served(query: &str, kind: Option<Kind>, slugs: &[&'static str]) -> Served {
+        Served {
+            query: query.to_owned(),
+            parts: Parts::of(kind),
+            slugs: slugs.to_vec(),
+        }
+    }
+
+    #[test]
+    fn artists_need_songs_and_albums() {
+        assert_eq!(
+            Parts::of(Some(Kind::Artist)),
+            Parts {
+                songs: true,
+                albums: true,
+                playlists: false,
+            }
+        );
+    }
+
+    #[test]
+    fn narrowing_is_already_served() {
+        let all = served("queen", None, &["spotify", "youtube"]);
+        assert!(all.covers(&served("queen", Some(Kind::Album), &["spotify"])));
+    }
+
+    #[test]
+    fn widening_the_kind_needs_a_fetch() {
+        let albums = served("queen", Some(Kind::Album), &["spotify"]);
+        assert!(!albums.covers(&served("queen", None, &["spotify"])));
+    }
+
+    #[test]
+    fn a_new_source_needs_a_fetch() {
+        let one = served("queen", None, &["spotify"]);
+        assert!(!one.covers(&served("queen", None, &["spotify", "youtube"])));
+    }
+
+    #[test]
+    fn another_query_needs_a_fetch() {
+        let asked = served("queen", None, &["spotify"]);
+        assert!(!asked.covers(&served("queens", None, &["spotify"])));
+    }
 
     fn rank(library: &[Track], albums: &[Album], catalog: &[Track], asked: &str) -> Vec<Hit> {
         let catalog = Catalog {
