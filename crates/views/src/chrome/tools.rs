@@ -89,8 +89,21 @@ pub(crate) fn filters(
     filter_fn: impl Fn(FilterChange, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
-    let theme = *cx.theme();
     let narrowed = axes.iter().any(|axis| axis.narrowed());
+    filters_tinted(group, sliders, axes, narrowed, filter_fn, cx)
+}
+
+/// `filters` for a screen whose flags start switched on, so a flag being on says nothing about
+/// whether the screen is narrowed. The caller says when the funnel is tinted.
+pub(crate) fn filters_tinted(
+    group: &Popovers,
+    sliders: &Sliders,
+    axes: Vec<Filter>,
+    narrowed: bool,
+    filter_fn: impl Fn(FilterChange, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let theme = *cx.theme();
     let filter_fn = Rc::new(filter_fn);
 
     let items = axes.iter().map(|axis| match axis {

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,11 +6,14 @@ use std::time::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
 use music::{Album, ArtistRef, MusicApi, Playlist, Track};
+use ui::Sort;
 
 use crate::{Io, Library, Network, Session, SessionEvent, Shelf, join};
 
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const LIMIT: usize = 20;
+/// How many hits of one kind a lane keeps when the lens shows only that kind.
+const FOCUSED: usize = 50;
 const EXACT: u32 = 100;
 const PREFIX: u32 = 80;
 const WORD: u32 = 60;
@@ -23,7 +27,7 @@ const TAIL: u32 = 35;
 const DERIVED: u32 = 80;
 const MINE: u32 = 60;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Song,
     Artist,
@@ -33,6 +37,144 @@ pub enum Kind {
 
 impl Kind {
     pub const ALL: [Kind; 4] = [Kind::Song, Kind::Artist, Kind::Album, Kind::Playlist];
+}
+
+/// What the search screen narrows its hits to. The default shows every kind from every
+/// signed-in provider, ranked by relevance.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lens {
+    pub kind: Option<Kind>,
+    /// Providers the user switched off. A deny list, so a provider that signs in later takes
+    /// part without touching the lens.
+    pub hidden: Vec<&'static str>,
+    pub mine_only: bool,
+    /// `None` is relevance.
+    pub order: Option<(Axis, Sort)>,
+}
+
+/// Which value of a hit the search screen orders by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Title,
+    Artist,
+    Duration,
+    Year,
+}
+
+impl Axis {
+    /// The axes that mean something for `kind`; `None` is the mixed All tab.
+    pub fn of(kind: Option<Kind>) -> &'static [Axis] {
+        match kind {
+            None => &[Axis::Title, Axis::Artist],
+            Some(Kind::Song) => &[Axis::Title, Axis::Artist, Axis::Duration],
+            Some(Kind::Album) => &[Axis::Title, Axis::Artist, Axis::Year],
+            Some(Kind::Artist | Kind::Playlist) => &[Axis::Title],
+        }
+    }
+}
+
+impl Lens {
+    /// Shows `kind` only, dropping a sort axis that kind has no value for.
+    pub fn with_kind(mut self, kind: Option<Kind>) -> Self {
+        self.kind = kind;
+        self.order = self.order.filter(|(axis, _)| Axis::of(kind).contains(axis));
+        self
+    }
+
+    /// Lets `slug` take part (`on`) or hides it.
+    pub fn with_source(self, slug: &'static str, on: bool) -> Self {
+        let mut lens = self.forget(slug);
+        if !on {
+            lens.hidden.push(slug);
+        }
+        lens
+    }
+
+    /// Steps `axis` through ascending, descending and back to relevance.
+    pub fn cycled(mut self, axis: Axis) -> Self {
+        self.order = match self.order {
+            Some((current, Sort::Ascending)) if current == axis => Some((axis, Sort::Descending)),
+            Some((current, Sort::Descending)) if current == axis => None,
+            _ => Some((axis, Sort::Ascending)),
+        };
+        self
+    }
+
+    /// This lens with the provider and library filters dropped, keeping the tab and the order.
+    pub fn unfiltered(self) -> Self {
+        Self {
+            kind: self.kind,
+            order: self.order,
+            ..Self::default()
+        }
+    }
+
+    /// Drops `slug` from the hidden sources, for a provider that signed out.
+    pub fn forget(mut self, slug: &str) -> Self {
+        self.hidden.retain(|known| *known != slug);
+        self
+    }
+}
+
+/// Which of a provider's three search calls a lens needs. Artists come from tracks and
+/// albums, since no provider is asked for artists directly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Parts {
+    songs: bool,
+    albums: bool,
+    playlists: bool,
+}
+
+impl Parts {
+    fn of(kind: Option<Kind>) -> Self {
+        match kind {
+            None => Self {
+                songs: true,
+                albums: true,
+                playlists: true,
+            },
+            Some(Kind::Song) => Self {
+                songs: true,
+                ..Self::default()
+            },
+            Some(Kind::Artist) => Self {
+                songs: true,
+                albums: true,
+                ..Self::default()
+            },
+            Some(Kind::Album) => Self {
+                albums: true,
+                ..Self::default()
+            },
+            Some(Kind::Playlist) => Self {
+                playlists: true,
+                ..Self::default()
+            },
+        }
+    }
+
+    fn covers(self, other: Self) -> bool {
+        (self.songs || !other.songs)
+            && (self.albums || !other.albums)
+            && (self.playlists || !other.playlists)
+    }
+}
+
+/// What one search fetched: the query, the calls and the providers it asked.
+#[derive(Clone, Debug, PartialEq)]
+struct Served {
+    query: String,
+    parts: Parts,
+    slugs: Vec<&'static str>,
+}
+
+impl Served {
+    /// Whether this answer already holds everything `wanted` asks for, so no fetch is needed.
+    fn covers(&self, wanted: &Served) -> bool {
+        self.query == wanted.query
+            && self.parts.covers(wanted.parts)
+            && wanted.slugs.iter().all(|slug| self.slugs.contains(slug))
+    }
 }
 
 #[derive(Clone)]
@@ -73,6 +215,8 @@ pub enum Hit {
 pub struct Found {
     pub slug: &'static str,
     pub hit: Hit,
+    /// Whether the hit is in the user's library rather than only in the catalog.
+    pub mine: bool,
 }
 
 impl Found {
@@ -123,12 +267,14 @@ impl Query {
 struct Scored {
     score: u32,
     popularity: u32,
+    mine: bool,
     hit: Hit,
 }
 
 pub struct Search {
     query: String,
-    served: Option<String>,
+    served: Option<Served>,
+    lens: Lens,
     catalogs: Vec<(&'static str, Catalog)>,
     portraits: HashMap<String, String>,
     hits: Vec<Found>,
@@ -150,6 +296,10 @@ impl Search {
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
             SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
+                if let SessionEvent::SignedOut(slug) = event {
+                    this.lens = std::mem::take(&mut this.lens).forget(slug);
+                    this.portraits.clear();
+                }
                 let pending = this.query.clone();
                 this.query.clear();
                 this.catalogs.clear();
@@ -164,6 +314,7 @@ impl Search {
         Self {
             query: String::new(),
             served: None,
+            lens: Lens::default(),
             catalogs: Vec::new(),
             portraits: HashMap::new(),
             hits: Vec::new(),
@@ -181,12 +332,21 @@ impl Search {
         &self.query
     }
 
-    pub fn lanes(&self, cx: &App) -> Vec<&'static str> {
+    /// Every signed-in streaming provider, whether the lens hides it or not.
+    pub fn sources(&self, cx: &App) -> Vec<&'static str> {
         self.session
             .read(cx)
             .active_slugs()
             .into_iter()
             .filter(|slug| *slug != music::tag::LOCAL)
+            .collect()
+    }
+
+    /// The providers that get a results column: the sources the lens does not hide.
+    pub fn lanes(&self, cx: &App) -> Vec<&'static str> {
+        self.sources(cx)
+            .into_iter()
+            .filter(|slug| !self.lens.hidden.contains(slug))
             .collect()
     }
 
@@ -198,8 +358,53 @@ impl Search {
         self.hits.iter().filter(move |found| found.kind() == kind)
     }
 
+    /// The top hit, shown only on the All tab in relevance order, where "top" means something.
     pub fn best(&self) -> Option<&Found> {
-        self.hits.first()
+        match self.lens.kind.is_none() && self.lens.order.is_none() {
+            true => self.hits.first(),
+            false => None,
+        }
+    }
+
+    pub fn lens(&self) -> &Lens {
+        &self.lens
+    }
+
+    /// Applies a new lens. A narrower lens reranks what is already fetched; a wider one drops
+    /// any fetch in flight and asks again.
+    pub fn set_lens(&mut self, lens: Lens, cx: &mut Context<Self>) {
+        if self.lens == lens {
+            return;
+        }
+        self.lens = lens;
+        let query = self.query.clone();
+        let wanted = self.wanted(&query, cx);
+        match self
+            .served
+            .as_ref()
+            .is_some_and(|served| served.covers(&wanted))
+        {
+            true => self.rank(cx),
+            false => {
+                self.task = None;
+                self.loading = false;
+                self.query.clear();
+                self.ask(&query, cx);
+            }
+        }
+    }
+
+    /// What answering `query` under the current lens asks for.
+    fn wanted(&self, query: &str, cx: &Context<Self>) -> Served {
+        Served {
+            query: query.to_owned(),
+            parts: Parts::of(self.lens.kind),
+            slugs: self
+                .providers(cx)
+                .into_iter()
+                .map(|(slug, _, _)| slug)
+                .collect(),
+        }
     }
 
     pub fn is_loading(&self) -> bool {
@@ -212,7 +417,12 @@ impl Search {
 
     pub fn ask(&mut self, query: &str, cx: &mut Context<Self>) {
         let query = query.trim().to_owned();
-        let answered = self.loading || self.served.as_deref() == Some(query.as_str());
+        let wanted = self.wanted(&query, cx);
+        let answered = self.loading
+            || self
+                .served
+                .as_ref()
+                .is_some_and(|served| served.covers(&wanted));
         if query == self.query && answered {
             return;
         }
@@ -222,7 +432,7 @@ impl Search {
         if query.is_empty() {
             self.task = None;
             self.catalogs.clear();
-            self.served = Some(String::new());
+            self.served = Some(wanted);
             self.loading = false;
             self.rank(cx);
             return;
@@ -232,6 +442,7 @@ impl Search {
 
         let asking = self.providers(cx);
         if asking.is_empty() {
+            self.task = None;
             self.loading = false;
             cx.notify();
             return;
@@ -241,24 +452,27 @@ impl Search {
         cx.notify();
 
         let io = self.io.clone();
+        let parts = wanted.parts;
         self.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
 
             let sent: Vec<_> = asking
                 .into_iter()
                 .map(|(slug, name, client)| {
-                    let songs = {
+                    let songs = parts.songs.then(|| {
                         let client = client.clone();
                         let asked = query.clone();
                         io.spawn(async move { client.search(&asked).await })
-                    };
-                    let albums = {
+                    });
+                    let albums = parts.albums.then(|| {
                         let client = client.clone();
                         let asked = query.clone();
                         io.spawn(async move { client.search_albums(&asked).await })
-                    };
-                    let asked = query.clone();
-                    let playlists = io.spawn(async move { client.search_playlists(&asked).await });
+                    });
+                    let playlists = parts.playlists.then(|| {
+                        let asked = query.clone();
+                        io.spawn(async move { client.search_playlists(&asked).await })
+                    });
                     (slug, name, songs, albums, playlists)
                 })
                 .collect();
@@ -268,9 +482,9 @@ impl Search {
                 answered.push((
                     slug,
                     name,
-                    join(songs).await,
-                    join(albums).await,
-                    join(playlists).await,
+                    awaited(songs).await,
+                    awaited(albums).await,
+                    awaited(playlists).await,
                 ));
             }
 
@@ -306,7 +520,7 @@ impl Search {
                     Some(reason) => Network::failed(reason, cx),
                     None => {
                         Network::reached(cx);
-                        this.served = Some(query);
+                        this.served = Some(wanted);
                     }
                 }
                 this.error = (!trouble.is_empty() && bare).then(|| trouble.join(" · "));
@@ -325,6 +539,7 @@ impl Search {
         session
             .active_slugs()
             .into_iter()
+            .filter(|slug| !self.lens.hidden.contains(slug))
             .filter_map(|slug| {
                 let client = session.client_for_slug(slug)?;
                 Some((
@@ -404,11 +619,15 @@ impl Search {
             return;
         }
 
-        self.hits = {
+        let found: Vec<Found> = {
             let held = self.library.read(cx);
             let state = held.state(Shelf::Streaming);
             let (tracks, albums, playlists) = (state.tracks(), state.albums(), state.playlists());
 
+            let limit = match self.lens.kind {
+                None => LIMIT,
+                Some(_) => FOCUSED,
+            };
             let empty = Catalog::default();
             let mut all: Vec<(Scored, &'static str)> = Vec::new();
             for slug in self.lanes(cx) {
@@ -434,9 +653,17 @@ impl Search {
                     .collect();
 
                 all.extend(
-                    rank(&mine, &sleeves, &lists, catalog, &self.portraits, query)
-                        .into_iter()
-                        .map(|scored| (scored, slug)),
+                    rank(
+                        &mine,
+                        &sleeves,
+                        &lists,
+                        catalog,
+                        &self.portraits,
+                        query,
+                        limit,
+                    )
+                    .into_iter()
+                    .map(|scored| (scored, slug)),
                 );
             }
             all.sort_by(|(left, _), (right, _)| {
@@ -449,10 +676,12 @@ impl Search {
             all.into_iter()
                 .map(|(scored, slug)| Found {
                     slug,
+                    mine: scored.mine,
                     hit: scored.hit,
                 })
                 .collect()
         };
+        self.hits = narrowed(found, &self.lens);
         self.fetch_portraits(cx);
         cx.notify();
     }
@@ -465,16 +694,24 @@ fn rank(
     catalog: &Catalog,
     portraits: &HashMap<String, String>,
     asked: &str,
+    limit: usize,
 ) -> Vec<Scored> {
     let query = Query::new(asked);
     if query.terms.is_empty() {
         return Vec::new();
     }
 
-    let mut all = songs(library, &catalog.tracks, &query);
-    all.extend(artists(library, &catalog.tracks, albums, portraits, &query));
-    all.extend(albums_of(albums, library, catalog, &query));
-    all.extend(playlists_of(playlists, &catalog.playlists, &query));
+    let mut all = songs(library, &catalog.tracks, &query, limit);
+    all.extend(artists(
+        library,
+        &catalog.tracks,
+        albums,
+        portraits,
+        &query,
+        limit,
+    ));
+    all.extend(albums_of(albums, library, catalog, &query, limit));
+    all.extend(playlists_of(playlists, &catalog.playlists, &query, limit));
     order(&mut all);
 
     all
@@ -484,7 +721,7 @@ fn owns(slug: &str, id: Option<&str>) -> bool {
     id.and_then(music::tag::slug_of) == Some(slug)
 }
 
-fn songs(library: &[Track], catalog: &[Track], query: &Query) -> Vec<Scored> {
+fn songs(library: &[Track], catalog: &[Track], query: &Query, limit: usize) -> Vec<Scored> {
     let mut scored: Vec<Scored> = Vec::new();
 
     for (track, rank) in sources(library, catalog) {
@@ -504,14 +741,21 @@ fn songs(library: &[Track], catalog: &[Track], query: &Query) -> Vec<Scored> {
         scored.push(Scored {
             score,
             popularity: track.popularity,
+            mine: rank.is_none(),
             hit: Hit::Song(track.clone()),
         });
     }
 
-    capped(scored)
+    capped(scored, limit)
 }
 
-fn albums_of(albums: &[Album], library: &[Track], catalog: &Catalog, query: &Query) -> Vec<Scored> {
+fn albums_of(
+    albums: &[Album],
+    library: &[Track],
+    catalog: &Catalog,
+    query: &Query,
+    limit: usize,
+) -> Vec<Scored> {
     let saved = albums.iter().map(|album| {
         (
             &album.id,
@@ -568,6 +812,7 @@ fn albums_of(albums: &[Album], library: &[Track], catalog: &Catalog, query: &Que
         scored.push(Scored {
             score,
             popularity,
+            mine: rank.is_none(),
             hit: Hit::Album(AlbumHit {
                 id: id.clone(),
                 name: name.clone(),
@@ -579,10 +824,15 @@ fn albums_of(albums: &[Album], library: &[Track], catalog: &Catalog, query: &Que
         });
     }
 
-    capped(scored)
+    capped(scored, limit)
 }
 
-fn playlists_of(playlists: &[Playlist], catalog: &[Playlist], query: &Query) -> Vec<Scored> {
+fn playlists_of(
+    playlists: &[Playlist],
+    catalog: &[Playlist],
+    query: &Query,
+    limit: usize,
+) -> Vec<Scored> {
     let total = catalog.len();
     let saved = playlists.iter().map(|playlist| (playlist, None));
     let found = catalog
@@ -608,6 +858,7 @@ fn playlists_of(playlists: &[Playlist], catalog: &[Playlist], query: &Query) -> 
         scored.push(Scored {
             score,
             popularity: 0,
+            mine: rank.is_none(),
             hit: Hit::Playlist(PlaylistHit {
                 id: playlist.id.clone(),
                 name: playlist.name.clone(),
@@ -617,7 +868,7 @@ fn playlists_of(playlists: &[Playlist], catalog: &[Playlist], query: &Query) -> 
         });
     }
 
-    capped(scored)
+    capped(scored, limit)
 }
 
 fn artists(
@@ -626,6 +877,7 @@ fn artists(
     albums: &[Album],
     portraits: &HashMap<String, String>,
     query: &Query,
+    limit: usize,
 ) -> Vec<Scored> {
     let mut tallies: Vec<(u32, u32, ArtistHit)> = Vec::new();
 
@@ -687,9 +939,11 @@ fn artists(
             .map(|(score, popularity, artist)| Scored {
                 score,
                 popularity,
+                mine: artist.saved > 0,
                 hit: Hit::Artist(artist),
             })
             .collect(),
+        limit,
     )
 }
 
@@ -735,9 +989,9 @@ fn order(scored: &mut [Scored]) {
     });
 }
 
-fn capped(mut scored: Vec<Scored>) -> Vec<Scored> {
+fn capped(mut scored: Vec<Scored>, limit: usize) -> Vec<Scored> {
     order(&mut scored);
-    scored.truncate(LIMIT);
+    scored.truncate(limit);
     scored
 }
 
@@ -806,9 +1060,136 @@ fn named(value: &str, query: &Query) -> Option<u32> {
     fit(&[(NAME, value)], query)
 }
 
+/// The ranked hits the lens lets through, in the lens's order. Hidden providers are already
+/// gone, since `lanes` leaves them out before ranking.
+fn narrowed(mut hits: Vec<Found>, lens: &Lens) -> Vec<Found> {
+    hits.retain(|found| {
+        lens.kind.is_none_or(|kind| found.kind() == kind) && (!lens.mine_only || found.mine)
+    });
+    sorted(&mut hits, lens.order);
+    hits
+}
+
+/// Orders `hits` by one axis. The sort is stable and hits without that value keep their
+/// relevance order behind the ones that have it.
+fn sorted(hits: &mut [Found], order: Option<(Axis, Sort)>) {
+    let Some((axis, sort)) = order else {
+        return;
+    };
+    hits.sort_by(
+        |left, right| match (measure(&left.hit, axis), measure(&right.hit, axis)) {
+            (Some(left), Some(right)) => match sort {
+                Sort::Ascending => left.cmp(&right),
+                Sort::Descending => right.cmp(&left),
+            },
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        },
+    );
+}
+
+/// A hit's value on one axis, comparable with another of the same axis.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Measure {
+    Text(String),
+    Number(u64),
+}
+
+/// `hit`'s value on `axis`, or `None` when that kind of hit has none.
+fn measure(hit: &Hit, axis: Axis) -> Option<Measure> {
+    let text = |value: &str| (!value.is_empty()).then(|| Measure::Text(value.to_lowercase()));
+    match (axis, hit) {
+        (Axis::Title, Hit::Song(track)) => text(&track.name),
+        (Axis::Title, Hit::Artist(artist)) => text(&artist.name),
+        (Axis::Title, Hit::Album(album)) => text(&album.name),
+        (Axis::Title, Hit::Playlist(list)) => text(&list.name),
+        (Axis::Artist, Hit::Song(track)) => text(&track.artists),
+        (Axis::Artist, Hit::Album(album)) => text(&album.artists),
+        (Axis::Artist, Hit::Artist(artist)) => text(&artist.name),
+        (Axis::Artist, Hit::Playlist(list)) => text(&list.owner),
+        (Axis::Duration, Hit::Song(track)) => (!track.duration.is_zero())
+            .then_some(Measure::Number(track.duration.as_millis() as u64)),
+        (Axis::Year, Hit::Album(album)) => {
+            (album.year > 0).then_some(Measure::Number(album.year as u64))
+        }
+        (Axis::Duration | Axis::Year, _) => None,
+    }
+}
+
+/// The rows a search part answered with, or none for a part the lens did not ask for.
+async fn awaited<T>(handle: Option<tokio::task::JoinHandle<Result<Vec<T>>>>) -> Result<Vec<T>> {
+    match handle {
+        Some(handle) => join(handle).await,
+        None => Ok(Vec::new()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn served(query: &str, kind: Option<Kind>, slugs: &[&'static str]) -> Served {
+        Served {
+            query: query.to_owned(),
+            parts: Parts::of(kind),
+            slugs: slugs.to_vec(),
+        }
+    }
+
+    #[test]
+    fn artists_need_songs_and_albums() {
+        assert_eq!(
+            Parts::of(Some(Kind::Artist)),
+            Parts {
+                songs: true,
+                albums: true,
+                playlists: false,
+            }
+        );
+    }
+
+    #[test]
+    fn narrowing_is_already_served() {
+        let all = served("queen", None, &["spotify", "youtube"]);
+        assert!(all.covers(&served("queen", Some(Kind::Album), &["spotify"])));
+    }
+
+    #[test]
+    fn widening_the_kind_needs_a_fetch() {
+        let albums = served("queen", Some(Kind::Album), &["spotify"]);
+        assert!(!albums.covers(&served("queen", None, &["spotify"])));
+    }
+
+    #[test]
+    fn a_new_source_needs_a_fetch() {
+        let one = served("queen", None, &["spotify"]);
+        assert!(!one.covers(&served("queen", None, &["spotify", "youtube"])));
+    }
+
+    #[test]
+    fn resetting_filters_keeps_the_tab_and_order() {
+        let lens = Lens {
+            kind: Some(Kind::Album),
+            hidden: vec!["spotify"],
+            mine_only: true,
+            order: Some((Axis::Year, Sort::Descending)),
+        };
+        assert_eq!(
+            lens.unfiltered(),
+            Lens {
+                kind: Some(Kind::Album),
+                order: Some((Axis::Year, Sort::Descending)),
+                ..Lens::default()
+            }
+        );
+    }
+
+    #[test]
+    fn another_query_needs_a_fetch() {
+        let asked = served("queen", None, &["spotify"]);
+        assert!(!asked.covers(&served("queens", None, &["spotify"])));
+    }
 
     fn rank(library: &[Track], albums: &[Album], catalog: &[Track], asked: &str) -> Vec<Hit> {
         let catalog = Catalog {
@@ -816,10 +1197,18 @@ mod tests {
             ..Catalog::default()
         };
 
-        super::rank(library, albums, &[], &catalog, &HashMap::new(), asked)
-            .into_iter()
-            .map(|scored| scored.hit)
-            .collect()
+        super::rank(
+            library,
+            albums,
+            &[],
+            &catalog,
+            &HashMap::new(),
+            asked,
+            LIMIT,
+        )
+        .into_iter()
+        .map(|scored| scored.hit)
+        .collect()
     }
 
     fn track(name: &str, artists: &str, album: &str) -> Track {
@@ -1006,6 +1395,7 @@ mod tests {
             &Catalog::default(),
             &portraits,
             "echo",
+            LIMIT,
         );
 
         let Some(Hit::Artist(artist)) = hits
@@ -1016,5 +1406,159 @@ mod tests {
             panic!("expected an artist hit");
         };
         assert_eq!(artist.cover.as_deref(), Some("https://portrait"));
+    }
+
+    #[test]
+    fn one_kind_lifts_the_cap() {
+        let catalog = Catalog {
+            tracks: (0..30)
+                .map(|at| track(&format!("Song {at}"), "Band", "Record"))
+                .collect(),
+            ..Catalog::default()
+        };
+        let songs = |limit| {
+            super::rank(&[], &[], &[], &catalog, &HashMap::new(), "song", limit)
+                .iter()
+                .filter(|scored| scored.hit.kind() == Kind::Song)
+                .count()
+        };
+        assert_eq!(songs(LIMIT), 20);
+        assert_eq!(songs(FOCUSED), 30);
+    }
+
+    #[test]
+    fn library_hits_are_marked_mine() {
+        let catalog = Catalog {
+            tracks: vec![track(
+                "Bohemian Like You",
+                "The Dandy Warhols",
+                "Thirteen Tales",
+            )],
+            ..Catalog::default()
+        };
+        let scored = super::rank(
+            &[rhapsody()],
+            &[],
+            &[],
+            &catalog,
+            &HashMap::new(),
+            "bohemian",
+            LIMIT,
+        );
+        let mine = |name: &str| {
+            scored.iter().find_map(|scored| match &scored.hit {
+                Hit::Song(track) if track.name == name => Some(scored.mine),
+                _ => None,
+            })
+        };
+        assert_eq!(mine("Bohemian Rhapsody"), Some(true));
+        assert_eq!(mine("Bohemian Like You"), Some(false));
+    }
+
+    fn found(hit: Hit, mine: bool) -> Found {
+        Found {
+            slug: "spotify",
+            hit,
+            mine,
+        }
+    }
+
+    fn timed(name: &str, seconds: u64) -> Hit {
+        Hit::Song(Track {
+            duration: Duration::from_secs(seconds),
+            ..track(name, "Band", "Record")
+        })
+    }
+
+    fn record(name: &str) -> Hit {
+        Hit::Album(AlbumHit {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            artists: "Band".to_owned(),
+            artist_refs: Vec::new(),
+            cover: None,
+            year: 2001,
+        })
+    }
+
+    fn names(hits: &[Found]) -> Vec<&str> {
+        hits.iter()
+            .map(|found| match &found.hit {
+                Hit::Song(track) => track.name.as_str(),
+                Hit::Album(album) => album.name.as_str(),
+                Hit::Artist(artist) => artist.name.as_str(),
+                Hit::Playlist(list) => list.name.as_str(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn one_kind_keeps_only_that_kind() {
+        let lens = Lens::default().with_kind(Some(Kind::Album));
+        let hits = narrowed(
+            vec![
+                found(timed("Song", 60), false),
+                found(record("Record"), false),
+            ],
+            &lens,
+        );
+        assert_eq!(names(&hits), ["Record"]);
+    }
+
+    #[test]
+    fn mine_only_drops_catalog_hits() {
+        let lens = Lens {
+            mine_only: true,
+            ..Lens::default()
+        };
+        let hits = narrowed(
+            vec![
+                found(timed("Saved", 60), true),
+                found(timed("Found", 60), false),
+            ],
+            &lens,
+        );
+        assert_eq!(names(&hits), ["Saved"]);
+    }
+
+    #[test]
+    fn duration_sorts_both_ways_and_valueless_hits_trail() {
+        let hits = || {
+            vec![
+                found(timed("Long", 300), false),
+                found(record("Record"), false),
+                found(timed("Short", 60), false),
+            ]
+        };
+        let up = Lens::default().cycled(Axis::Duration);
+        assert_eq!(names(&narrowed(hits(), &up)), ["Short", "Long", "Record"]);
+        let down = up.cycled(Axis::Duration);
+        assert_eq!(names(&narrowed(hits(), &down)), ["Long", "Short", "Record"]);
+    }
+
+    #[test]
+    fn cycling_an_axis_returns_to_relevance() {
+        let lens = Lens::default()
+            .cycled(Axis::Title)
+            .cycled(Axis::Title)
+            .cycled(Axis::Title);
+        assert_eq!(lens.order, None);
+    }
+
+    #[test]
+    fn changing_kind_drops_an_axis_it_lacks() {
+        let lens = Lens::default()
+            .with_kind(Some(Kind::Song))
+            .cycled(Axis::Duration)
+            .with_kind(None);
+        assert_eq!(lens.order, None);
+    }
+
+    #[test]
+    fn signing_out_forgets_a_hidden_source() {
+        let lens = Lens::default()
+            .with_source("youtube", false)
+            .forget("youtube");
+        assert!(lens.hidden.is_empty());
     }
 }

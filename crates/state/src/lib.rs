@@ -25,6 +25,7 @@ mod remote;
 mod scan;
 mod scrobble;
 mod search;
+mod search_history;
 mod session;
 mod settings;
 mod sheets;
@@ -62,7 +63,8 @@ pub use queue::{Named, Queue, Resume, Stub};
 pub use remote::{Remote, attach as attach_remote};
 pub use scan::Scan;
 pub use scrobble::{ScrobbleRow, ScrobbleState, Scrobbling};
-pub use search::{AlbumHit, ArtistHit, Found, Hit, Kind, PlaylistHit, Search};
+pub use search::{AlbumHit, ArtistHit, Axis, Found, Hit, Kind, Lens, PlaylistHit, Search};
+pub use search_history::SearchHistory;
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, MiniCorner, Reloaded,
@@ -192,6 +194,7 @@ pub struct Sonora {
     pub queue: Entity<Queue>,
     pub scan: Entity<Scan>,
     pub scrobbling: Entity<Scrobbling>,
+    pub search_history: Entity<SearchHistory>,
     pub settings: Entity<AppSettings>,
     pub updates: Entity<Updates>,
     pub usage: Entity<Usage>,
@@ -301,6 +304,7 @@ pub fn init(
     };
     let jam = cx.new(|cx| Jam::new(parts, io.clone(), cx));
     jam.update(cx, |jam, cx| jam.autostart(cx));
+    let search_history = cx.new(|cx| SearchHistory::new(database.clone(), io.clone(), cx));
     let usage = cx.new(|cx| Usage::new(session.clone(), database, io.clone(), cx));
     let pins = cx.new(|cx| Pins::new(settings.clone(), library.clone(), session.clone(), cx));
     let potoken = potoken::attach(cx);
@@ -331,6 +335,7 @@ pub fn init(
         queue,
         scan,
         scrobbling,
+        search_history,
         settings,
         updates,
         usage,

@@ -410,6 +410,9 @@ home-collection-albums = Albums from your collection
 # search page
 search-placeholder = What do you want to listen to?
 search-browse = Browse all
+search-recent = Recent searches
+search-recent-clear = Clear
+search-recent-remove = Remove from recent searches
 genre-empty = Nothing to show here yet
 search-best-match = Best match
 search-no-matches = No matches
@@ -417,6 +420,11 @@ search-results = Results
 search-songs = Songs
 search-artists = Artists
 search-albums-playlists = Albums & playlists
+search-all = All
+search-albums = Albums
+search-playlists = Playlists
+search-mine-only = Only in your library
+search-filtered-empty = Nothing matches these filters
 search-tag = { $kind } ·
 search-saved =
     { $count ->

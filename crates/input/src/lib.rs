@@ -34,7 +34,12 @@ actions!(
         ToggleWindowFullscreen,
         Hide,
         HideOthers,
-        ShowAll
+        ShowAll,
+        SearchAll,
+        SearchSongs,
+        SearchArtists,
+        SearchAlbums,
+        SearchPlaylists
     ]
 );
 
@@ -63,6 +68,7 @@ fn shared() -> Vec<KeyBinding> {
         "{WORKSPACE_CONTEXT} && !{INPUT_CONTEXT} && !{MENU_CONTEXT} && !{FORM_CONTEXT} && !{TABLE_CONTEXT} && !{SEARCH_CONTEXT}"
     );
     let results = format!("{SEARCH_CONTEXT} && !{INPUT_CONTEXT}");
+    let typing = format!("{SEARCH_CONTEXT} && {INPUT_CONTEXT}");
 
     vec![
         KeyBinding::new("down", SelectNext, table),
@@ -81,10 +87,16 @@ fn shared() -> Vec<KeyBinding> {
         KeyBinding::new("escape", Deselect, Some(&browsing)),
         KeyBinding::new("down", SelectNext, search),
         KeyBinding::new("up", SelectPrevious, search),
+        KeyBinding::new("alt-1", SearchAll, search),
+        KeyBinding::new("alt-2", SearchSongs, search),
+        KeyBinding::new("alt-3", SearchArtists, search),
+        KeyBinding::new("alt-4", SearchAlbums, search),
+        KeyBinding::new("alt-5", SearchPlaylists, search),
         KeyBinding::new("left", SelectLeft, Some(&results)),
         KeyBinding::new("right", SelectRight, Some(&results)),
         KeyBinding::new("enter", Activate, Some(&results)),
         KeyBinding::new("escape", Deselect, Some(&results)),
+        KeyBinding::new("enter", Submit, Some(&typing)),
         KeyBinding::new("down", SelectNext, menu),
         KeyBinding::new("up", SelectPrevious, menu),
         KeyBinding::new("tab", SelectNext, menu),

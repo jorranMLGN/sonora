@@ -7,21 +7,24 @@ use gpui::{
     MouseDownEvent, Pixels, Point, Render, ScrollHandle, SharedString, WeakEntity, Window, div,
 };
 use i18n::t;
-use input::SEARCH_CONTEXT;
+use input::{SEARCH_CONTEXT, SearchAlbums, SearchAll, SearchArtists, SearchPlaylists, SearchSongs};
 use music::{Album, Playlist, ReleaseType, SavedArtist, Track};
 use router::{Destination, NavEntry, navigate};
 use ui::Input;
 
 use crate::chrome::Chrome;
+use crate::chrome::tools::{self, Sliders};
 use crate::shared::menus::{ItemMenu, album_menu, artist_menu, playlist_menu};
 use state::{
-    AlbumHit, ArtistHit, Found, Genres, Hit, Kind, Network, Playback, PlaylistHit, Search, Sonora,
+    AlbumHit, ArtistHit, Axis, Found, Genres, Hit, Kind, Lens, Network, Playback, PlaylistHit,
+    Search, SearchHistory, Sonora,
 };
 use ui::ActiveTheme as _;
 use ui::{
-    Activate, Card, Deck, Deselect, Pinnable, Popup, Room, Scrollbar, Scroller, SelectLeft,
-    SelectNext, SelectPrevious, SelectRight, Separator, Text, Theme, VAST, clock, eyebrow,
-    scrolled, snapped, tabular, vacant,
+    Activate, Button, Card, Deck, Deselect, Filter, FilterChange, FlagAxis, Pinnable, Popovers,
+    Popup, Room, Scrollbar, Scroller, SelectLeft, SelectNext, SelectPrevious, SelectRight,
+    Separator, SortAxis, Submit, TabBar, Text, Theme, VAST, clock, eyebrow, scrolled, snapped,
+    tabular, vacant,
 };
 
 use crate::shared::cards;
@@ -38,6 +41,16 @@ const SONGS: &[Kind] = &[Kind::Song];
 const ARTISTS: &[Kind] = &[Kind::Artist];
 const RELEASES: &[Kind] = &[Kind::Album, Kind::Playlist];
 const GROUPS: [&[Kind]; 3] = [SONGS, ARTISTS, RELEASES];
+/// The type tabs, in order, with their label key.
+const TABS: [(Option<Kind>, &str); 5] = [
+    (None, "search-all"),
+    (Some(Kind::Song), "search-songs"),
+    (Some(Kind::Artist), "search-artists"),
+    (Some(Kind::Album), "search-albums"),
+    (Some(Kind::Playlist), "search-playlists"),
+];
+/// The filter key of "Only in your library"; provider filters are keyed by their slug.
+const MINE: &str = "mine";
 
 enum Seat {
     Head(&'static str),
@@ -95,6 +108,7 @@ pub(crate) struct SearchView {
     input: Entity<Input>,
     search: Entity<Search>,
     genres: Entity<Genres>,
+    history: Entity<SearchHistory>,
     playback: Entity<Playback>,
     playback_status: PlaybackStatus,
     bars: Vec<(&'static str, Entity<Scrollbar>)>,
@@ -106,6 +120,8 @@ pub(crate) struct SearchView {
     cursor: Option<(usize, usize)>,
     rows: Vec<usize>,
     lead: Rc<Cell<Pixels>>,
+    popovers: Popovers,
+    sliders: Sliders,
 }
 
 impl SearchView {
@@ -139,6 +155,8 @@ impl SearchView {
         .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
+        let history = Sonora::global(cx).search_history.clone();
+        cx.observe(&history, |_, _, cx| cx.notify()).detach();
         let library = Sonora::global(cx).library.clone();
         cx.observe(&library, |_, _, cx| cx.notify()).detach();
         let current_playback = playback_status(&playback, cx);
@@ -162,6 +180,7 @@ impl SearchView {
             input,
             search,
             genres,
+            history,
             playback,
             playback_status: current_playback,
             bars: registered
@@ -181,11 +200,24 @@ impl SearchView {
             cursor: None,
             rows: Vec::new(),
             lead: Rc::new(Cell::new(Pixels::ZERO)),
+            popovers: Popovers::default(),
+            sliders: Sliders::default(),
         }
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         self.input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Keeps the current query in the recent searches, once the user acted on it.
+    fn remember(&self, cx: &mut App) {
+        let query = self.search.read(cx).query().to_owned();
+        self.history
+            .update(cx, |history, cx| history.record(&query, cx));
+    }
+
+    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+        self.remember(cx);
     }
 
     fn select_next(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
@@ -274,6 +306,7 @@ impl SearchView {
         let Some(found) = self.search.read(cx).hits().get(at).cloned() else {
             return;
         };
+        self.remember(cx);
         match found.hit {
             Hit::Song(track) => {
                 let current = track.id.is_some() && track.id == self.playback_status.0;
@@ -557,6 +590,7 @@ impl SearchView {
                 let track = track.clone();
                 let play: Play = Box::new(move |_, _, cx| {
                     me.update(cx, |this, cx| {
+                        this.remember(cx);
                         this.playback.update(cx, |playback, cx| match current {
                             true => playback.toggle_play(cx),
                             false => playback.play_radio(&track, cx),
@@ -577,6 +611,7 @@ impl SearchView {
         let playing = self.playback.read(cx).playing_from(&origin, cx) == Some(true);
         let play: Play = Box::new(move |_, _, cx| {
             me.update(cx, |this, cx| {
+                this.remember(cx);
                 this.playback
                     .update(cx, |playback, cx| playback.toggle_origin(&origin, cx));
             })
@@ -748,6 +783,7 @@ impl SearchView {
             .flex_1()
             .min_h_0()
             .gap_3()
+            .children(self.recent(gutter, cx))
             .child(div().px(gutter).child(eyebrow(t!("search-browse"), cx)))
             .child(
                 Scroller::new("search-browse", &self.browsing)
@@ -756,6 +792,80 @@ impl SearchView {
                     .child(plates),
             )
             .into_any_element()
+    }
+
+    /// The recent searches above Browse all, or nothing when there are none.
+    fn recent(&self, gutter: Pixels, cx: &Context<Self>) -> Option<AnyElement> {
+        let entries = self.history.read(cx).entries();
+        if entries.is_empty() {
+            return None;
+        }
+        let rows = entries.iter().enumerate().map(|(at, query)| {
+            let asked = query.clone();
+            let gone = query.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    Button::new(("search-recent", at))
+                        .label(SharedString::from(query.clone()))
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.fill(&asked, window, cx);
+                        })),
+                )
+                .child(
+                    Button::new(("search-recent-remove", at))
+                        .icon("icons/x.svg")
+                        .small()
+                        .ghost()
+                        .tooltip("search-recent-remove")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.history
+                                .update(cx, |history, cx| history.remove(&gone, cx));
+                        })),
+                )
+        });
+
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .gap_1()
+                .px(gutter)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(eyebrow(t!("search-recent"), cx))
+                        .child(
+                            Button::new("search-recent-clear")
+                                .label(t!("search-recent-clear"))
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.history.update(cx, |history, cx| history.clear(cx));
+                                })),
+                        ),
+                )
+                .children(rows)
+                .into_any_element(),
+        )
+    }
+
+    /// Searches for a recent query again.
+    fn fill(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let query = query.to_owned();
+        self.input.update(cx, |input, cx| {
+            input.set_text(query.clone(), cx);
+            input.focus(window, cx);
+        });
+        self.history
+            .update(cx, |history, cx| history.record(&query, cx));
     }
 
     fn everything(&self, gutter: Pixels, window: &Window, cx: &Context<Self>) -> AnyElement {
@@ -770,14 +880,158 @@ impl SearchView {
         self.deck(None, gutter, Some(lead), window, cx)
     }
 
+    /// Applies a change to the search lens.
+    fn relens(&mut self, change: impl FnOnce(Lens) -> Lens, cx: &mut Context<Self>) {
+        self.search.update(cx, |search, cx| {
+            let lens = change(search.lens().clone());
+            search.set_lens(lens, cx);
+        });
+    }
+
+    /// Narrows the results to one kind, or back to all of them.
+    fn show(&mut self, kind: Option<Kind>, cx: &mut Context<Self>) {
+        if self.search.read(cx).query().trim().is_empty() {
+            return;
+        }
+        self.relens(|lens| lens.with_kind(kind), cx);
+    }
+
+    fn tabs(&self, cx: &Context<Self>) -> TabBar {
+        let current = self.search.read(cx).lens().kind;
+        TabBar::new("search-kinds")
+            .flex_none()
+            .items(TABS.iter().map(|&(kind, key)| {
+                Button::new(SharedString::from(format!("{key}-tab")))
+                    .label(i18n::lookup(key, None))
+                    .small()
+                    .ghost()
+                    .selected(kind == current)
+                    .on_click(cx.listener(move |this, _, _, cx| this.show(kind, cx)))
+            }))
+    }
+
+    fn sorts(&self, cx: &Context<Self>) -> AnyElement {
+        let lens = self.search.read(cx).lens();
+        let axes = Axis::of(lens.kind)
+            .iter()
+            .map(|&axis| SortAxis {
+                key: axis_key(axis),
+                label: i18n::lookup(axis_label(axis), None),
+                order: lens
+                    .order
+                    .filter(|(current, _)| *current == axis)
+                    .map(|(_, sort)| sort),
+            })
+            .collect();
+        let me = cx.entity().downgrade();
+        tools::sorts(
+            &self.popovers,
+            axes,
+            move |key, cx| {
+                let Some(axis) = axis_of(key) else {
+                    return;
+                };
+                me.update(cx, |this, cx| this.relens(|lens| lens.cycled(axis), cx))
+                    .ok();
+            },
+            cx,
+        )
+    }
+
+    fn filters(&self, cx: &Context<Self>) -> AnyElement {
+        let search = self.search.read(cx);
+        let lens = search.lens();
+        let session = Sonora::global(cx).session.read(cx);
+        let mut axes: Vec<Filter> = search
+            .sources(cx)
+            .into_iter()
+            .map(|slug| {
+                Filter::Flag(FlagAxis {
+                    key: slug,
+                    label: SharedString::from(session.provider_name_for(slug).unwrap_or(slug)),
+                    on: !lens.hidden.contains(&slug),
+                })
+            })
+            .collect();
+        axes.push(Filter::Flag(FlagAxis {
+            key: MINE,
+            label: t!("search-mine-only"),
+            on: lens.mine_only,
+        }));
+        let narrowed = !lens.hidden.is_empty() || lens.mine_only;
+        let me = cx.entity().downgrade();
+        tools::filters_tinted(
+            &self.popovers,
+            &self.sliders,
+            axes,
+            narrowed,
+            move |change, cx| {
+                me.update(cx, |this, cx| {
+                    this.relens(
+                        |lens| match change {
+                            FilterChange::Flag(MINE, on) => Lens {
+                                mine_only: on,
+                                ..lens
+                            },
+                            FilterChange::Flag(slug, on) => lens.with_source(slug, on),
+                            FilterChange::Reset => lens.unfiltered(),
+                            FilterChange::Range(..) => lens,
+                        },
+                        cx,
+                    )
+                })
+                .ok();
+            },
+            cx,
+        )
+    }
+
+    /// What a lane or the mixed list shows when nothing is left: a plain "No matches", or,
+    /// when the lens narrowed it, why, with a way back.
+    fn empty(&self, cx: &Context<Self>) -> AnyElement {
+        let lens = self.search.read(cx).lens();
+        match lens.hidden.is_empty() && !lens.mine_only {
+            true => vacant(t!("search-no-matches"), cx)
+                .flex_none()
+                .into_any_element(),
+            false => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(vacant(t!("search-filtered-empty"), cx).flex_none())
+                .child(
+                    Button::new("search-filters-reset")
+                        .label(t!("filter-reset"))
+                        .small()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.relens(Lens::unfiltered, cx);
+                        })),
+                )
+                .into_any_element(),
+        }
+    }
+
     fn seats(&self, lane: Option<&str>, cx: &App) -> Vec<Seat> {
         let search = self.search.read(cx);
         let hits = search.hits();
+        let single = search.lens().kind.is_some();
         let Some(lane) = lane else {
             return (0..hits.len())
-                .map(|at| Seat::Item { at, compact: true })
+                .map(|at| Seat::Item {
+                    at,
+                    compact: !single,
+                })
                 .collect();
         };
+        if single {
+            return hits
+                .iter()
+                .enumerate()
+                .filter(|(_, found)| found.slug == lane)
+                .map(|(at, _)| Seat::Item { at, compact: false })
+                .collect();
+        }
 
         let mut seats = Vec::new();
         for group in GROUPS {
@@ -815,7 +1069,7 @@ impl SearchView {
         };
         let seats = self.seats(lane, cx);
         if after(&seats, 0).is_none() {
-            let empty = vacant(t!("search-no-matches"), cx).flex_none();
+            let empty = self.empty(cx);
             return match lead {
                 Some(lead) => div()
                     .flex()
@@ -825,7 +1079,7 @@ impl SearchView {
                     .child(lead)
                     .child(empty)
                     .into_any_element(),
-                None => empty.into_any_element(),
+                None => empty,
             };
         }
 
@@ -896,6 +1150,30 @@ impl SearchView {
     }
 }
 
+fn axis_key(axis: Axis) -> &'static str {
+    match axis {
+        Axis::Title => "title",
+        Axis::Artist => "artist",
+        Axis::Duration => "duration",
+        Axis::Year => "year",
+    }
+}
+
+fn axis_label(axis: Axis) -> &'static str {
+    match axis {
+        Axis::Title => "column-title",
+        Axis::Artist => "column-artist",
+        Axis::Duration => "column-length",
+        Axis::Year => "column-year",
+    }
+}
+
+fn axis_of(key: &str) -> Option<Axis> {
+    [Axis::Title, Axis::Artist, Axis::Duration, Axis::Year]
+        .into_iter()
+        .find(|axis| axis_key(*axis) == key)
+}
+
 fn after(seats: &[Seat], from: usize) -> Option<usize> {
     (from..seats.len()).find(|&at| seats[at].at().is_some())
 }
@@ -913,13 +1191,16 @@ fn pressed(
     let me = me.clone();
 
     move |_, _, cx| {
-        me.update(cx, |this, cx| match &target {
-            Press::Song(track) => this
-                .playback
-                .update(cx, |playback, cx| playback.play_radio(track, cx)),
-            Press::Artist(id) => navigate(Destination::Artist(id.clone().into()), cx),
-            Press::Album(id) => navigate(Destination::Album(id.clone().into()), cx),
-            Press::Playlist(id) => navigate(Destination::Playlist(id.clone().into()), cx),
+        me.update(cx, |this, cx| {
+            this.remember(cx);
+            match &target {
+                Press::Song(track) => this
+                    .playback
+                    .update(cx, |playback, cx| playback.play_radio(track, cx)),
+                Press::Artist(id) => navigate(Destination::Artist(id.clone().into()), cx),
+                Press::Album(id) => navigate(Destination::Album(id.clone().into()), cx),
+                Press::Playlist(id) => navigate(Destination::Playlist(id.clone().into()), cx),
+            }
         })
         .ok();
     }
@@ -1094,20 +1375,27 @@ impl Render for SearchView {
                 (true, true) => self.everything(gutter, window, cx),
                 (true, false) => {
                     let lanes = self.lanes(cx);
-                    div()
-                        .flex()
-                        .flex_1()
-                        .min_h_0()
-                        .px(gutter)
-                        .children(lanes.iter().enumerate().flat_map(|(at, lane)| {
-                            [
-                                (at > 0).then(|| Separator::vertical().into_any_element()),
-                                Some(self.column(lane, window, cx)),
-                            ]
-                            .into_iter()
-                            .flatten()
-                        }))
-                        .into_any_element()
+                    match lanes.is_empty() {
+                        true => div()
+                            .flex_1()
+                            .px(gutter)
+                            .child(self.empty(cx))
+                            .into_any_element(),
+                        false => div()
+                            .flex()
+                            .flex_1()
+                            .min_h_0()
+                            .px(gutter)
+                            .children(lanes.iter().enumerate().flat_map(|(at, lane)| {
+                                [
+                                    (at > 0).then(|| Separator::vertical().into_any_element()),
+                                    Some(self.column(lane, window, cx)),
+                                ]
+                                .into_iter()
+                                .flatten()
+                            }))
+                            .into_any_element(),
+                    }
                 }
             },
         };
@@ -1126,13 +1414,33 @@ impl Render for SearchView {
             .on_action(cx.listener(Self::select_right))
             .on_action(cx.listener(Self::activate_hit))
             .on_action(cx.listener(Self::deselect_hit))
+            .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(|this, _: &SearchAll, _, cx| this.show(None, cx)))
+            .on_action(cx.listener(|this, _: &SearchSongs, _, cx| this.show(Some(Kind::Song), cx)))
+            .on_action(
+                cx.listener(|this, _: &SearchArtists, _, cx| this.show(Some(Kind::Artist), cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SearchAlbums, _, cx| this.show(Some(Kind::Album), cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SearchPlaylists, _, cx| this.show(Some(Kind::Playlist), cx)),
+            )
             .child(
                 div()
                     .flex()
                     .flex_none()
+                    .items_center()
+                    .gap_2()
                     .px(gutter)
-                    .child(self.input.clone()),
+                    .child(div().flex_1().min_w_0().child(self.input.clone()))
+                    .when(asked, |this| {
+                        this.child(self.sorts(cx)).child(self.filters(cx))
+                    }),
             )
+            .when(asked, |this| {
+                this.child(div().flex_none().px(gutter).child(self.tabs(cx)))
+            })
             .when(!stacked, |this| {
                 this.children(self.best(cx).map(|best| div().px(gutter).child(best)))
             })
