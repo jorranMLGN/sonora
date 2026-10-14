@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result, anyhow};
-use music::{GenreItem, GenreSection, HomeFeed, MusicApi, Pages, SavedArtist, tag};
+use music::{GenreItem, GenreSection, HomeFeed, MusicApi, Pages, Playlist, SavedArtist, tag};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -24,6 +24,15 @@ const PAGE: usize = 50;
 /// How many pages of a playlist `playlist` follows before it leaves the rest to
 /// `playlist_more`.
 const PLAYLIST_PAGES: usize = 4;
+/// How many track covers stand in for a playlist that has none of its own.
+const MOSAIC: usize = 4;
+/// How many playlists `with_covers` reads the covers of at once.
+const COVER_READS: usize = 8;
+/// Where Spotify serves an image by its id, and the size the ids of a mosaic are given in.
+const SPOTIFY_IMAGE: &str = "https://i.scdn.co/image/";
+const SPOTIFY_LARGE: &str = "ab67616d0000b273";
+/// The smaller sizes of the same Spotify cover, which differ from the large one only here.
+const SPOTIFY_SMALL: [&str; 2] = ["ab67616d00001e02", "ab67616d00004851"];
 /// Every part, in the order the app lists them.
 const PARTS: [Part; 4] = [Part::Songs, Part::Albums, Part::Artists, Part::Playlists];
 
@@ -411,7 +420,10 @@ pub async fn album(core: Arc<Core>, id: &str) -> Result<AlbumDetail> {
 /// times so most playlists arrive whole.
 pub async fn playlist(core: Arc<Core>, id: &str) -> Result<PlaylistDetail> {
     let (_, api) = api(&core, id)?;
-    let detail = api.playlist(id).await.context("cannot load the playlist")?;
+    let mut detail = api.playlist(id).await.context("cannot load the playlist")?;
+    if detail.playlist.cover.is_none() {
+        detail.playlist.cover = mosaic(&music::distinct_covers(&detail.tracks, MOSAIC));
+    }
     let mut tracks = core.remember(&detail.tracks);
     let mut continuation = detail.continuation;
     for _ in 1..PLAYLIST_PAGES {
@@ -665,6 +677,75 @@ async fn more(core: &Core, api: &Arc<dyn MusicApi>, from: &str) -> PlaylistMore 
     }
 }
 
+/// `playlists` with a cover for every one that has tracks but no picture of its own, such as a
+/// playlist the listener made and never gave an image, built from its first tracks' covers.
+async fn with_covers(api: &Arc<dyn MusicApi>, mut playlists: Vec<Playlist>) -> Vec<Playlist> {
+    use futures::StreamExt as _;
+    let bare: Vec<(usize, String, String)> = playlists
+        .iter()
+        .enumerate()
+        .filter(|(_, playlist)| playlist.cover.is_none() && playlist.track_count > 0)
+        .map(|(index, playlist)| {
+            let key = format!("{}:{}", playlist.id, playlist.track_count);
+            (index, playlist.id.clone(), key)
+        })
+        .collect();
+    let found: Vec<(usize, Option<String>)> = futures::stream::iter(bare)
+        .map(|(index, id, key)| {
+            let api = api.clone();
+            async move { (index, cover_of(&api, &id, key).await) }
+        })
+        .buffer_unordered(COVER_READS)
+        .collect()
+        .await;
+    for (index, cover) in found {
+        playlists[index].cover = cover;
+    }
+    playlists
+}
+
+/// The cover `with_covers` gives playlist `id`, remembered under `key` (its id and track
+/// count) for the rest of the run so listing the library again asks nothing. A playlist whose
+/// covers could not be read is remembered without one, so it does not slow every listing.
+async fn cover_of(api: &Arc<dyn MusicApi>, id: &str, key: String) -> Option<String> {
+    static KNOWN: std::sync::OnceLock<Mutex<HashMap<String, Option<String>>>> =
+        std::sync::OnceLock::new();
+    let known = KNOWN.get_or_init(Mutex::default);
+    let remembered = known.lock().ok()?.get(&key).cloned();
+    if let Some(cover) = remembered {
+        return cover;
+    }
+    let cover = match api.playlist_covers(id, MOSAIC).await {
+        Ok(covers) => mosaic(&covers),
+        Err(error) => {
+            log::warn!("library: cannot read the covers of a playlist: {error:#}");
+            None
+        }
+    };
+    known.lock().ok()?.insert(key, cover.clone());
+    cover
+}
+
+/// One picture for a playlist from its tracks' `covers`: four Spotify covers become the grid
+/// Spotify draws for such a playlist, which `mosaic.scdn.co` serves from their image ids, and
+/// anything else takes its first cover.
+fn mosaic(covers: &[String]) -> Option<String> {
+    let ids: Vec<String> = covers
+        .iter()
+        .filter_map(|cover| cover.strip_prefix(SPOTIFY_IMAGE))
+        .map(|id| {
+            SPOTIFY_SMALL
+                .iter()
+                .find_map(|small| id.strip_prefix(small))
+                .map_or_else(|| id.to_owned(), |rest| format!("{SPOTIFY_LARGE}{rest}"))
+        })
+        .collect();
+    match covers.len() == MOSAIC && ids.len() == MOSAIC {
+        true => Some(format!("https://mosaic.scdn.co/640/{}", ids.concat())),
+        false => covers.first().cloned(),
+    }
+}
+
 /// Reads `part` from `api` a provider page at a time, each mapped to items, on the core's
 /// runtime. Dropping the receiver stops the reading.
 fn stream(core: Arc<Core>, api: Arc<dyn MusicApi>, part: Part) -> mpsc::Receiver<Result<Lot>> {
@@ -690,7 +771,10 @@ fn stream(core: Arc<Core>, api: Arc<dyn MusicApi>, part: Part) -> mpsc::Receiver
                 .await;
             }
             Part::Playlists => {
-                let pages = api.playlists().await.map(music::whole);
+                let pages = match api.playlists().await {
+                    Ok(playlists) => Ok(music::whole(with_covers(&api, playlists).await)),
+                    Err(error) => Err(error),
+                };
                 forward(pages, &sender, |playlists| {
                     playlists.iter().map(core::playlist).collect()
                 })
