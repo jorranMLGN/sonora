@@ -2,18 +2,33 @@ use crate::metrics::Text;
 use crate::theme::ActiveTheme as _;
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, Div, DragMoveEvent, ElementId, Empty, Hsla, MouseButton, MouseDownEvent,
     MouseUpEvent, Pixels, Point, Render, SharedString, Stateful, StyleRefinement, Window, canvas,
-    div, px, relative,
+    div, fill, point, px, relative, size,
 };
 
 const TRACK: f32 = 0.5;
 const THUMB: f32 = 1.5;
 const HIT: f32 = 3.;
 const BUBBLE: f32 = 7.;
+/// A waveform bar's width and the space after it. They stay put at any font size, as the
+/// bars of a waveform are a texture rather than a control.
+const BAR: Pixels = px(2.);
+const GAP: Pixels = px(1.);
+/// The quietest bar is still drawn this tall, so a silent stretch reads as part of the track.
+const FLOOR: Pixels = px(1.);
+/// The playhead line drawn over a waveform.
+const PLAYHEAD: Pixels = px(1.);
+/// How much of a waveform's height the reflection under the baseline takes, and how strongly
+/// it is drawn against the bars above it.
+const REFLECTION: f32 = 0.3;
+const REFLECTED: f32 = 0.35;
+/// How strongly the bars between the playhead and the pointer are lit, against played ones.
+const PREVIEWED: f32 = 0.55;
 
 type Slide = Box<dyn Fn(&f32, &mut Window, &mut App) + 'static>;
 type Release = Box<dyn Fn(&MouseUpEvent, &mut Window, &mut App) + 'static>;
@@ -28,6 +43,116 @@ fn thumb(pad: Pixels) -> Pixels {
 
 fn hit(pad: Pixels) -> Pixels {
     px((pad / px(1.) * HIT).round())
+}
+
+/// Where a waveform bar stands against the playhead and the pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    Played,
+    Previewed,
+    Ahead,
+}
+
+/// How many bars, each `BAR` wide with a `GAP` between, fit in `width`.
+fn bar_count(width: Pixels) -> usize {
+    ((width + GAP) / (BAR + GAP)).floor().max(0.) as usize
+}
+
+/// Resamples `levels` to `count` values. Shrinking keeps the loudest of each span, so a short
+/// peak never falls between two bars; growing repeats the nearest one.
+fn pooled(levels: &[f32], count: usize) -> Vec<f32> {
+    if levels.is_empty() || count == 0 {
+        return Vec::new();
+    }
+    let len = levels.len();
+    (0..count)
+        .map(|index| {
+            let start = index * len / count;
+            let end = ((index + 1) * len / count).max(start + 1).min(len);
+            levels[start..end].iter().copied().fold(0., f32::max)
+        })
+        .collect()
+}
+
+/// Which part of the track a bar centred at `share` of the width belongs to. `hover` is where
+/// the pointer is; only the stretch ahead of the playhead up to it is previewed.
+fn part(share: f32, fraction: f32, hover: Option<f32>) -> Part {
+    if share <= fraction {
+        return Part::Played;
+    }
+    match hover.is_some_and(|at| share <= at) {
+        true => Part::Previewed,
+        false => Part::Ahead,
+    }
+}
+
+/// The colours a waveform is painted in.
+#[derive(Clone, Copy)]
+struct Palette {
+    filled: Hsla,
+    empty: Hsla,
+    thumb: Hsla,
+}
+
+/// What one waveform paint needs besides its bounds.
+struct Drawn {
+    levels: Arc<[f32]>,
+    fraction: f32,
+    hover: Option<f32>,
+    playhead: bool,
+    palette: Palette,
+}
+
+/// Paints the levels as bars across `bounds`: up from a baseline, with a dimmer reflection
+/// under it, lit up to the fraction and previewed up to the pointer, then the playhead over
+/// them. One pass of quads, snapped to the device pixel grid so the bars stay crisp.
+fn paint_waveform(bounds: Bounds<Pixels>, drawn: &Drawn, window: &mut Window) {
+    let scale = window.scale_factor();
+    let snap = |value: Pixels| px((value / px(1.) * scale).round() / scale);
+    let width = bounds.size.width;
+    let count = bar_count(width);
+    if count == 0 {
+        return;
+    }
+    let bars = pooled(&drawn.levels, count);
+    let pitch = width / count as f32;
+    let base = snap(bounds.size.height * (1. - REFLECTION));
+    let below = bounds.size.height - base;
+    let palette = drawn.palette;
+
+    for (index, level) in bars.iter().enumerate() {
+        let left = pitch * index as f32;
+        let share = (left + BAR / 2.) / width;
+        let color = match part(share, drawn.fraction, drawn.hover) {
+            Part::Played => palette.filled,
+            Part::Previewed => palette.filled.opacity(PREVIEWED),
+            Part::Ahead => palette.empty,
+        };
+        let x = bounds.origin.x + snap(left);
+        let tall = snap((base * *level).max(FLOOR));
+        window.paint_quad(fill(
+            Bounds::new(point(x, bounds.origin.y + base - tall), size(BAR, tall)),
+            color,
+        ));
+        let reflected = snap(below * *level) - GAP;
+        if reflected > Pixels::ZERO {
+            window.paint_quad(fill(
+                Bounds::new(point(x, bounds.origin.y + base + GAP), size(BAR, reflected)),
+                color.opacity(REFLECTED),
+            ));
+        }
+    }
+
+    if drawn.playhead {
+        let x = bounds.origin.x + snap(width * drawn.fraction - PLAYHEAD / 2.);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(x, bounds.origin.y),
+                size(PLAYHEAD, bounds.size.height),
+            ),
+            palette.thumb,
+        ));
+    }
 }
 
 #[derive(Clone)]
@@ -93,6 +218,7 @@ pub struct Scrubber {
     vertical: bool,
     bubble: Option<(f32, SharedString)>,
     lift: Pixels,
+    waveform: Option<Arc<[f32]>>,
     on_move: Option<Slide>,
     on_release: Option<Release>,
 }
@@ -111,6 +237,7 @@ impl Scrubber {
             vertical: false,
             bubble: None,
             lift: px(12.),
+            waveform: None,
             on_move: None,
             on_release: None,
         }
@@ -118,6 +245,14 @@ impl Scrubber {
 
     pub fn bubble(mut self, fraction: f32, text: impl Into<SharedString>) -> Self {
         self.bubble = Some((fraction.clamp(0., 1.), text.into()));
+        self
+    }
+
+    /// Draws the track as bars of `levels` (each 0 to 1, first to last) in place of the line,
+    /// lit up to the fraction, with a thin playhead in the thumb colour. Horizontal only; the
+    /// bars fill the scrubber's height, so a caller wanting them taller sets `h`.
+    pub fn waveform(mut self, levels: Arc<[f32]>) -> Self {
+        self.waveform = Some(levels).filter(|levels| !levels.is_empty());
         self
     }
 
@@ -187,6 +322,7 @@ impl RenderOnce for Scrubber {
             vertical,
             bubble,
             lift,
+            waveform,
             on_move,
             on_release,
         } = self;
@@ -242,8 +378,58 @@ impl RenderOnce for Scrubber {
             false => Pixels::ZERO,
         };
 
-        let bar = match vertical {
-            true => div()
+        let hover = bubble.as_ref().map(|(at, _)| *at);
+        let bar = match (vertical, waveform) {
+            (false, Some(levels)) => {
+                let drawn = Drawn {
+                    levels,
+                    fraction,
+                    hover,
+                    playhead: enabled,
+                    palette: Palette {
+                        filled,
+                        empty,
+                        thumb,
+                    },
+                };
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(pin / 2.)
+                    .right(pin / 2.)
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| paint_waveform(bounds, &drawn, window),
+                        )
+                        .size_full(),
+                    )
+                    .when_some(bubble, |this, (at, text)| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .bottom(relative(1.))
+                                .left(relative(at))
+                                .ml(Pixels::ZERO - bubble_width / 2.)
+                                .w(bubble_width)
+                                .flex()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .px_1p5()
+                                        .rounded_md()
+                                        .bg(popover)
+                                        .border_1()
+                                        .border_color(popover_border)
+                                        .text_color(popover_text)
+                                        .text_size(text_size)
+                                        .child(text),
+                                ),
+                        )
+                    })
+            }
+            (true, _) => div()
                 .relative()
                 .h_full()
                 .w(line)
@@ -309,7 +495,7 @@ impl RenderOnce for Scrubber {
                             )
                         }),
                 ),
-            false => div()
+            (false, None) => div()
                 .relative()
                 .w_full()
                 .h(line)
@@ -407,7 +593,35 @@ impl RenderOnce for Scrubber {
 mod tests {
     use gpui::{Bounds, point, px, size};
 
-    use super::{ScrubberState, hit, thumb, track};
+    use super::{Part, ScrubberState, bar_count, hit, part, pooled, thumb, track};
+
+    #[test]
+    fn bars_fill_the_width_at_their_pitch() {
+        assert_eq!(bar_count(px(300.)), 100);
+        assert_eq!(bar_count(px(301.)), 100);
+        assert_eq!(bar_count(px(2.)), 1);
+        assert_eq!(bar_count(px(0.)), 0);
+    }
+
+    #[test]
+    fn pooling_keeps_the_loudest_of_each_span() {
+        assert_eq!(
+            pooled(&[0.1, 0.9, 0.2, 0.3, 0.8, 0.1], 3),
+            vec![0.9, 0.3, 0.8]
+        );
+        assert_eq!(pooled(&[0.2, 0.6], 4), vec![0.2, 0.2, 0.6, 0.6]);
+        assert!(pooled(&[], 4).is_empty());
+    }
+
+    #[test]
+    fn a_bar_is_played_previewed_or_ahead() {
+        assert_eq!(part(0.2, 0.5, None), Part::Played);
+        assert_eq!(part(0.6, 0.5, None), Part::Ahead);
+        assert_eq!(part(0.6, 0.5, Some(0.7)), Part::Previewed);
+        assert_eq!(part(0.8, 0.5, Some(0.7)), Part::Ahead);
+        // pointing behind the playhead previews nothing
+        assert_eq!(part(0.3, 0.5, Some(0.2)), Part::Played);
+    }
 
     const PAD: gpui::Pixels = px(8.);
     const ORIGIN: f32 = 20.;

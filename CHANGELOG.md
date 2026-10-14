@@ -11,6 +11,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The home page now opens on a featured new release, a Jump back in row, new releases from the
   artists you follow and mixes based on what you played.
+- The seek bar now shows a song's waveform, SoundCloud style, so you can see the quiet and loud
+  parts and where you are in them. It works for SoundCloud, local files, YouTube, Deezer and
+  Subsonic, and can be turned off under Appearance.
 - Spotify songs with a Canvas now play its looping video in fullscreen and above the queue.
 - Start a jam and send whatever Sonora is playing to the other devices on your network, whichever
   provider it came from.
