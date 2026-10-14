@@ -600,6 +600,12 @@ impl Playback {
         Some(spectrum)
     }
 
+    /// The waveform the engine of `id` measured from its audio, once it has. `id` is tagged.
+    pub fn measured(&self, id: &str) -> Option<music::Waveform> {
+        let (engine, id) = self.engine_and_id(id)?;
+        engine.analysis()?.get(id)
+    }
+
     /// Pauses every engine the new track does not belong to, so two never sound at once.
     fn silence_others(&self, id: &str) {
         let keep = music::tag::slug_of(id);

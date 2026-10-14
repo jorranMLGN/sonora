@@ -370,6 +370,9 @@ struct Appearance {
     ambient_motion: bool,
     /// Plays a track's Canvas in place of its cover where one exists.
     canvas: bool,
+    /// Draws the playing track's level over its length as bars in the seek bar, where one is
+    /// known.
+    waveform: bool,
     visualizer: bool,
     visualizer_style: String,
     /// Absent in a file written before the visualizer had profiles; then `visualizer` and
@@ -845,6 +848,7 @@ impl Default for Appearance {
             ambient: true,
             ambient_motion: true,
             canvas: true,
+            waveform: true,
             visualizer: true,
             visualizer_style: ui::VisualizerStyle::default().id().to_owned(),
             spectrum: None,
@@ -1266,6 +1270,11 @@ impl AppSettings {
 
     pub fn canvas(&self) -> bool {
         self.values.appearance.canvas
+    }
+
+    /// Whether the seek bar draws the track's waveform when one is known.
+    pub fn waveform(&self) -> bool {
+        self.values.appearance.waveform
     }
 
     /// Whether the ambient background drifts. Off leaves it a still gradient, which is what
@@ -1930,6 +1939,11 @@ impl AppSettings {
 
     pub fn set_canvas(&mut self, canvas: bool, cx: &mut Context<Self>) {
         self.values.appearance.canvas = canvas;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_waveform(&mut self, waveform: bool, cx: &mut Context<Self>) {
+        self.values.appearance.waveform = waveform;
         self.schedule_save(cx);
     }
 

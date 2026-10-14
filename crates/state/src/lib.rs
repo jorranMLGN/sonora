@@ -35,6 +35,7 @@ mod toast;
 mod updates;
 mod usage;
 mod wake;
+mod waveform;
 mod window_shape;
 
 pub use artist::{ArtistDetail, ArtistDetailEvent};
@@ -74,6 +75,7 @@ pub use toast::{Outcome, Target, Toast, Toasts};
 pub use updates::{Release, UpdateState, Updates};
 pub use usage::Usage;
 pub use wake::Wake;
+pub use waveform::Waveforms;
 pub use window_shape::{apply_window_rounding, install_rounded_window_hook};
 
 use std::future::Future;
@@ -194,6 +196,7 @@ pub struct Sonora {
     pub updates: Entity<Updates>,
     pub usage: Entity<Usage>,
     pub wake: Entity<Wake>,
+    pub waveforms: Entity<Waveforms>,
 }
 
 impl Global for Sonora {}
@@ -277,6 +280,15 @@ pub fn init(
             cx,
         )
     });
+    let waveforms = cx.new(|cx| {
+        Waveforms::new(
+            session.clone(),
+            playback.clone(),
+            settings.clone(),
+            io.clone(),
+            cx,
+        )
+    });
     let updates = cx.new(|cx| Updates::new(settings.clone(), io.clone(), cx));
     let parts = jam::Parts {
         playback: playback.clone(),
@@ -323,5 +335,6 @@ pub fn init(
         updates,
         usage,
         wake,
+        waveforms,
     });
 }
