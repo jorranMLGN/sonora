@@ -68,6 +68,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- SoundCloud tracks without artwork show the uploader's picture, and SoundCloud playlists without
+  one show their first track's cover, instead of an empty square.
 - The tray icon on GNOME shows the Sonora logo instead of three dots.
 - Listening to a jam on an iPhone no longer depends on the ringer switch being off silent.
 - A device listening to a jam no longer falls silent after the host switches to another provider.

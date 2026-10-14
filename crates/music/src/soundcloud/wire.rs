@@ -146,6 +146,7 @@ pub fn artwork(url: Option<&str>, size: &str) -> Option<String> {
 
 pub fn track(raw: Track) -> Model {
     let artist = raw.user.username.clone();
+    let cover = track_cover(&raw);
     Model {
         id: Some(raw.id.to_string()),
         name: raw.title,
@@ -160,7 +161,7 @@ pub fn track(raw: Track) -> Model {
         }],
         album: String::new(),
         album_id: None,
-        cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        cover,
         duration: Duration::from_millis(raw.duration),
         added_at: None,
         added_by: None,
@@ -274,6 +275,7 @@ pub fn is_album(raw: &Playlist) -> bool {
 }
 
 pub fn playlist(raw: Playlist) -> PlaylistModel {
+    let cover = set_cover(&raw);
     PlaylistModel {
         id: raw.id.to_string(),
         name: raw.title,
@@ -283,7 +285,7 @@ pub fn playlist(raw: Playlist) -> PlaylistModel {
         collaborative: false,
         blend: false,
         public: raw.sharing == "public",
-        cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        cover,
         track_count: raw.track_count,
         modified_at: None,
     }
@@ -302,6 +304,7 @@ pub fn album(raw: Playlist) -> AlbumModel {
     );
     let artist = raw.user.username.clone();
     let release_type = release_type(&raw.set_type).unwrap_or(ReleaseType::Album);
+    let cover = set_cover(&raw);
     AlbumModel {
         id: raw.id.to_string(),
         name: raw.title,
@@ -310,8 +313,8 @@ pub fn album(raw: Playlist) -> AlbumModel {
             name: artist,
             id: Some(raw.user.id.to_string()),
         }],
-        cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
-        cover_large: artwork(raw.artwork_url.as_deref(), "t500x500"),
+        cover_large: cover.clone(),
+        cover,
         release_type,
         year: 0,
         track_count: raw.track_count,
@@ -320,6 +323,39 @@ pub fn album(raw: Playlist) -> AlbumModel {
         copyrights: Vec::new(),
         added_at: None,
     }
+}
+
+/// A track's artwork, or its uploader's avatar when it has none, as SoundCloud's own player
+/// shows it.
+fn track_cover(raw: &Track) -> Option<String> {
+    artwork(track_url(raw), "t500x500")
+}
+
+/// A set's artwork, or else the first inlined track's artwork or uploader's avatar, and last
+/// the set owner's avatar.
+fn set_cover(raw: &Playlist) -> Option<String> {
+    let first = raw.tracks.iter().find_map(|entry| match entry {
+        Entry::Full(track) => Some(track.as_ref()),
+        Entry::Stub(_) => None,
+    });
+    let url = raw
+        .artwork_url
+        .as_deref()
+        .or_else(|| first.and_then(track_url))
+        .or(avatar(&raw.user));
+    artwork(url, "t500x500")
+}
+
+/// The url `track_cover` sizes: the track's artwork, else its uploader's avatar.
+fn track_url(raw: &Track) -> Option<&str> {
+    raw.artwork_url.as_deref().or(avatar(&raw.user))
+}
+
+/// A user's avatar, unless it is SoundCloud's grey stand-in for one never uploaded.
+fn avatar(user: &User) -> Option<&str> {
+    user.avatar_url
+        .as_deref()
+        .filter(|url| !url.contains("default_avatar"))
 }
 
 fn drm_only(media: &Media) -> bool {
