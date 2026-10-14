@@ -10,7 +10,7 @@ use gpui::{
 use gpui::{Window, div, px};
 use i18n::t;
 use input::{ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleMiniPlayer, ToggleQueue};
-use state::{AppSettings, Playback, Queue, SideTab, Sonora};
+use state::{AppSettings, Playback, Queue, SideTab, Sonora, WaveformPlace};
 use ui::{
     Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Popup, Room, Scrollbar, Scrubber,
     ScrubberState, clock, tabular,
@@ -18,7 +18,9 @@ use ui::{
 
 use crate::chrome::SidebarRight;
 use crate::shared::menus::ItemMenu;
-use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon, waveform};
+use crate::shared::transport::{
+    NOTCH, drawn, like, moved, percent, transport, volume_icon, waveform,
+};
 
 const SEEK_MAX: f32 = 560.;
 const VOLUME_WIDTH: f32 = 110.;
@@ -387,7 +389,7 @@ impl Render for PlayerBar {
             false => None,
         };
 
-        let wave = waveform(cx);
+        let wave = waveform(WaveformPlace::Bar, cx);
         let playback = self.playback.read(cx);
         let seekable = playback.track().is_some();
         let progress = self.pending.unwrap_or_else(|| playback.progress());
@@ -430,7 +432,7 @@ impl Render for PlayerBar {
                     Scrubber::new(&self.seek, progress)
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .enabled(seekable)
-                        .when_some(wave, Scrubber::waveform)
+                        .when_some(wave, drawn)
                         .when_some(seek_bubble, |this, (at, text)| this.bubble(at, text))
                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
                             this.pending = Some(*fraction);

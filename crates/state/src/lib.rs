@@ -69,7 +69,7 @@ pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, MiniCorner, Reloaded,
     RomanizationScripts, SYSTEM_FONT, SideTab, SpectrumPlace, SpectrumProfile, SpectrumSettings,
-    remember_window, window_placement,
+    WaveformPlace, remember_window, window_placement,
 };
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};

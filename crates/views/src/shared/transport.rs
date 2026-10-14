@@ -3,8 +3,8 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{App, Entity, SharedString, div};
 use i18n::t;
-use state::{Playback, Queue, Repeat, Sonora};
-use ui::{ActiveTheme as _, Button};
+use state::{Playback, Queue, Repeat, Sonora, WaveformPlace};
+use ui::{ActiveTheme as _, Button, Scrubber, WaveDensity, WaveStyle};
 
 use crate::shared::ambient;
 
@@ -24,14 +24,40 @@ pub(crate) fn percent(fraction: f32) -> SharedString {
     t!("player-percent", value = (fraction * 100.).round())
 }
 
-/// The playing track's waveform for a seek bar to draw, while the setting is on and one is
-/// known. A view that draws it observes `Sonora::global(cx).waveforms`.
-pub(crate) fn waveform(cx: &App) -> Option<Arc<[f32]>> {
-    Sonora::global(cx)
+/// A waveform for a seek bar to draw, and how the settings say to draw it.
+pub(crate) struct Wave {
+    levels: Arc<[f32]>,
+    style: WaveStyle,
+    density: WaveDensity,
+}
+
+/// The playing track's waveform for the seek bar in `place`, while the settings draw one there
+/// and one is known. A view that draws it observes `Sonora::global(cx).waveforms` and the
+/// settings.
+pub(crate) fn waveform(place: WaveformPlace, cx: &App) -> Option<Wave> {
+    let sonora = Sonora::global(cx);
+    let settings = sonora.settings.read(cx);
+    if !settings.waveform_in(place) {
+        return None;
+    }
+    let levels = sonora
         .waveforms
         .read(cx)
         .current(cx)
-        .map(music::Waveform::shared)
+        .map(music::Waveform::shared)?;
+    Some(Wave {
+        levels,
+        style: settings.waveform_style(),
+        density: settings.waveform_density(),
+    })
+}
+
+/// Draws `wave` in place of the scrubber's line, for `Scrubber::when_some`.
+pub(crate) fn drawn(scrubber: Scrubber, wave: Wave) -> Scrubber {
+    scrubber
+        .waveform(wave.levels)
+        .wave_style(wave.style)
+        .density(wave.density)
 }
 
 pub(crate) fn like(track: Option<music::Track>, cx: &App) -> Button {

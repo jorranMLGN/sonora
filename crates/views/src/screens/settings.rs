@@ -25,13 +25,14 @@ use state::{
     AppSettings, CdmState, Codec, CodecState, DiscordName, Drm, Failure,
     FullscreenControlsAutohide, Io, Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling,
     Session, SessionState, Sleep, Sonora, SpectrumPlace, SpectrumProfile, SpectrumSettings,
+    WaveformPlace,
 };
 use ui::{ActiveTheme as _, Deck, LEADING, Scrollbar, Scroller, eyebrow, snapped};
 use ui::{
     Avatar, Button, Dismiss, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE,
     MAX_TRANSPARENCY, MIN_FONT, MIN_LYRICS_SCALE, MenuItem, Modal, Pace, Picker, Popovers, Radio,
     Rounding, Saver, Scrubber, ScrubberState, Separator, Skeleton, Stillness, Switch, TabBar, Text,
-    Theme, ThemeKind, Vacancy, VisualizerColor, VisualizerStyle,
+    Theme, ThemeKind, Vacancy, VisualizerColor, VisualizerStyle, WaveDensity, WaveStyle,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -170,6 +171,10 @@ enum Slot {
     Canvas,
     CanvasCodec,
     Waveform,
+    WaveformStyle,
+    WaveformDensity,
+    WaveformIn(WaveformPlace),
+    WaveformMeasure,
     Equalizer,
     EqualizerPreset,
     EqualizerBands,
@@ -617,10 +622,11 @@ impl SettingsView {
             .chain([
                 Slot::Blur,
                 Slot::Corners,
+                Slot::Title("settings-group-waveform"),
                 Slot::Waveform,
-                Slot::Title("settings-group-fullscreen"),
-                Slot::Ambient,
             ])
+            .chain(self.waveform_slots(cx))
+            .chain([Slot::Title("settings-group-fullscreen"), Slot::Ambient])
             .chain(
                 self.settings
                     .read(cx)
@@ -741,6 +747,22 @@ impl SettingsView {
             Slot::Ambient => (t!("settings-ambient"), t!("settings-ambient-detail")),
             Slot::Canvas => (t!("settings-canvas"), t!("settings-canvas-detail")),
             Slot::Waveform => (t!("settings-waveform"), t!("settings-waveform-detail")),
+            Slot::WaveformStyle => (
+                t!("settings-waveform-style"),
+                t!("settings-waveform-style-detail"),
+            ),
+            Slot::WaveformDensity => (
+                t!("settings-waveform-density"),
+                t!("settings-waveform-density-detail"),
+            ),
+            Slot::WaveformIn(place) => {
+                let (title, detail) = waveform_place_keys(place);
+                (i18n::lookup(title, None), i18n::lookup(detail, None))
+            }
+            Slot::WaveformMeasure => (
+                t!("settings-waveform-measure"),
+                t!("settings-waveform-measure-detail"),
+            ),
             Slot::CanvasCodec => (
                 t!("settings-canvas-codec"),
                 t!("settings-canvas-codec-missing"),
@@ -1014,6 +1036,10 @@ impl SettingsView {
             Slot::Ambient => self.ambient_row(cx).element,
             Slot::Canvas => self.canvas_row(cx).element,
             Slot::Waveform => self.waveform_row(cx).element,
+            Slot::WaveformStyle => self.waveform_style_row(cx).element,
+            Slot::WaveformDensity => self.waveform_density_row(cx).element,
+            Slot::WaveformIn(place) => self.waveform_place_row(place, cx).element,
+            Slot::WaveformMeasure => self.waveform_measure_row(cx).element,
             Slot::CanvasCodec => self.codec_row(cx).element,
             Slot::AmbientMotion => self.ambient_motion_row(cx).element,
             Slot::Spectrum(place, knob) => self.spectrum_row(place, knob, cx).element,
@@ -2045,6 +2071,111 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_waveform(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// The rows under the waveform switch, shown only while it is on.
+    fn waveform_slots(&self, cx: &App) -> Vec<Slot> {
+        if !self.settings.read(cx).waveform() {
+            return Vec::new();
+        }
+        [Slot::WaveformStyle, Slot::WaveformDensity]
+            .into_iter()
+            .chain(WaveformPlace::ALL.map(Slot::WaveformIn))
+            .chain([Slot::WaveformMeasure])
+            .collect()
+    }
+
+    fn waveform_style_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let chosen = self.settings.read(cx).waveform_style();
+
+        self.row(
+            t!("settings-waveform-style"),
+            t!("settings-waveform-style-detail"),
+            muted,
+            small,
+            Picker::new("waveform-style", &self.popovers, chosen.label())
+                .width(Picker::NARROW)
+                .items(WaveStyle::ALL.map(|style| {
+                    MenuItem::new(style.id(), style.label())
+                        .selected(style == chosen)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings
+                                .update(cx, |settings, cx| settings.set_waveform_style(style, cx));
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn waveform_density_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let chosen = self.settings.read(cx).waveform_density();
+
+        self.row(
+            t!("settings-waveform-density"),
+            t!("settings-waveform-density-detail"),
+            muted,
+            small,
+            Picker::new("waveform-density", &self.popovers, chosen.label())
+                .width(Picker::NARROW)
+                .items(WaveDensity::ALL.map(|density| {
+                    MenuItem::new(density.id(), density.label())
+                        .selected(density == chosen)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings.update(cx, |settings, cx| {
+                                settings.set_waveform_density(density, cx)
+                            });
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn waveform_place_row(&self, place: WaveformPlace, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).waveform_place(place);
+        let (title, detail) = waveform_place_keys(place);
+
+        self.row(
+            i18n::lookup(title, None),
+            i18n::lookup(detail, None),
+            muted,
+            small,
+            Switch::new(title, on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.update(cx, |settings, cx| {
+                        settings.set_waveform_place(place, !on, cx)
+                    });
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn waveform_measure_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).measure_waveforms();
+
+        self.row(
+            t!("settings-waveform-measure"),
+            t!("settings-waveform-measure-detail"),
+            muted,
+            small,
+            Switch::new("waveform-measure", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_measure_waveforms(!on, cx));
                 }))
                 .into_any_element(),
         )
@@ -5124,6 +5255,18 @@ fn knob_id(knob: Knob) -> &'static str {
 
 /// The popover and element key for one place's control. It has to be static, so the two places
 /// each spell theirs out.
+/// The title and detail keys of the switch that draws the waveform in `place`.
+fn waveform_place_keys(place: WaveformPlace) -> (&'static str, &'static str) {
+    match place {
+        WaveformPlace::Bar => ("settings-waveform-bar", "settings-waveform-bar-detail"),
+        WaveformPlace::Fullscreen => (
+            "settings-waveform-fullscreen",
+            "settings-waveform-fullscreen-detail",
+        ),
+        WaveformPlace::Mini => ("settings-waveform-mini", "settings-waveform-mini-detail"),
+    }
+}
+
 fn picker_key(place: SpectrumPlace, knob: Knob) -> &'static str {
     match (place, knob) {
         (SpectrumPlace::App, Knob::Style) => "spectrum-app-style",

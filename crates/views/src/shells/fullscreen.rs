@@ -12,7 +12,9 @@ use gpui::{Window, canvas, deferred, div, phi, px, relative};
 use i18n::t;
 use input::{ToggleFullscreen, ToggleWindowFullscreen, WORKSPACE_CONTEXT};
 use router::{Destination, navigate};
-use state::{AppSettings, Cover, FullscreenControlsAutohide, Playback, Queue, SideTab, Sonora};
+use state::{
+    AppSettings, Cover, FullscreenControlsAutohide, Playback, Queue, SideTab, Sonora, WaveformPlace,
+};
 use ui::{
     ActiveTheme as _, Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Motion,
     Motioned as _, Popup, Room, Scrollbar, Scrubber, ScrubberState, Springs, TabBar, Text,
@@ -22,7 +24,9 @@ use ui::{
 use crate::chrome::{Aside, TitleBarOptions};
 use crate::shared::canvas::{CanvasArt, canvas_playing};
 use crate::shared::menus::ItemMenu;
-use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon, waveform};
+use crate::shared::transport::{
+    NOTCH, drawn, like, moved, percent, transport, volume_icon, waveform,
+};
 use crate::shared::veil::{Edge, veil};
 use crate::shared::visualizer::VisualizerDrive;
 use crate::shared::{self, ambient};
@@ -675,7 +679,7 @@ impl FullscreenView {
         let muted = theme.muted_foreground;
         let empty = muted.opacity(0.3);
         let text = theme.text(Text::Tiny);
-        let wave = waveform(cx);
+        let wave = waveform(WaveformPlace::Fullscreen, cx);
         let playback = self.playback.read(cx);
         let seekable = playback.track().is_some();
         let progress = self.pending.unwrap_or_else(|| playback.progress());
@@ -717,8 +721,8 @@ impl FullscreenView {
                     Scrubber::new(&self.seek, progress)
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .enabled(seekable)
-                        .when_some(wave, |this, levels| {
-                            this.waveform(levels).h(theme.metrics.control)
+                        .when_some(wave, |this, wave| {
+                            drawn(this, wave).h(theme.metrics.control)
                         })
                         .when_some(bubble, |this, (at, text)| this.bubble(at, text))
                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
