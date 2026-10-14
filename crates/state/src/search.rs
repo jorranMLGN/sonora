@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,6 +59,52 @@ pub enum Axis {
     Artist,
     Duration,
     Year,
+}
+
+impl Axis {
+    /// The axes that mean something for `kind`; `None` is the mixed All tab.
+    pub fn of(kind: Option<Kind>) -> &'static [Axis] {
+        match kind {
+            None => &[Axis::Title, Axis::Artist],
+            Some(Kind::Song) => &[Axis::Title, Axis::Artist, Axis::Duration],
+            Some(Kind::Album) => &[Axis::Title, Axis::Artist, Axis::Year],
+            Some(Kind::Artist | Kind::Playlist) => &[Axis::Title],
+        }
+    }
+}
+
+impl Lens {
+    /// Shows `kind` only, dropping a sort axis that kind has no value for.
+    pub fn with_kind(mut self, kind: Option<Kind>) -> Self {
+        self.kind = kind;
+        self.order = self.order.filter(|(axis, _)| Axis::of(kind).contains(axis));
+        self
+    }
+
+    /// Lets `slug` take part (`on`) or hides it.
+    pub fn with_source(self, slug: &'static str, on: bool) -> Self {
+        let mut lens = self.forget(slug);
+        if !on {
+            lens.hidden.push(slug);
+        }
+        lens
+    }
+
+    /// Steps `axis` through ascending, descending and back to relevance.
+    pub fn cycled(mut self, axis: Axis) -> Self {
+        self.order = match self.order {
+            Some((current, Sort::Ascending)) if current == axis => Some((axis, Sort::Descending)),
+            Some((current, Sort::Descending)) if current == axis => None,
+            _ => Some((axis, Sort::Ascending)),
+        };
+        self
+    }
+
+    /// Drops `slug` from the hidden sources, for a provider that signed out.
+    pub fn forget(mut self, slug: &str) -> Self {
+        self.hidden.retain(|known| *known != slug);
+        self
+    }
 }
 
 /// Which of a provider's three search calls a lens needs. Artists come from tracks and
@@ -240,6 +287,9 @@ impl Search {
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
             SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
+                if let SessionEvent::SignedOut(slug) = event {
+                    this.lens = std::mem::take(&mut this.lens).forget(slug);
+                }
                 let pending = this.query.clone();
                 this.query.clear();
                 this.catalogs.clear();
@@ -272,12 +322,21 @@ impl Search {
         &self.query
     }
 
-    pub fn lanes(&self, cx: &App) -> Vec<&'static str> {
+    /// Every signed-in streaming provider, whether the lens hides it or not.
+    pub fn sources(&self, cx: &App) -> Vec<&'static str> {
         self.session
             .read(cx)
             .active_slugs()
             .into_iter()
             .filter(|slug| *slug != music::tag::LOCAL)
+            .collect()
+    }
+
+    /// The providers that get a results column: the sources the lens does not hide.
+    pub fn lanes(&self, cx: &App) -> Vec<&'static str> {
+        self.sources(cx)
+            .into_iter()
+            .filter(|slug| !self.lens.hidden.contains(slug))
             .collect()
     }
 
@@ -289,12 +348,40 @@ impl Search {
         self.hits.iter().filter(move |found| found.kind() == kind)
     }
 
+    /// The top hit, shown only on the All tab in relevance order, where "top" means something.
     pub fn best(&self) -> Option<&Found> {
-        self.hits.first()
+        match self.lens.kind.is_none() && self.lens.order.is_none() {
+            true => self.hits.first(),
+            false => None,
+        }
     }
 
     pub fn lens(&self) -> &Lens {
         &self.lens
+    }
+
+    /// Applies a new lens. A narrower lens reranks what is already fetched; a wider one drops
+    /// any fetch in flight and asks again.
+    pub fn set_lens(&mut self, lens: Lens, cx: &mut Context<Self>) {
+        if self.lens == lens {
+            return;
+        }
+        self.lens = lens;
+        let query = self.query.clone();
+        let wanted = self.wanted(&query, cx);
+        match self
+            .served
+            .as_ref()
+            .is_some_and(|served| served.covers(&wanted))
+        {
+            true => self.rank(cx),
+            false => {
+                self.task = None;
+                self.loading = false;
+                self.query.clear();
+                self.ask(&query, cx);
+            }
+        }
     }
 
     /// What answering `query` under the current lens asks for.
@@ -441,6 +528,7 @@ impl Search {
         session
             .active_slugs()
             .into_iter()
+            .filter(|slug| !self.lens.hidden.contains(slug))
             .filter_map(|slug| {
                 let client = session.client_for_slug(slug)?;
                 Some((
@@ -520,7 +608,7 @@ impl Search {
             return;
         }
 
-        self.hits = {
+        let found: Vec<Found> = {
             let held = self.library.read(cx);
             let state = held.state(Shelf::Streaming);
             let (tracks, albums, playlists) = (state.tracks(), state.albums(), state.playlists());
@@ -582,6 +670,7 @@ impl Search {
                 })
                 .collect()
         };
+        self.hits = narrowed(found, &self.lens);
         self.fetch_portraits(cx);
         cx.notify();
     }
@@ -960,6 +1049,63 @@ fn named(value: &str, query: &Query) -> Option<u32> {
     fit(&[(NAME, value)], query)
 }
 
+/// The ranked hits the lens lets through, in the lens's order. Hidden providers are already
+/// gone, since `lanes` leaves them out before ranking.
+fn narrowed(mut hits: Vec<Found>, lens: &Lens) -> Vec<Found> {
+    hits.retain(|found| {
+        lens.kind.is_none_or(|kind| found.kind() == kind) && (!lens.mine_only || found.mine)
+    });
+    sorted(&mut hits, lens.order);
+    hits
+}
+
+/// Orders `hits` by one axis. The sort is stable and hits without that value keep their
+/// relevance order behind the ones that have it.
+fn sorted(hits: &mut [Found], order: Option<(Axis, Sort)>) {
+    let Some((axis, sort)) = order else {
+        return;
+    };
+    hits.sort_by(
+        |left, right| match (measure(&left.hit, axis), measure(&right.hit, axis)) {
+            (Some(left), Some(right)) => match sort {
+                Sort::Ascending => left.cmp(&right),
+                Sort::Descending => right.cmp(&left),
+            },
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        },
+    );
+}
+
+/// A hit's value on one axis, comparable with another of the same axis.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Measure {
+    Text(String),
+    Number(u64),
+}
+
+/// `hit`'s value on `axis`, or `None` when that kind of hit has none.
+fn measure(hit: &Hit, axis: Axis) -> Option<Measure> {
+    let text = |value: &str| (!value.is_empty()).then(|| Measure::Text(value.to_lowercase()));
+    match (axis, hit) {
+        (Axis::Title, Hit::Song(track)) => text(&track.name),
+        (Axis::Title, Hit::Artist(artist)) => text(&artist.name),
+        (Axis::Title, Hit::Album(album)) => text(&album.name),
+        (Axis::Title, Hit::Playlist(list)) => text(&list.name),
+        (Axis::Artist, Hit::Song(track)) => text(&track.artists),
+        (Axis::Artist, Hit::Album(album)) => text(&album.artists),
+        (Axis::Artist, Hit::Artist(artist)) => text(&artist.name),
+        (Axis::Artist, Hit::Playlist(list)) => text(&list.owner),
+        (Axis::Duration, Hit::Song(track)) => (!track.duration.is_zero())
+            .then_some(Measure::Number(track.duration.as_millis() as u64)),
+        (Axis::Year, Hit::Album(album)) => {
+            (album.year > 0).then_some(Measure::Number(album.year as u64))
+        }
+        (Axis::Duration | Axis::Year, _) => None,
+    }
+}
+
 /// The rows a search part answered with, or none for a part the lens did not ask for.
 async fn awaited<T>(handle: Option<tokio::task::JoinHandle<Result<Vec<T>>>>) -> Result<Vec<T>> {
     match handle {
@@ -1278,5 +1424,112 @@ mod tests {
         };
         assert_eq!(mine("Bohemian Rhapsody"), Some(true));
         assert_eq!(mine("Bohemian Like You"), Some(false));
+    }
+
+    fn found(hit: Hit, mine: bool) -> Found {
+        Found {
+            slug: "spotify",
+            hit,
+            mine,
+        }
+    }
+
+    fn timed(name: &str, seconds: u64) -> Hit {
+        Hit::Song(Track {
+            duration: Duration::from_secs(seconds),
+            ..track(name, "Band", "Record")
+        })
+    }
+
+    fn record(name: &str) -> Hit {
+        Hit::Album(AlbumHit {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            artists: "Band".to_owned(),
+            artist_refs: Vec::new(),
+            cover: None,
+            year: 2001,
+        })
+    }
+
+    fn names(hits: &[Found]) -> Vec<&str> {
+        hits.iter()
+            .map(|found| match &found.hit {
+                Hit::Song(track) => track.name.as_str(),
+                Hit::Album(album) => album.name.as_str(),
+                Hit::Artist(artist) => artist.name.as_str(),
+                Hit::Playlist(list) => list.name.as_str(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn one_kind_keeps_only_that_kind() {
+        let lens = Lens::default().with_kind(Some(Kind::Album));
+        let hits = narrowed(
+            vec![
+                found(timed("Song", 60), false),
+                found(record("Record"), false),
+            ],
+            &lens,
+        );
+        assert_eq!(names(&hits), ["Record"]);
+    }
+
+    #[test]
+    fn mine_only_drops_catalog_hits() {
+        let lens = Lens {
+            mine_only: true,
+            ..Lens::default()
+        };
+        let hits = narrowed(
+            vec![
+                found(timed("Saved", 60), true),
+                found(timed("Found", 60), false),
+            ],
+            &lens,
+        );
+        assert_eq!(names(&hits), ["Saved"]);
+    }
+
+    #[test]
+    fn duration_sorts_both_ways_and_valueless_hits_trail() {
+        let hits = || {
+            vec![
+                found(timed("Long", 300), false),
+                found(record("Record"), false),
+                found(timed("Short", 60), false),
+            ]
+        };
+        let up = Lens::default().cycled(Axis::Duration);
+        assert_eq!(names(&narrowed(hits(), &up)), ["Short", "Long", "Record"]);
+        let down = up.cycled(Axis::Duration);
+        assert_eq!(names(&narrowed(hits(), &down)), ["Long", "Short", "Record"]);
+    }
+
+    #[test]
+    fn cycling_an_axis_returns_to_relevance() {
+        let lens = Lens::default()
+            .cycled(Axis::Title)
+            .cycled(Axis::Title)
+            .cycled(Axis::Title);
+        assert_eq!(lens.order, None);
+    }
+
+    #[test]
+    fn changing_kind_drops_an_axis_it_lacks() {
+        let lens = Lens::default()
+            .with_kind(Some(Kind::Song))
+            .cycled(Axis::Duration)
+            .with_kind(None);
+        assert_eq!(lens.order, None);
+    }
+
+    #[test]
+    fn signing_out_forgets_a_hidden_source() {
+        let lens = Lens::default()
+            .with_source("youtube", false)
+            .forget("youtube");
+        assert!(lens.hidden.is_empty());
     }
 }
