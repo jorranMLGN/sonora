@@ -59,7 +59,7 @@ impl Cover {
     }
 
     /// Returns the large artwork only when it belongs to `album`.
-    pub(crate) fn large_for(&self, album: &str) -> Option<&str> {
+    pub fn large_for(&self, album: &str) -> Option<&str> {
         self.large
             .as_deref()
             .filter(|_| self.album.as_deref() == Some(album))

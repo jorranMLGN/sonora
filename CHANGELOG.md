@@ -12,6 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The home page now opens on a featured new release, a Jump back in row, new releases from the
   artists you follow and mixes based on what you played.
 - Spotify songs with a Canvas now play its looping video in fullscreen and above the queue.
+- The sidebar now shows the cover above the queue for songs without a Canvas, like SoundCloud and
+  YouTube tracks.
 - Start a jam and send whatever Sonora is playing to the other devices on your network, whichever
   provider it came from.
 - Listen from any phone, tablet or laptop by opening a page Sonora serves on your network: no
