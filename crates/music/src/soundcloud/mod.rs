@@ -24,7 +24,7 @@ use crate::{
 use auth::ClientId;
 pub use client::SoundCloudClient;
 use http::Http;
-#[cfg(test)]
+#[cfg(all(test, feature = "spotify", feature = "youtube"))]
 pub(crate) use playback::resolve_playable_url;
 
 pub(crate) const GUEST_ID: &str = "soundcloud-guest";
@@ -44,10 +44,17 @@ pub struct SoundCloudProvider {
 
 impl SoundCloudProvider {
     pub fn new() -> Self {
-        let cache = dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("sonora")
-            .join("soundcloud");
+        Self::at(
+            dirs::cache_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("sonora")
+                .join("soundcloud"),
+        )
+    }
+
+    /// A provider that keeps its client id and token in `cache`, for a platform whose cache
+    /// directory is handed in rather than found, such as an iOS app's sandbox.
+    pub fn at(cache: PathBuf) -> Self {
         Self {
             client_id: cache.join("client_id.txt"),
             token: cache.join("token.txt"),

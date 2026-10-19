@@ -17,6 +17,7 @@ LINUX_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
 WINDOWS_SIZES = [16, 24, 32, 48, 64, 128, 256]
 TRAY_SIZES = [32, 64]
 TRAY_STROKE = 3.2
+IOS_SIZE = 1024
 
 ICNS_TYPES = [
     ("icp4", 16),
@@ -200,6 +201,18 @@ def rounded_svg(master, pixels):
     )
 
 
+def square_svg(master, pixels):
+    """Draws the master edge to edge and opaque, since iOS applies its own mask."""
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{master.span:g}"'
+        f' height="{master.span:g}" viewBox="0 0 {master.span:g} {master.span:g}">\n'
+        f'  <rect width="{master.span:g}" height="{master.span:g}"'
+        f' fill="{master.background}"/>\n'
+        f"{master.glyph(stroke_for(pixels, master))}\n"
+        f"</svg>\n"
+    )
+
+
 def rasterize(svg_text, pixels, workdir, name):
     source = workdir / f"{name}.svg"
     target = workdir / f"{name}.png"
@@ -310,9 +323,25 @@ def main():
             rasterize(round_svg(master, 32), 32, workdir, "tray")
         )
 
+        ios = ROOT / "apps" / "ios" / "assets"
+        ios.mkdir(parents=True, exist_ok=True)
+        target = ios / "icon.png"
+        target.write_bytes(
+            rasterize(square_svg(master, IOS_SIZE), IOS_SIZE, workdir, "ios")
+        )
+        # iOS rejects an icon with an alpha channel, so flatten it when ImageMagick is around.
+        for tool in ("magick", "convert"):
+            if shutil.which(tool):
+                subprocess.run(
+                    [tool, str(target), "-background", master.background,
+                     "-alpha", "remove", "-alpha", "off", str(target)],
+                    check=True,
+                )
+                break
+
     print(
         f"icons: {len(LINUX_SIZES)} linux png, 1 linux svg, 1 icns, 1 ico,"
-        f" {len(TRAY_SIZES) + 1} tray png, 1 readme svg"
+        f" {len(TRAY_SIZES) + 1} tray png, 1 readme svg, 1 ios png"
     )
 
 

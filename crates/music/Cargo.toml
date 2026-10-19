@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+# Every provider and codec the desktop app ships. A build for a platform that cannot carry one of
+# them (the iOS spike in `crates/mobile`) turns the defaults off and names what it wants.
+default = ["spotify", "youtube", "video", "opus"]
+spotify = ["dep:librespot-core", "dep:librespot-playback", "dep:librespot-protocol"]
+youtube = ["dep:ytmusic"]
+video = ["dep:video"]
+# Opus through libopus, a C library.
+opus = ["rodio/symphonia-libopus"]
 bundled-sqlite = ["rusqlite/bundled", "storage/bundled-sqlite"]
 # The host for the Widevine CDM, which Apple Music playback needs. Off by default: it compiles a
 # C++ shim, so it wants a C++ compiler, and nothing else in the crate wants it.
@@ -25,9 +33,7 @@ deunicode.workspace = true
 dirs.workspace = true
 http.workspace = true
 jiff.workspace = true
-librespot-core.workspace = true
-librespot-playback.workspace = true
-librespot-protocol.workspace = true
+librespot-protocol = { workspace = true, optional = true }
 lofty.workspace = true
 kakasi.workspace = true
 log.workspace = true
@@ -39,7 +45,7 @@ percent-encoding.workspace = true
 protobuf.workspace = true
 reqwest.workspace = true
 roxmltree.workspace = true
-rodio = { workspace = true, features = ["symphonia-aac", "symphonia-aiff", "symphonia-alac", "symphonia-isomp4", "symphonia-libopus", "symphonia-mkv", "flac", "mp3", "vorbis", "wav"] }
+rodio = { workspace = true, features = ["symphonia-aac", "symphonia-aiff", "symphonia-alac", "symphonia-isomp4", "symphonia-mkv", "flac", "mp3", "vorbis", "wav"] }
 rtrb.workspace = true
 rusqlite.workspace = true
 rustfft.workspace = true
@@ -51,9 +57,31 @@ symphonia.workspace = true
 tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true
-video.workspace = true
+video = { workspace = true, optional = true }
 widevine.workspace = true
-ytmusic.workspace = true
+ytmusic = { workspace = true, optional = true }
+
+# librespot trusts either the system's roots or the bundled webpki ones, never both. iOS gives
+# rustls-native-certs nothing to read, so the phone carries Mozilla's roots instead.
+[target.'cfg(target_os = "ios")'.dependencies]
+librespot-core = { workspace = true, optional = true, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { workspace = true, optional = true, features = ["rustls-tls-webpki-roots"] }
+
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+librespot-core = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
+librespot-playback = { workspace = true, optional = true, features = ["rustls-tls-native-roots"] }
+
+[[example]]
+name = "library-probe"
+required-features = ["spotify"]
+
+[[example]]
+name = "lyrics_bench"
+required-features = ["spotify"]
+
+[[example]]
+name = "lyrics-prober"
+required-features = ["spotify", "youtube"]
 
 [dev-dependencies]
 env_logger.workspace = true

@@ -100,6 +100,7 @@ mpris-server = "0.10"
 notify = "8.2"
 oauth2 = "5.0"
 open = "5.4"
+oslog = { version = "0.2", default-features = false, features = ["logger"] }
 block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
@@ -150,6 +151,7 @@ reqwest = { version = "0.13", default-features = false, features = [
 raw-window-handle = "0.6"
 resvg = { version = "0.46", default-features = false }
 roxmltree = "0.21"
+rquickjs = "0.12"
 rodio = { version = "0.22", default-features = false, features = ["playback"] }
 rtrb = "0.3"
 rusqlite = { version = "0.32" }
@@ -166,18 +168,17 @@ tempfile = "3.27"
 tray-icon = { version = "0.24", default-features = false }
 unic-langid = { version = "0.9", features = ["macros"] }
 unicode-segmentation = "1.12"
+uniffi = "0.32"
 x11rb = "0.13"
 ytmusic = { git = "https://github.com/sonorahq/ytmusic-rs", rev = "8b044c4" }
 
-librespot-core = { version = "0.8.0", default-features = false, features = [
-  "rustls-tls-native-roots",
-] }
+# The root store is picked per target in `crates/music`: iOS cannot list native roots.
+librespot-core = { version = "0.8.0", default-features = false }
 librespot-oauth = { version = "0.8.0", default-features = false, features = [
   "rustls-tls-native-roots",
 ] }
 librespot-playback = { version = "0.8.0", default-features = false, features = [
   "rodio-backend",
-  "rustls-tls-native-roots",
 ] }
 librespot-protocol = "0.8.0"
 percent-encoding = "2.3"
@@ -194,12 +195,12 @@ tokio = { version = "1.53", features = [
 time = { version = "0.3.55", features = ["parsing"] }
 
 [patch.crates-io]
-librespot-audio = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
-librespot-core = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
-librespot-metadata = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
-librespot-oauth = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
-librespot-playback = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
-librespot-protocol = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
+librespot-audio = { git = "https://github.com/jorranMLGN/librespot", rev = "5b561611faf65eb6fe3e05091c88dc43ac50a63d" }
+librespot-core = { git = "https://github.com/jorranMLGN/librespot", rev = "5b561611faf65eb6fe3e05091c88dc43ac50a63d" }
+librespot-metadata = { git = "https://github.com/jorranMLGN/librespot", rev = "5b561611faf65eb6fe3e05091c88dc43ac50a63d" }
+librespot-oauth = { git = "https://github.com/jorranMLGN/librespot", rev = "5b561611faf65eb6fe3e05091c88dc43ac50a63d" }
+librespot-playback = { git = "https://github.com/jorranMLGN/librespot", rev = "5b561611faf65eb6fe3e05091c88dc43ac50a63d" }
+librespot-protocol = { git = "https://github.com/jorranMLGN/librespot", rev = "5b561611faf65eb6fe3e05091c88dc43ac50a63d" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "4aa22e85e5ad5565c45dfdda95051158eb6b56c3" }
 
 [profile.release]

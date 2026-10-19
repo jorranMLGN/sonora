@@ -1,3 +1,4 @@
+#[cfg(any(feature = "spotify", feature = "youtube"))]
 pub(crate) mod catalog;
 mod japanese;
 pub mod lrc;

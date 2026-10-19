@@ -290,6 +290,7 @@ impl Paced {
     }
 
     /// Waits until there is room for another packet.
+    #[cfg(feature = "spotify")]
     pub fn drain(&mut self) -> Result<(), Gone> {
         while self.full() {
             if self.output_changed() {
