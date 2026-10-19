@@ -6,7 +6,7 @@
 //! decoder runs over it on a thread of its own and the result lands in the engine's `Analysis`.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// How many values a waveform keeps. A seek bar draws a few hundred bars at most, and this is
@@ -141,6 +141,32 @@ pub(crate) fn measure<S: rodio::Source>(source: S, gone: impl Fn() -> bool) -> O
         meter.push(sample);
     }
     meter.finish()
+}
+
+/// Whether an engine may decode a finished track a second time to measure its waveform. Shared
+/// rather than copied, like `Equalizer`: every engine holds a clone, so switching it off reaches
+/// them all at once, and a track that finishes downloading afterwards is never decoded again.
+#[derive(Clone, Debug)]
+pub struct Measuring(Arc<AtomicBool>);
+
+impl Measuring {
+    pub fn new(on: bool) -> Self {
+        Self(Arc::new(AtomicBool::new(on)))
+    }
+
+    pub fn on(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::Relaxed);
+    }
+}
+
+impl Default for Measuring {
+    fn default() -> Self {
+        Self::new(true)
+    }
 }
 
 /// The waveforms an engine measured, by the provider's own track id (untagged), newest last.

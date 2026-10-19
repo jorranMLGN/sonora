@@ -371,8 +371,19 @@ struct Appearance {
     /// Plays a track's Canvas in place of its cover where one exists.
     canvas: bool,
     /// Draws the playing track's level over its length as bars in the seek bar, where one is
-    /// known.
+    /// known. The master switch: the options below only count while it is on.
     waveform: bool,
+    /// A `ui::WaveStyle` id.
+    waveform_style: String,
+    /// A `ui::WaveDensity` id.
+    waveform_density: String,
+    /// Whether the waveform is drawn in the player bar, fullscreen and the mini player.
+    waveform_bar: bool,
+    waveform_fullscreen: bool,
+    waveform_mini: bool,
+    /// Whether an engine decodes a downloaded track a second time to measure its waveform.
+    /// Off leaves only the waveforms a provider publishes.
+    waveform_measure: bool,
     visualizer: bool,
     visualizer_style: String,
     /// Absent in a file written before the visualizer had profiles; then `visualizer` and
@@ -519,6 +530,18 @@ impl Default for Values {
             jam: Jam::default(),
         }
     }
+}
+
+/// Where a waveform seek bar is drawn, each with a switch of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WaveformPlace {
+    Bar,
+    Fullscreen,
+    Mini,
+}
+
+impl WaveformPlace {
+    pub const ALL: [Self; 3] = [Self::Bar, Self::Fullscreen, Self::Mini];
 }
 
 /// Where a spectrum is drawn. The app itself — the strip above the player bar and fullscreen —
@@ -840,6 +863,46 @@ impl StateStore {
     }
 }
 
+impl Appearance {
+    fn wave_style(&self) -> ui::WaveStyle {
+        ui::WaveStyle::from_id(&self.waveform_style)
+    }
+
+    fn wave_density(&self) -> ui::WaveDensity {
+        ui::WaveDensity::from_id(&self.waveform_density)
+    }
+
+    /// Whether `place` draws the waveform, the master switch included.
+    fn waveform_in(&self, place: WaveformPlace) -> bool {
+        self.waveform && *self.waveform_place(place)
+    }
+
+    fn waveform_place(&self, place: WaveformPlace) -> &bool {
+        match place {
+            WaveformPlace::Bar => &self.waveform_bar,
+            WaveformPlace::Fullscreen => &self.waveform_fullscreen,
+            WaveformPlace::Mini => &self.waveform_mini,
+        }
+    }
+
+    fn waveform_place_mut(&mut self, place: WaveformPlace) -> &mut bool {
+        match place {
+            WaveformPlace::Bar => &mut self.waveform_bar,
+            WaveformPlace::Fullscreen => &mut self.waveform_fullscreen,
+            WaveformPlace::Mini => &mut self.waveform_mini,
+        }
+    }
+
+    /// Whether the engines should measure waveforms: only while measuring is on and some
+    /// place would draw what they measure.
+    fn measures_waveforms(&self) -> bool {
+        self.waveform_measure
+            && WaveformPlace::ALL
+                .into_iter()
+                .any(|place| self.waveform_in(place))
+    }
+}
+
 impl Default for Appearance {
     fn default() -> Self {
         Self {
@@ -849,6 +912,12 @@ impl Default for Appearance {
             ambient_motion: true,
             canvas: true,
             waveform: true,
+            waveform_style: ui::WaveStyle::default().id().to_owned(),
+            waveform_density: ui::WaveDensity::default().id().to_owned(),
+            waveform_bar: true,
+            waveform_fullscreen: true,
+            waveform_mini: false,
+            waveform_measure: true,
             visualizer: true,
             visualizer_style: ui::VisualizerStyle::default().id().to_owned(),
             spectrum: None,
@@ -1275,6 +1344,34 @@ impl AppSettings {
     /// Whether the seek bar draws the track's waveform when one is known.
     pub fn waveform(&self) -> bool {
         self.values.appearance.waveform
+    }
+
+    pub fn waveform_style(&self) -> ui::WaveStyle {
+        self.values.appearance.wave_style()
+    }
+
+    pub fn waveform_density(&self) -> ui::WaveDensity {
+        self.values.appearance.wave_density()
+    }
+
+    /// The switch of `place` alone, as the settings page shows it.
+    pub fn waveform_place(&self, place: WaveformPlace) -> bool {
+        *self.values.appearance.waveform_place(place)
+    }
+
+    /// Whether `place` draws the waveform, the master switch included.
+    pub fn waveform_in(&self, place: WaveformPlace) -> bool {
+        self.values.appearance.waveform_in(place)
+    }
+
+    /// The measuring switch alone, as the settings page shows it.
+    pub fn measure_waveforms(&self) -> bool {
+        self.values.appearance.waveform_measure
+    }
+
+    /// Whether the engines should measure waveforms: measuring is on and some place draws one.
+    pub fn measures_waveforms(&self) -> bool {
+        self.values.appearance.measures_waveforms()
     }
 
     /// Whether the ambient background drifts. Off leaves it a still gradient, which is what
@@ -1944,6 +2041,26 @@ impl AppSettings {
 
     pub fn set_waveform(&mut self, waveform: bool, cx: &mut Context<Self>) {
         self.values.appearance.waveform = waveform;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_waveform_style(&mut self, style: ui::WaveStyle, cx: &mut Context<Self>) {
+        self.values.appearance.waveform_style = style.id().to_owned();
+        self.schedule_save(cx);
+    }
+
+    pub fn set_waveform_density(&mut self, density: ui::WaveDensity, cx: &mut Context<Self>) {
+        self.values.appearance.waveform_density = density.id().to_owned();
+        self.schedule_save(cx);
+    }
+
+    pub fn set_waveform_place(&mut self, place: WaveformPlace, on: bool, cx: &mut Context<Self>) {
+        *self.values.appearance.waveform_place_mut(place) = on;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_measure_waveforms(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.values.appearance.waveform_measure = on;
         self.schedule_save(cx);
     }
 
@@ -2804,6 +2921,64 @@ mod tests {
             }),
             ..Resume::default()
         }
+    }
+
+    #[test]
+    fn an_old_settings_file_takes_the_waveform_defaults() {
+        let values: Values = serde_json::from_str(r#"{"appearance":{"waveform":true}}"#)
+            .expect("a file from before the waveform options loads");
+        let appearance = &values.appearance;
+
+        assert!(appearance.waveform);
+        assert_eq!(appearance.wave_style(), ui::WaveStyle::Mirrored);
+        assert_eq!(appearance.wave_density(), ui::WaveDensity::Normal);
+        assert!(appearance.waveform_in(WaveformPlace::Bar));
+        assert!(appearance.waveform_in(WaveformPlace::Fullscreen));
+        assert!(!appearance.waveform_in(WaveformPlace::Mini));
+        assert!(appearance.waveform_measure);
+    }
+
+    #[test]
+    fn the_waveform_options_survive_a_save() {
+        let mut values = Values::default();
+        values.appearance.waveform_style = ui::WaveStyle::Smooth.id().to_owned();
+        values.appearance.waveform_density = ui::WaveDensity::Coarse.id().to_owned();
+        values.appearance.waveform_bar = false;
+        values.appearance.waveform_fullscreen = false;
+        values.appearance.waveform_mini = true;
+        values.appearance.waveform_measure = false;
+
+        let saved = serde_json::to_string(&values).expect("settings encode");
+        let read: Values = serde_json::from_str(&saved).expect("settings decode");
+        let appearance = &read.appearance;
+
+        assert_eq!(appearance.wave_style(), ui::WaveStyle::Smooth);
+        assert_eq!(appearance.wave_density(), ui::WaveDensity::Coarse);
+        assert!(!appearance.waveform_in(WaveformPlace::Bar));
+        assert!(!appearance.waveform_in(WaveformPlace::Fullscreen));
+        assert!(appearance.waveform_in(WaveformPlace::Mini));
+        assert!(!appearance.waveform_measure);
+    }
+
+    #[test]
+    fn waveforms_are_measured_only_while_one_is_shown_and_measuring_is_on() {
+        let mut appearance = Appearance::default();
+        assert!(appearance.measures_waveforms());
+
+        appearance.waveform_measure = false;
+        assert!(!appearance.measures_waveforms());
+
+        appearance.waveform_measure = true;
+        appearance.waveform = false;
+        assert!(!appearance.measures_waveforms());
+        assert!(!appearance.waveform_in(WaveformPlace::Bar));
+
+        appearance.waveform = true;
+        appearance.waveform_bar = false;
+        appearance.waveform_fullscreen = false;
+        assert!(!appearance.measures_waveforms());
+        appearance.waveform_mini = true;
+        assert!(appearance.measures_waveforms());
     }
 
     #[test]

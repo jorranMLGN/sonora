@@ -1,6 +1,6 @@
 //! The waveform of the playing track, for the seek bar to draw. It comes from the provider when
 //! the provider publishes one (SoundCloud), and otherwise from the engine, which measures a
-//! track from its own audio once the whole of it has arrived.
+//! track from its own audio once the whole of it has arrived, unless measuring is switched off.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -27,6 +27,9 @@ pub struct Waveforms {
     /// Tracks the provider was asked about and had nothing for, or failed on. They are not
     /// asked again; the engine's measurement can still fill them in.
     asked: HashSet<String>,
+    /// The tracks in `known` whose waveform the engine measured rather than the provider
+    /// published. They are hidden while measuring is switched off.
+    measured: HashSet<String>,
     io: Io,
     task: Option<Task<()>>,
 }
@@ -58,6 +61,7 @@ impl Waveforms {
             known: HashMap::new(),
             order: VecDeque::new(),
             asked: HashSet::new(),
+            measured: HashSet::new(),
             io,
             task: None,
         }
@@ -68,7 +72,15 @@ impl Waveforms {
         if !self.settings.read(cx).waveform() {
             return None;
         }
-        self.known.get(self.track.as_deref()?)
+        let track = self.track.as_deref()?;
+        self.usable(track, cx).then(|| self.known.get(track))?
+    }
+
+    /// Whether the waveform held for `id` may be shown: one the engine measured only while
+    /// measuring is on.
+    fn usable(&self, id: &str, cx: &App) -> bool {
+        self.known.contains_key(id)
+            && (!self.measured.contains(id) || self.settings.read(cx).measure_waveforms())
     }
 
     /// Runs on every playback and settings change, so the common case (same track, already
@@ -85,12 +97,14 @@ impl Waveforms {
             cx.notify();
         }
         let Some(id) = track else { return };
-        if !self.settings.read(cx).waveform() || self.known.contains_key(&id) {
+        if !self.settings.read(cx).waveform() || self.usable(&id, cx) {
             return;
         }
-        if let Some(measured) = self.playback.read(cx).measured(&id) {
+        if self.settings.read(cx).measure_waveforms()
+            && let Some(measured) = self.playback.read(cx).measured(&id)
+        {
             self.task = None;
-            self.keep(id, measured);
+            self.keep(id, measured, true);
             cx.notify();
             return;
         }
@@ -116,7 +130,7 @@ impl Waveforms {
                 this.task = None;
                 match answer {
                     Ok(Some(waveform)) => {
-                        this.keep(id, waveform);
+                        this.keep(id, waveform, false);
                         cx.notify();
                     }
                     Ok(None) => {
@@ -132,13 +146,19 @@ impl Waveforms {
         }));
     }
 
-    fn keep(&mut self, id: String, waveform: Waveform) {
+    /// Holds a waveform for `id`, `measured` when the engine made it rather than the provider.
+    fn keep(&mut self, id: String, waveform: Waveform, measured: bool) {
+        match measured {
+            true => self.measured.insert(id.clone()),
+            false => self.measured.remove(&id),
+        };
         if self.known.insert(id.clone(), waveform).is_none() {
             self.order.push_back(id);
         }
         while self.order.len() > KEPT {
             if let Some(oldest) = self.order.pop_front() {
                 self.known.remove(&oldest);
+                self.measured.remove(&oldest);
             }
         }
     }
@@ -148,6 +168,7 @@ impl Waveforms {
         self.known.retain(|id, _| !theirs(id));
         self.order.retain(|id| !theirs(id));
         self.asked.retain(|id| !theirs(id));
+        self.measured.retain(|id| !theirs(id));
         if self.track.as_ref().is_some_and(theirs) {
             self.task = None;
         }

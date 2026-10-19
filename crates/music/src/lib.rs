@@ -56,7 +56,7 @@ pub use models::{
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use spectrum::Spectrum;
-pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Waveform};
+pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Measuring, Waveform};
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
 pub const LOCAL_ALBUM_PREFIX: &str = "local-album:";
@@ -359,8 +359,8 @@ pub trait LyricsProvider: Send + Sync {
     async fn search(&self, query: &LyricsQuery) -> Result<Vec<LyricsHit>>;
 }
 
-/// What an engine is started with. `equalizer` is shared rather than copied: the engine keeps
-/// reading it, so a change reaches the output without a restart.
+/// What an engine is started with. `equalizer` and `measuring` are shared rather than copied:
+/// the engine keeps reading them, so a change takes effect without a restart.
 #[derive(Clone, Debug)]
 pub struct PlaybackConfig {
     pub normalisation: bool,
@@ -368,6 +368,7 @@ pub struct PlaybackConfig {
     pub position_interval: Duration,
     pub gain: f32,
     pub equalizer: Equalizer,
+    pub measuring: Measuring,
 }
 
 /// What an engine reports back. `Playing` and `Seeked` mean audio from `at` is reaching the
