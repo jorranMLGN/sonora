@@ -50,6 +50,7 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
         "soundcloud" => "icons/soundcloud.svg",
         "spotify" => "icons/spotify.svg",
         "youtube" => "icons/youtubemusic.svg",
+        "youtube-video" => "icons/youtube.svg",
         LOCAL => "icons/file-music.svg",
         "subsonic" => "icons/subsonic.svg",
         "deezer" => "icons/deezer.svg",

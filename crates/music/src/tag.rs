@@ -16,7 +16,7 @@
 
 pub const LOCAL: &str = "local";
 
-pub const SLUGS: [&str; 4] = ["spotify", "youtube", "soundcloud", "local"];
+pub const SLUGS: [&str; 5] = ["spotify", "youtube", "youtube-video", "soundcloud", "local"];
 
 const LOCAL_HEADS: [&str; 4] = ["local", "local-album", "local-artist", "local-playlist"];
 
@@ -67,6 +67,12 @@ mod tests {
             split("soundcloud:284873455"),
             Some(("soundcloud", "284873455"))
         );
+    }
+
+    #[test]
+    fn a_youtube_video_tag_splits_to_its_slug() {
+        assert_eq!(split("youtube-video:abc"), Some(("youtube-video", "abc")));
+        assert_eq!(split("youtube:abc"), Some(("youtube", "abc")));
     }
 
     #[test]

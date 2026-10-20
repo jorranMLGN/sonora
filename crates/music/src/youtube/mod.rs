@@ -4,7 +4,7 @@ mod browser;
 mod client;
 mod genres;
 mod lyrics;
-mod playback;
+pub(crate) mod playback;
 mod radio;
 mod segments;
 mod site;
@@ -126,7 +126,7 @@ impl YouTubeProvider {
         )
     }
 
-    fn guest_client(&self) -> Arc<YtMusic> {
+    pub(crate) fn guest_client(&self) -> Arc<YtMusic> {
         Arc::new(
             YtMusic::anonymous()
                 .cache_player(self.player.clone())

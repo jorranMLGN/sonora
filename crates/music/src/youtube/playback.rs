@@ -73,8 +73,17 @@ impl PlaybackFactory for Factory {
     }
 }
 
-struct YouTube {
+/// The engine's fetch for YouTube. `pub(crate)` so a live test can drive `load` and `open`
+/// without a running engine.
+pub(crate) struct YouTube {
     api: Arc<YtMusic>,
+}
+
+impl YouTube {
+    #[cfg(test)]
+    pub(crate) fn new(api: Arc<YtMusic>) -> Self {
+        Self { api }
+    }
 }
 
 impl Source for AudioStream {

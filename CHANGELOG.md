@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Sign in to YouTube, or play as a guest, to search and play videos, DJ sets and live
+  recordings that YouTube Music does not have. Your subscriptions, playlists, Watch Later and
+  liked videos are in your library.
 - The home page now opens on a featured new release, a Jump back in row, new releases from the
   artists you follow and mixes based on what you played.
 - The seek bar now shows a song's waveform, SoundCloud style, so you can see the quiet and loud
