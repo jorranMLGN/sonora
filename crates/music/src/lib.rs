@@ -37,6 +37,8 @@ pub mod video;
 mod waveform;
 #[cfg(feature = "youtube")]
 pub mod youtube;
+#[cfg(feature = "youtube-video")]
+pub mod youtube_video;
 
 use std::collections::HashMap;
 use std::num::NonZero;

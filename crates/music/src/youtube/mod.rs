@@ -22,7 +22,7 @@ use ytmusic::YtMusic;
 
 use self::browser::{Browser, Family, detect};
 use crate::youtube::playback::Factory;
-use crate::youtube::site::{MUSIC, Site};
+use crate::youtube::site::MUSIC;
 
 use crate::{
     Capabilities, InputSource, MusicProvider, PromptSink, ProviderSession, Shape, SignIn,
@@ -30,6 +30,8 @@ use crate::{
 };
 pub use client::YouTubeClient;
 pub use lyrics::YouTubeLyrics;
+pub(crate) use site::Site;
+pub(crate) use wire::profile as user_profile;
 
 const GUEST_ID: &str = "youtube-guest";
 const COOKIE_DOMAIN: &str = "youtube.com";
