@@ -14,6 +14,8 @@ use crate::annexb::Mp4BitstreamConverter;
 const BOX_LIMIT: u64 = 16 << 20;
 /// The most one `mdat` may claim: a 5 s fragment of 4K is a few tens of MB.
 const MDAT_LIMIT: u64 = 256 << 20;
+/// `Stream::at` when a failed read left the reader somewhere unknown.
+const UNKNOWN: u64 = u64::MAX;
 /// `elst` writes an empty edit as a media time of -1, which `mp4` reads back unsigned.
 const EMPTY_EDIT: [u64; 2] = [u32::MAX as u64, u64::MAX];
 
@@ -153,8 +155,17 @@ impl<R: Read + Seek> Stream<R> {
     }
 
     /// Reads fragment `index` whole, its pictures in decode order. Reads exactly that
-    /// fragment's bytes, seeking only when the previous call did not end where it starts.
+    /// fragment's bytes, seeking only when the previous call did not end where it starts. After
+    /// a failure the reader's place is unknown, so the next call always seeks.
     pub fn fragment(&mut self, index: usize) -> Result<Vec<Sample>> {
+        let read = self.read_fragment(index);
+        if read.is_err() {
+            self.at = UNKNOWN;
+        }
+        read
+    }
+
+    fn read_fragment(&mut self, index: usize) -> Result<Vec<Sample>> {
         let segment = self.segments.get(index).context("no such fragment")?;
         let (start, end) = (segment.offset, segment.offset + segment.size);
         if self.at != start {
@@ -376,10 +387,52 @@ fn ticks(ticks: u64, timescale: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
 
     const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/clip-dash.mp4");
+
+    /// A reader that fails once `budget` bytes have been read.
+    struct Flaky {
+        inner: Cursor<Vec<u8>>,
+        budget: Arc<AtomicU64>,
+    }
+
+    impl Read for Flaky {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let budget = self.budget.load(Ordering::Relaxed);
+            if budget == 0 {
+                return Err(std::io::Error::other("the download stalled"));
+            }
+            let length = buf.len().min(budget as usize);
+            let read = self.inner.read(&mut buf[..length])?;
+            self.budget.fetch_sub(read as u64, Ordering::Relaxed);
+            Ok(read)
+        }
+    }
+
+    impl Seek for Flaky {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(to)
+        }
+    }
+
+    #[test]
+    fn a_failed_read_seeks_again_on_retry() {
+        let budget = Arc::new(AtomicU64::new(u64::MAX));
+        let reader = Flaky {
+            inner: Cursor::new(FIXTURE.to_vec()),
+            budget: budget.clone(),
+        };
+        let mut stream = Stream::open(reader).unwrap();
+        // fails halfway through the first box header of the fragment
+        budget.store(4, Ordering::Relaxed);
+        assert!(stream.fragment(0).is_err());
+        budget.store(u64::MAX, Ordering::Relaxed);
+        assert_eq!(stream.fragment(0).unwrap().len(), 25);
+    }
 
     #[test]
     fn the_fixture_indexes_four_fragments() {
