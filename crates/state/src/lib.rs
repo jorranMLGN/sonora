@@ -35,6 +35,7 @@ mod tags;
 mod toast;
 mod updates;
 mod usage;
+mod video;
 mod wake;
 mod waveform;
 mod window_shape;
@@ -69,13 +70,14 @@ pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, MiniCorner, Reloaded,
     RomanizationScripts, SYSTEM_FONT, SideTab, SpectrumPlace, SpectrumProfile, SpectrumSettings,
-    WaveformPlace, remember_window, window_placement,
+    VIDEO_HEIGHTS, WaveformPlace, remember_window, window_placement,
 };
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, Toasts};
 pub use updates::{Release, UpdateState, Updates};
 pub use usage::Usage;
+pub use video::{Place, Video};
 pub use wake::Wake;
 pub use waveform::Waveforms;
 pub use window_shape::{apply_window_rounding, install_rounded_window_hook};
@@ -181,6 +183,7 @@ pub struct Sonora {
     pub drm: Entity<Drm>,
     pub codec: Entity<Codec>,
     pub canvas: Entity<Canvas>,
+    pub video: Entity<Video>,
     pub library: Entity<Library>,
     pub history: Entity<History>,
     pub jam: Entity<Jam>,
@@ -283,6 +286,16 @@ pub fn init(
             cx,
         )
     });
+    let video = cx.new(|cx| {
+        Video::new(
+            session.clone(),
+            playback.clone(),
+            settings.clone(),
+            codec.clone(),
+            io.clone(),
+            cx,
+        )
+    });
     let waveforms = cx.new(|cx| {
         Waveforms::new(
             session.clone(),
@@ -324,6 +337,7 @@ pub fn init(
         drm,
         codec,
         canvas,
+        video,
         library,
         history,
         jam,
