@@ -332,6 +332,12 @@ pub trait MusicApi: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Artists (or channels) matching `query`, for a provider whose search lists them directly.
+    /// Defaults to none, in which case artists are derived from the track and album results.
+    async fn search_artists(&self, _query: &str) -> Result<Vec<SavedArtist>> {
+        Ok(Vec::new())
+    }
+
     async fn home(&self) -> Result<HomeFeed> {
         Ok(HomeFeed::default())
     }

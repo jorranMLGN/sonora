@@ -282,6 +282,14 @@ impl MusicApi for Tagged {
         Ok(values)
     }
 
+    async fn search_artists(&self, query: &str) -> Result<Vec<SavedArtist>> {
+        let mut values = self.inner.search_artists(query).await?;
+        for value in &mut values {
+            models::saved_artist(self.slug, value);
+        }
+        Ok(values)
+    }
+
     async fn home(&self) -> Result<HomeFeed> {
         let mut value = self.inner.home().await?;
         models::home_feed(self.slug, &mut value);
