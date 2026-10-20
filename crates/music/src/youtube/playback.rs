@@ -4,8 +4,8 @@
 //! ranged download, which asks again from the byte a stalled connection stopped at. The file is
 //! DASH fMP4, so the decoder opens it unseekable and a seek splices the header onto the segment
 //! the `sidx` names, the way Apple Music's does. A splice far past what has arrived moves the
-//! download there, so a seek into a long set plays within seconds. The threads, the queue, the preload, the gapless
-//! join and the loudness gain are the engine's.
+//! download there, so a seek into a long set plays within seconds. The threads, the queue, the
+//! preload, the gapless join and the loudness gain are the engine's.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -46,13 +46,21 @@ pub struct Loaded {
     duration: Option<Duration>,
 }
 
+/// Starts the engine for one YouTube site. Both sites share this playback, so each passes its
+/// own slug, which names the engine's jam feed and its threads.
 pub struct Factory {
     api: Arc<YtMusic>,
+    slug: &'static str,
 }
 
 impl Factory {
-    pub fn new(api: Arc<YtMusic>) -> Self {
-        Self { api }
+    pub fn new(api: Arc<YtMusic>, slug: &'static str) -> Self {
+        Self { api, slug }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn slug(&self) -> &'static str {
+        self.slug
     }
 }
 
@@ -65,9 +73,10 @@ impl PlaybackFactory for Factory {
         engine::start(
             YouTube {
                 api: self.api.clone(),
+                slug: self.slug,
             },
             config,
-            "youtube",
+            self.slug,
             cast,
         )
     }
@@ -77,12 +86,17 @@ impl PlaybackFactory for Factory {
 /// without a running engine.
 pub(crate) struct YouTube {
     api: Arc<YtMusic>,
+    /// The site's slug, which names the engine's threads.
+    slug: &'static str,
 }
 
 impl YouTube {
     #[cfg(test)]
     pub(crate) fn new(api: Arc<YtMusic>) -> Self {
-        Self { api }
+        Self {
+            api,
+            slug: "youtube",
+        }
     }
 }
 
@@ -104,7 +118,7 @@ impl Fetch for YouTube {
     type Source = Trimmed<rodio::Decoder<Reader>>;
 
     fn name(&self) -> &'static str {
-        "yt"
+        self.slug
     }
 
     /// Opens the stream and waits for the preroll, giving a stalled attempt one more go before

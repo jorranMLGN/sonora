@@ -902,7 +902,7 @@ fn artists(
     let mut record = |artist: &ArtistRef, own: Option<&String>, score, popularity, mine| {
         let name = &artist.name;
         let id = artist.id.clone();
-        let cover = own.cloned().or_else(|| {
+        let cover = own.filter(|url| !url.is_empty()).cloned().or_else(|| {
             id.as_ref()
                 .and_then(|id| portraits.get(id))
                 .filter(|url| !url.is_empty())

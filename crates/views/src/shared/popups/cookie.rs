@@ -33,6 +33,18 @@ const YOUTUBE: Guide = Guide {
     note: "login-cookie-step-note",
 };
 
+/// Plain YouTube's header paste, the same walk as YouTube Music's but on www.youtube.com.
+const YOUTUBE_VIDEO: Guide = Guide {
+    url: "https://www.youtube.com",
+    steps: [
+        "login-cookie-video-step-1",
+        "login-cookie-step-2",
+        "login-cookie-step-3",
+        "login-cookie-step-4",
+    ],
+    ..YOUTUBE
+};
+
 const APPLE: Guide = Guide {
     url: "https://music.apple.com",
     title: "login-cookie-header-title",
@@ -81,6 +93,7 @@ fn guide(slug: &str) -> &'static Guide {
         "apple" => &APPLE,
         "deezer" => &DEEZER,
         "soundcloud" => &SOUNDCLOUD,
+        "youtube-video" => &YOUTUBE_VIDEO,
         _ => &YOUTUBE,
     }
 }

@@ -33,7 +33,27 @@ pub struct YouTubeVideoClient {
     searches: Memo<Arc<WebSearch>>,
 }
 
+/// A fetch every waiting caller can await and clone the answer of. The error sits behind an
+/// `Arc`, since `anyhow::Error` cannot be cloned.
+type Answer<T> = Shared<BoxFuture<'static, Result<T, Arc<anyhow::Error>>>>;
+
+/// The last answer for one key, shared for `ttl` by every caller that asks for the same key,
+/// including callers that ask while the fetch is still running. A failed answer is not reused
+/// once it has settled, so the next caller tries again.
+struct Memo<T> {
+    ttl: Duration,
+    last: Mutex<Option<Entry<T>>>,
+}
+
+struct Entry<T> {
+    key: String,
+    at: Instant,
+    answer: Answer<T>,
+}
+
 impl YouTubeVideoClient {
+    /// A guest's client over `api`, which owns no playlist until
+    /// [`owned_by`](Self::owned_by) names the account.
     pub fn new(api: Arc<YtMusic>) -> Self {
         Self {
             api,
@@ -42,6 +62,8 @@ impl YouTubeVideoClient {
         }
     }
 
+    /// The client for the signed-in account called `account`. Ownership is judged against this
+    /// name, so without it the client owns no playlist, not even Watch later.
     pub fn owned_by(mut self, account: impl Into<String>) -> Self {
         self.account = account.into();
         self
@@ -75,17 +97,85 @@ impl YouTubeVideoClient {
         Ok(videos)
     }
 
-    /// Whether the account owns `playlist`: Watch later always, Liked videos never, and
-    /// otherwise a card without a byline or one whose byline names the account.
-    fn owns(&self, playlist: &WebPlaylist) -> bool {
+    /// Whether the account owns `playlist`. A guest owns nothing. A signed-in account owns
+    /// Watch later always, Liked videos never, and otherwise a card whose byline names it. A
+    /// card without a byline is the account's own only when `in_library`, since the library
+    /// listing leaves the byline off exactly the account's own playlists; elsewhere a missing
+    /// byline says nothing.
+    fn owns(&self, playlist: &WebPlaylist, in_library: bool) -> bool {
+        if self.account.is_empty() {
+            return false;
+        }
         match playlist.id.as_str() {
             WATCH_LATER => true,
             LIKED => false,
-            _ => playlist
-                .owner
-                .as_ref()
-                .is_none_or(|owner| !self.account.is_empty() && owner.name == self.account),
+            _ => match &playlist.owner {
+                Some(owner) => owner.name == self.account,
+                None => in_library,
+            },
         }
+    }
+
+    /// Whether a playlist page whose header names no owner is the account's own, which only
+    /// the library listing can tell. A listing that cannot be read leaves it not owned, so the
+    /// page offers no edit that would then fail.
+    async fn owns_bylineless(&self, playlist_id: &str) -> bool {
+        match self.api.web_library_playlists().await {
+            Ok(listing) => self.listed_as_own(playlist_id, &listing),
+            Err(error) => {
+                log::warn!("youtube: cannot read the library to judge {playlist_id}: {error:#}");
+                false
+            }
+        }
+    }
+
+    /// Whether `listing`, the library's playlists, holds `playlist_id` as the account's own.
+    fn listed_as_own(&self, playlist_id: &str, listing: &[WebPlaylist]) -> bool {
+        listing
+            .iter()
+            .any(|playlist| playlist.id == playlist_id && self.owns(playlist, true))
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> Memo<T> {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            last: Mutex::new(None),
+        }
+    }
+
+    /// The answer for `key`, from the running or recent fetch for it when there is one, or
+    /// from `fetch` otherwise.
+    async fn get<F, Fut>(&self, key: &str, fetch: F) -> Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        let answer = {
+            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+            let reusable = last.as_ref().filter(|entry| {
+                entry.key == key
+                    && entry.at.elapsed() < self.ttl
+                    && !matches!(entry.answer.peek(), Some(Err(_)))
+            });
+            match reusable {
+                Some(entry) => entry.answer.clone(),
+                None => {
+                    let answer = fetch()
+                        .map(|answer| answer.map_err(Arc::new))
+                        .boxed()
+                        .shared();
+                    *last = Some(Entry {
+                        key: key.to_owned(),
+                        at: Instant::now(),
+                        answer: answer.clone(),
+                    });
+                    answer
+                }
+            }
+        };
+        answer.await.map_err(|error| anyhow::anyhow!("{error:#}"))
     }
 }
 
@@ -129,6 +219,8 @@ impl MusicApi for YouTubeVideoClient {
         self.api.rate_track(track_id, saved).await
     }
 
+    /// The video's details, read through the guest player, so a login- or age-gated video
+    /// fails here even for a signed-in account.
     async fn track(&self, track_id: &str) -> Result<Track> {
         wire::track(self.api.web_video(track_id).await?)
             .with_context(|| format!("video {track_id} has no length"))
@@ -145,7 +237,7 @@ impl MusicApi for YouTubeVideoClient {
             .await?
             .into_iter()
             .map(|source| {
-                let owned = self.owns(&source);
+                let owned = self.owns(&source, true);
                 let mut playlist = wire::playlist(source);
                 playlist.owned = owned;
                 if owned && playlist.owner.is_empty() {
@@ -234,7 +326,13 @@ impl MusicApi for YouTubeVideoClient {
 
     async fn playlist(&self, playlist_id: &str) -> Result<PlaylistDetail> {
         let page = self.api.web_playlist(playlist_id).await?;
-        let owned = self.owns(&page.playlist);
+        let unclaimed = !self.account.is_empty()
+            && page.playlist.owner.is_none()
+            && ![WATCH_LATER, LIKED].contains(&playlist_id);
+        let owned = match unclaimed {
+            true => self.owns_bylineless(playlist_id).await,
+            false => self.owns(&page.playlist, false),
+        };
         let mut detail = wire::playlist_detail(page);
         detail.playlist.owned = owned;
         Ok(detail)
@@ -306,66 +404,6 @@ impl MusicApi for YouTubeVideoClient {
     }
 }
 
-/// A fetch every waiting caller can await and clone the answer of. The error sits behind an
-/// `Arc`, since `anyhow::Error` cannot be cloned.
-type Answer<T> = Shared<BoxFuture<'static, Result<T, Arc<anyhow::Error>>>>;
-
-/// The last answer for one key, shared for `ttl` by every caller that asks for the same key,
-/// including callers that ask while the fetch is still running. A failed answer is not reused
-/// once it has settled, so the next caller tries again.
-struct Memo<T> {
-    ttl: Duration,
-    last: Mutex<Option<Entry<T>>>,
-}
-
-struct Entry<T> {
-    key: String,
-    at: Instant,
-    answer: Answer<T>,
-}
-
-impl<T: Clone + Send + Sync + 'static> Memo<T> {
-    fn new(ttl: Duration) -> Self {
-        Self {
-            ttl,
-            last: Mutex::new(None),
-        }
-    }
-
-    /// The answer for `key`, from the running or recent fetch for it when there is one, or
-    /// from `fetch` otherwise.
-    async fn get<F, Fut>(&self, key: &str, fetch: F) -> Result<T>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<T>> + Send + 'static,
-    {
-        let answer = {
-            let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
-            let reusable = last.as_ref().filter(|entry| {
-                entry.key == key
-                    && entry.at.elapsed() < self.ttl
-                    && !matches!(entry.answer.peek(), Some(Err(_)))
-            });
-            match reusable {
-                Some(entry) => entry.answer.clone(),
-                None => {
-                    let answer = fetch()
-                        .map(|answer| answer.map_err(Arc::new))
-                        .boxed()
-                        .shared();
-                    *last = Some(Entry {
-                        key: key.to_owned(),
-                        at: Instant::now(),
-                        answer: answer.clone(),
-                    });
-                    answer
-                }
-            }
-        };
-        answer.await.map_err(|error| anyhow::anyhow!("{error:#}"))
-    }
-}
-
 /// The library's playlists with Watch later first and the rest in the order YouTube lists them.
 fn ordered(mut playlists: Vec<Playlist>) -> Vec<Playlist> {
     if let Some(index) = playlists
@@ -401,6 +439,66 @@ mod tests {
             track_count: 0,
             modified_at: None,
         }
+    }
+
+    fn card(id: &str, owner: Option<&str>) -> WebPlaylist {
+        WebPlaylist {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            owner: owner.map(|name| ytmusic::web::ChannelRef {
+                id: format!("UC{name}"),
+                name: name.to_owned(),
+            }),
+            thumbnails: Vec::new(),
+            count: None,
+        }
+    }
+
+    fn client(account: &str) -> YouTubeVideoClient {
+        let client = YouTubeVideoClient::new(Arc::new(YtMusic::anonymous()));
+        match account.is_empty() {
+            true => client,
+            false => client.owned_by(account),
+        }
+    }
+
+    #[test]
+    fn a_guest_owns_nothing() {
+        let guest = client("");
+        for listed in [true, false] {
+            assert!(!guest.owns(&card(WATCH_LATER, None), listed));
+            assert!(!guest.owns(&card(LIKED, None), listed));
+            assert!(!guest.owns(&card("PLa", None), listed));
+            assert!(!guest.owns(&card("PLa", Some("Ada")), listed));
+        }
+    }
+
+    #[test]
+    fn a_byline_naming_the_account_is_its_own() {
+        let ada = client("Ada");
+        assert!(ada.owns(&card("PLa", Some("Ada")), true));
+        assert!(ada.owns(&card("PLa", Some("Ada")), false));
+        assert!(!ada.owns(&card("PLa", Some("Bob")), true));
+        assert!(!ada.owns(&card("PLa", Some("Bob")), false));
+    }
+
+    #[test]
+    fn no_byline_means_the_account_only_in_the_library() {
+        let ada = client("Ada");
+        assert!(ada.owns(&card("PLa", None), true));
+        assert!(!ada.owns(&card("PLa", None), false));
+        assert!(ada.owns(&card(WATCH_LATER, None), false));
+        assert!(!ada.owns(&card(LIKED, None), true));
+    }
+
+    #[test]
+    fn a_bylineless_page_is_judged_by_the_library() {
+        let listing = [card("PLmine", None), card("PLtheirs", Some("Bob"))];
+        let ada = client("Ada");
+        assert!(ada.listed_as_own("PLmine", &listing));
+        assert!(!ada.listed_as_own("PLtheirs", &listing));
+        assert!(!ada.listed_as_own("PLelsewhere", &listing));
+        assert!(!client("").listed_as_own("PLmine", &listing));
     }
 
     #[test]

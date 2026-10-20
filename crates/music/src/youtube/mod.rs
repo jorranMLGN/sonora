@@ -31,6 +31,7 @@ use crate::{
 pub use client::YouTubeClient;
 pub use lyrics::YouTubeLyrics;
 pub(crate) use site::Site;
+#[cfg(feature = "youtube-video")]
 pub(crate) use wire::profile as user_profile;
 
 const GUEST_ID: &str = "youtube-guest";
@@ -143,7 +144,7 @@ impl YouTubeProvider {
         ProviderSession {
             profile,
             api: client,
-            playback: Arc::new(Factory::new(api)),
+            playback: Arc::new(self.factory(api)),
             shape: Shape::Saved,
             authenticated: true,
             capabilities: Capabilities {
@@ -154,6 +155,12 @@ impl YouTubeProvider {
         }
     }
 
+    /// The playback for a session over `api`, under this site's slug so the two YouTube
+    /// providers keep their engines, and their jam feeds, apart.
+    fn factory(&self, api: Arc<YtMusic>) -> Factory {
+        Factory::new(api, self.site.slug)
+    }
+
     fn guest_session(&self, api: Arc<YtMusic>) -> ProviderSession {
         ProviderSession {
             profile: UserProfile {
@@ -162,7 +169,7 @@ impl YouTubeProvider {
                 avatar: None,
             },
             api: (self.site.client)(api.clone(), None),
-            playback: Arc::new(Factory::new(api)),
+            playback: Arc::new(self.factory(api)),
             shape: Shape::Saved,
             authenticated: false,
             capabilities: Capabilities {
@@ -506,5 +513,15 @@ mod tests {
         assert_eq!(video.slug(), "youtube-video");
         assert_eq!(video.name(), "YouTube");
         assert_eq!(video.reach().as_deref(), Some("www.youtube.com"));
+    }
+
+    #[test]
+    fn each_site_plays_under_its_own_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"));
+        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"));
+
+        assert_eq!(music.factory(music.guest_client()).slug(), "youtube");
+        assert_eq!(video.factory(video.guest_client()).slug(), "youtube-video");
     }
 }

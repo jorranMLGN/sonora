@@ -46,10 +46,6 @@ const CEILING: usize = 256 * 1024 * 1024;
 /// this the running download gets there sooner than a new request would.
 const LEAP: u64 = 2 * 1024 * 1024;
 
-/// How many stopped sources a ranged download keeps for when it comes back to where one of
-/// them stopped. Each may hold a connection open.
-const PARKED: usize = 4;
-
 /// What a provider does to the body of one track: as it arrives, and before it is served.
 ///
 /// Every method has an answer that suits a plain file, so a provider overrides only what it
@@ -663,7 +659,6 @@ impl Stream<Plain> {
         let jump = shared.jump.clone();
         let ranged = Ranges {
             current: source,
-            parked: Vec::new(),
             at: 0,
             pulled: 0,
             total: length,
@@ -754,12 +749,11 @@ async fn pump<S: Source, B: Body>(
     }
 }
 
-/// The download behind a scattered spool: one source writing at a time, and the last few it
-/// took over from, kept in case the download comes back to where one of them stopped.
+/// The download behind a scattered spool: one source writing at a time. A source the download
+/// moves away from is dropped, never kept for later, since its `chunk` may have been cancelled
+/// part way and so cannot be trusted to resume where it says it stopped.
 struct Ranges<S> {
     current: S,
-    /// Sources a jump stopped, oldest first, each with the byte it would have written next.
-    parked: Vec<(usize, S)>,
     /// The next byte `current` writes.
     at: usize,
     /// How much the current run has pulled, against `ceiling`.
@@ -852,12 +846,7 @@ impl<S: Ranged> Ranges<S> {
             return Ok(false);
         }
         log::debug!("playback: the download moves from byte {} to {to}", self.at);
-        let source = self.source(to);
-        let stopped = std::mem::replace(&mut self.current, source);
-        if self.parked.len() == PARKED {
-            self.parked.remove(0);
-        }
-        self.parked.push((self.at, stopped));
+        self.current = self.source(to);
         self.start(run, to);
         Ok(true)
     }
@@ -904,12 +893,9 @@ impl<S: Ranged> Ranges<S> {
         Ok(true)
     }
 
-    /// The source for a run from `at`: a parked one that stopped right there, else a fresh one.
-    fn source(&mut self, at: usize) -> S {
-        match self.parked.iter().position(|(parked, _)| *parked == at) {
-            Some(index) => self.parked.remove(index).1,
-            None => self.current.resumed(at as u64),
-        }
+    /// A fresh source for a run from `at`.
+    fn source(&self, at: usize) -> S {
+        self.current.resumed(at as u64)
     }
 
     /// Records that the run now starts at `at`.
@@ -1436,6 +1422,8 @@ mod tests {
             .await
             .expect("the download finishes");
         assert_eq!(stream.failed(), None);
-        assert_eq!(*log.lock().unwrap(), vec![3 * MIB as u64]);
+        // The jump's run reaches the end, and the hole the first run left behind is fetched
+        // by a fresh source rather than by the one the jump stopped.
+        assert_eq!(*log.lock().unwrap(), vec![3 * MIB as u64, MIB as u64 / 2]);
     }
 }

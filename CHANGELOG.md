@@ -81,6 +81,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the paste-a-credential flow is labelled by the credential it asks for.
 - A provider connected without an account reads as a guest in Settings.
 - A session that expires says so in a toast instead of leaving the library quietly empty.
+- Seeking far ahead in a long YouTube Music track, like a DJ set, now starts playing there at once
+  instead of waiting for the download to catch up.
 
 ### Fixed
 
