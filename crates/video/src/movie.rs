@@ -35,11 +35,12 @@ const UNWATCHED: Duration = Duration::from_millis(500);
 const IDLE: Duration = Duration::from_millis(20);
 /// The shortest sleep between two looks, so a frame that is due keeps the loop from spinning.
 const NAP: Duration = Duration::from_millis(2);
-/// How many pictures out of a fresh decoder teach `Stamps` how far it reorders: one GOP of
-/// the fixture, and more than the reorder window of any H.264 stream.
-const LEARN: usize = 24;
-/// The most pictures H.264 lets a decoder hold back for reordering.
+/// The most pictures H.264 lets a decoder hold back for reordering: the ceiling on pending
+/// times when the decoder cannot say how many it holds.
 const REORDER: usize = 16;
+/// OpenH264's `DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER`, which openh264-rs reads but
+/// does not export: how many decoded pictures it holds back for reordering.
+const FRAMES_IN_BUFFER: i32 = 18;
 /// The width a movie decodes at before anything has asked for one.
 const FIRST_WIDTH: u32 = 360;
 /// `seen` before the first `watch`, so a fresh movie counts as unwatched.
@@ -108,16 +109,16 @@ struct Decoding<R> {
 
 /// Pairs the pictures coming out of the decoder with their times. The decoder hands pictures
 /// back in presentation order, so each one out takes the earliest time fed and not yet out.
-/// A picture that fails to decode leaves its time behind for good, which would label every
-/// later picture one frame early; so the first `LEARN` pictures out measure how many times
-/// the decoder holds at most, and later any excess is dropped, earliest first.
+///
+/// A picture that fails to decode, or whose output the failing call threw away, leaves its
+/// time behind for good, which would label every later picture one frame early. So after every
+/// packet the times still pending are matched to the pictures the decoder says it holds, and
+/// the earliest extras are dropped. That is exact when an output was thrown away. When a
+/// picture never decoded at all and its time was a later one (a lost P), an earlier time is
+/// dropped instead: labels run one frame late until that later time is reached, then line up.
 #[derive(Default)]
 struct Stamps {
     pending: BinaryHeap<Reverse<(Duration, Duration)>>,
-    /// The most times pending as a picture comes out, learnt from the first `LEARN`.
-    depth: usize,
-    /// Pictures out since the decoder opened.
-    outs: usize,
 }
 
 impl Movie {
@@ -272,18 +273,23 @@ impl<R: Read + Seek> Decoding<R> {
                 self.convert.convert_packet(&sample.data, &mut self.annexb);
                 self.stamps.fed(sample.pts, sample.duration);
                 self.fed = true;
-                match self.decoder.decode(&self.annexb) {
-                    Ok(Some(image)) => {
-                        let Some((pts, duration)) = self.stamps.out() else {
-                            continue;
-                        };
-                        let frame = keep(pts, duration).then(|| picture(&image, width));
-                        return Ok(Some(Decoded { pts, frame }));
+                let decoded = match self.decoder.decode(&self.annexb) {
+                    Ok(Some(image)) => self.stamps.out().map(|(pts, duration)| Decoded {
+                        pts,
+                        frame: keep(pts, duration).then(|| picture(&image, width)),
+                    }),
+                    Ok(None) => None,
+                    Err(error) => {
+                        log::debug!("video: a frame did not decode: {error}");
+                        None
                     }
-                    Ok(None) => {}
-                    Err(error) => log::debug!("video: a frame did not decode: {error}"),
+                };
+                let held = buffered(&mut self.decoder).unwrap_or(REORDER);
+                self.stamps.settle(held);
+                match decoded {
+                    Some(decoded) => return Ok(Some(decoded)),
+                    None => continue,
                 }
-                continue;
             }
             if self.next < self.stream.segments.len() {
                 self.failed = false;
@@ -317,18 +323,17 @@ impl Stamps {
 
     /// The time and duration of the picture the decoder just gave back.
     fn out(&mut self) -> Option<(Duration, Duration)> {
-        match self.outs < LEARN {
-            true => self.depth = self.depth.max(self.pending.len()).min(REORDER + 1),
-            false => {
-                while self.pending.len() > self.depth {
-                    let Reverse((lost, _)) = self.pending.pop()?;
-                    log::debug!("video: the picture at {lost:?} never came out");
-                }
-            }
-        }
-        self.outs += 1;
         let Reverse(next) = self.pending.pop()?;
         Some(next)
+    }
+
+    /// Drops the earliest times until no more are pending than the decoder holds pictures.
+    fn settle(&mut self, held: usize) {
+        while self.pending.len() > held {
+            if let Some(Reverse((lost, _))) = self.pending.pop() {
+                log::debug!("video: the picture at {lost:?} never came out");
+            }
+        }
     }
 }
 
@@ -419,6 +424,19 @@ fn watched(shared: &Shared) -> bool {
     seen != NEVER && now.saturating_sub(seen) <= UNWATCHED.as_millis() as u64
 }
 
+/// How many decoded pictures `decoder` holds back, not yet given out.
+fn buffered(decoder: &mut Decoder) -> Option<usize> {
+    let mut frames: i32 = 0;
+    // SAFETY: the decoder is open, and this option writes one int through the pointer, the
+    // same call openh264-rs makes inside `Decoder::flush_remaining`
+    let status = unsafe {
+        decoder
+            .raw_api()
+            .get_option(FRAMES_IN_BUFFER, (&raw mut frames).cast())
+    };
+    (status == 0).then_some(frames as usize)
+}
+
 fn decoder() -> Result<Decoder> {
     let api = crate::codec::api()?;
     let config = DecoderConfig::new().flush_after_decode(Flush::NoFlush);
@@ -446,6 +464,7 @@ mod tests {
     /// The width the tests draw at; wider than the fixture, so frames keep its 256.
     const WIDTH: u32 = 360;
     const WITHIN: Duration = Duration::from_millis(500);
+    const FRAME: Duration = Duration::from_millis(40);
 
     struct FakeClock(Mutex<Option<Duration>>);
 
@@ -522,20 +541,111 @@ mod tests {
                 continue;
             }
             let Reverse(truth) = held.pop().unwrap();
-            // the 80th picture fails to decode: the decoder gives nothing back for it
+            // the call for the 80th packet fails, throwing away the picture it gave out
             if n == 80 {
+                stamps.settle(held.len());
                 continue;
             }
             let (label, _) = stamps.out().unwrap();
+            stamps.settle(held.len());
             if label != truth {
                 misses.push(n);
             }
         }
-        // re-aligned within one GOP of 25 pictures after the loss
+        assert_eq!(misses, Vec::<u64>::new());
+    }
+
+    /// The decode order, as frame numbers, of an I picture followed by one P and `run` B
+    /// pictures per entry of `runs`, the B pictures bisected the way x264's pyramid orders them.
+    fn decode_order(runs: &[u64]) -> Vec<u64> {
+        let mut order = vec![0];
+        let mut base = 0;
+        for &run in runs {
+            order.push(base + run + 1);
+            bisect(base + 1, base + run, &mut order);
+            base += run + 1;
+        }
+        order
+    }
+
+    fn bisect(low: u64, high: u64, out: &mut Vec<u64>) {
+        if low > high {
+            return;
+        }
+        let middle = (low + high) / 2;
+        out.push(middle);
+        bisect(low, middle - 1, out);
+        bisect(middle + 1, high, out);
+    }
+
+    /// Feeds `order` through `Stamps` and a decoder that gives pictures back in presentation
+    /// order, at most one per packet, as soon as the next one is decoded. The call that would
+    /// give out a picture in `discarded` fails and throws it away; a picture in `undecoded`
+    /// never decodes at all. Returns each picture out as its true frame number and its label's.
+    fn simulate(order: &[u64], discarded: &[u64], undecoded: &[u64]) -> Vec<(u64, u64)> {
+        let mut stamps = Stamps::default();
+        let mut held = std::collections::BTreeSet::new();
+        let mut fed = std::collections::BTreeSet::new();
+        let mut expected = 0;
+        let mut out = Vec::new();
+        for &picture in order {
+            stamps.fed(FRAME * picture as u32, FRAME);
+            fed.insert(picture);
+            if !undecoded.contains(&picture) {
+                held.insert(picture);
+            }
+            while undecoded.contains(&expected) && fed.contains(&expected) {
+                expected += 1;
+            }
+            if held.remove(&expected) {
+                if !discarded.contains(&expected) {
+                    let (label, _) = stamps.out().unwrap();
+                    out.push((expected, (label.as_millis() / FRAME.as_millis()) as u64));
+                }
+                expected += 1;
+            }
+            stamps.settle(held.len());
+        }
+        out
+    }
+
+    /// The output positions whose label is wrong.
+    fn misses(out: &[(u64, u64)]) -> Vec<usize> {
+        (0..out.len())
+            .filter(|&at| out[at].0 != out[at].1)
+            .collect()
+    }
+
+    #[test]
+    fn a_loss_at_the_start_shifts_no_time() {
+        let out = simulate(&decode_order(&[3; 100]), &[2], &[]);
+        assert_eq!(misses(&out), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn three_losses_in_a_row_shift_no_time() {
+        let out = simulate(&decode_order(&[3; 100]), &[120, 121, 122], &[]);
+        assert_eq!(misses(&out), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_deeper_b_run_later_drops_no_time() {
+        let runs: Vec<u64> = [[3; 30].as_slice(), &[7; 60], &[3; 30], &[15; 20]].concat();
+        let out = simulate(&decode_order(&runs), &[], &[]);
+        assert_eq!(misses(&out), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_lost_p_picture_mislabels_only_until_its_time() {
+        // frame 84 is the P of the mini-GOP over 81..=84, decoded before 82, 81 and 83; which
+        // time it took is unknowable, so the pictures before it may run a frame or two late
+        let out = simulate(&decode_order(&[3; 100]), &[], &[84]);
+        let misses = misses(&out);
         assert!(
-            misses.iter().all(|&n| (80..80 + 25).contains(&n)),
+            misses.iter().all(|&at| (80..84).contains(&out[at].0)),
             "missed at {misses:?}"
         );
+        assert!(misses.iter().all(|&at| out[at].1.abs_diff(out[at].0) <= 2));
     }
 
     #[test]
