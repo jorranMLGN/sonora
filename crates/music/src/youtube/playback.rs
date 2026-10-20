@@ -204,6 +204,27 @@ impl Fetch for YouTube {
 }
 
 /// Opens the stream and waits for the preroll, each under its own deadline.
+/// Opens the video of `id` no taller than `max_height` as a feed that downloads ahead of its
+/// reader.
+pub(crate) async fn open_video_feed(
+    api: &Arc<YtMusic>,
+    id: &str,
+    max_height: u32,
+) -> Result<crate::VideoFeed> {
+    let (format, source) = tokio::time::timeout(PATIENCE, api.open_video(id, max_height))
+        .await
+        .context("video metadata timed out")??;
+    let total = source.total();
+    let stream = Stream::pulling_ranged(source, total);
+    let reader = stream.reader();
+    Ok(crate::VideoFeed {
+        width: format.width,
+        height: format.height,
+        reader,
+        stream,
+    })
+}
+
 async fn attempt_open(api: &Arc<YtMusic>, id: &str) -> Result<Loaded> {
     let started = Instant::now();
     let (format, audio) = tokio::time::timeout(PATIENCE, api.open_audio(id))

@@ -63,6 +63,18 @@ pub use models::{
 pub use spectrum::Spectrum;
 pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Measuring, Waveform};
 
+/// A video to show beside a track's sound: a seekable reader over its bytes and its size.
+///
+/// The `stream` keeps downloading ahead of the reader, so a caller holds it for as long as it
+/// reads. Once the feed is dropped the download stops, and a read blocked on bytes that will
+/// never come fails with a timed-out error within 20 seconds at most rather than waiting forever.
+pub struct VideoFeed {
+    pub width: u32,
+    pub height: u32,
+    pub reader: stream::Reader,
+    pub stream: stream::Stream,
+}
+
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
 pub const LOCAL_ALBUM_PREFIX: &str = "local-album:";
 pub const LOCAL_ARTIST_PREFIX: &str = "local-artist:";
@@ -170,6 +182,12 @@ pub trait MusicApi: Send + Sync {
     /// The url of the short looping video an artist attached to this track, or `None` when it
     /// has none. Only Spotify answers; every other provider has no such thing.
     async fn canvas(&self, _track_id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// The video of this track no taller than `max_height`, or `None` when it has none. Only
+    /// the YouTube providers answer.
+    async fn video(&self, _track_id: &str, _max_height: u32) -> Result<Option<VideoFeed>> {
         Ok(None)
     }
 

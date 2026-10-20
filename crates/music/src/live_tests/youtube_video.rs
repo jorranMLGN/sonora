@@ -71,3 +71,33 @@ async fn live_a_long_set_seeks_to_ninety_minutes_quickly() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "talks to youtube.com as a guest"]
+async fn live_a_set_opens_a_480p_video_feed() -> Result<()> {
+    let client = YouTubeVideoClient::new(crate::youtube_video::provider().guest_client());
+    let feed = client
+        .video(LONG_SET, 480)
+        .await?
+        .context("the set has no video")?;
+    println!("feed {}x{}", feed.width, feed.height);
+    if feed.height != 480 {
+        bail!("expected 480p, got {}p", feed.height);
+    }
+
+    let started = Instant::now();
+    // The reader blocks on the download, which the runtime has to keep driving.
+    let mut reader = feed.reader;
+    tokio::task::spawn_blocking(move || {
+        let mut buffer = vec![0u8; 64 * 1024];
+        std::io::Read::read_exact(&mut reader, &mut buffer).context("cannot read 64 KiB")
+    })
+    .await??;
+    let took = started.elapsed();
+    println!("read 64 KiB in {took:?}");
+    if took > DEADLINE {
+        bail!("64 KiB took {took:?}");
+    }
+    drop(feed.stream);
+    Ok(())
+}
