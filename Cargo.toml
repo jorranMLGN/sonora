@@ -170,7 +170,7 @@ unic-langid = { version = "0.9", features = ["macros"] }
 unicode-segmentation = "1.12"
 uniffi = "0.32"
 x11rb = "0.13"
-ytmusic = { git = "https://github.com/sonorahq/ytmusic-rs", rev = "8b044c4" }
+ytmusic = { git = "https://github.com/jorranMLGN/ytmusic-rs", rev = "3ca1a9b" }
 
 # The root store is picked per target in `crates/music`: iOS cannot list native roots.
 librespot-core = { version = "0.8.0", default-features = false }
