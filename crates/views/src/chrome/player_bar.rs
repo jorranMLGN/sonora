@@ -9,7 +9,9 @@ use gpui::{
 };
 use gpui::{Window, div, px};
 use i18n::t;
-use input::{ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleMiniPlayer, ToggleQueue};
+use input::{
+    ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleMiniPlayer, ToggleQueue, ToggleVideo,
+};
 use state::{AppSettings, Playback, Queue, SideTab, Sonora, WaveformPlace};
 use ui::{
     Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Popup, Room, Scrollbar, Scrubber,
@@ -53,6 +55,8 @@ impl PlayerBar {
         cx.observe(&queue, |_, _, cx| cx.notify()).detach();
         cx.observe(&library, |_, _, cx| cx.notify()).detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
+        let video = Sonora::global(cx).video.clone();
+        cx.observe(&video, |_, _, cx| cx.notify()).detach();
 
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(me));
@@ -246,6 +250,28 @@ impl PlayerBar {
             .icon("icons/picture-in-picture.svg")
             .tooltip_above("player-mini")
             .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleMiniPlayer), cx))
+    }
+
+    /// Turns the music video on or off. Shown while the playing track has a video, and always
+    /// while video is off, since the track's video is not looked up then and this is the way
+    /// back on.
+    fn video_button(&self, cx: &Context<Self>) -> Option<Button> {
+        let on = self.settings.read(cx).video();
+        if on && !Sonora::global(cx).video.read(cx).has_video() {
+            return None;
+        }
+        let (icon, tooltip) = match on {
+            true => ("icons/video.svg", "player-video-off"),
+            false => ("icons/video-off.svg", "player-video-on"),
+        };
+        Some(
+            Button::new("toggle-video")
+                .ghost()
+                .small()
+                .icon(icon)
+                .tooltip_above(tooltip)
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleVideo), cx)),
+        )
     }
 
     fn fullscreen_button(&self) -> Button {
@@ -496,6 +522,7 @@ impl Render for PlayerBar {
                         .child(div().flex_1().min_w_0().child(seek))
                         .children(sides)
                         .child(self.sound(px(VOLUME_TIGHT), cx))
+                        .children(self.video_button(cx))
                         .child(self.mini_button())
                         .child(self.fullscreen_button()),
                 ),
@@ -525,6 +552,7 @@ impl Render for PlayerBar {
                         .min_w_0()
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
+                        .children(self.video_button(cx))
                         .child(self.mini_button())
                         .child(self.fullscreen_button()),
                 ),

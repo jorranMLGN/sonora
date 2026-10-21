@@ -9,11 +9,12 @@ use gpui::{
     relative, svg, uniform_list,
 };
 use i18n::t;
+use input::{ToggleFullscreen, TogglePip};
 use music::{Shape, Track, Voice};
 use router::{Destination, LibraryTab, Link as _};
 use state::{
-    AppSettings, Lyrics, LyricsState, Network, Playback, PlaybackState, Queue, RomanizationScripts,
-    Shelf, SideTab, Sonora, Whence,
+    AppSettings, Lyrics, LyricsState, Network, Place as VideoPlace, Playback, PlaybackState, Queue,
+    RomanizationScripts, Shelf, SideTab, Sonora, Whence,
 };
 use ui::{
     ActiveTheme as _, Artwork, Button, Card, DraggedPin, Edge, Motion, Motioned as _, Pin,
@@ -22,6 +23,7 @@ use ui::{
 };
 
 use crate::chrome::{Chrome, section_label};
+use crate::shared::canvas::{CanvasArt, canvas_playing, video_showing};
 use crate::shared::effects;
 use crate::shared::menus::ItemMenu;
 use crate::shared::pins::Pinned as _;
@@ -34,7 +36,7 @@ const TAIL_ROWS: usize = 2;
 const BLUR: f32 = 0.13;
 const BACKGROUND_SINGING_BLUR: Pixels = px(0.75);
 const VEIL: f32 = 0.3;
-/// The tallest the canvas or cover above the queue may be, as a share of the window.
+/// The tallest the video, canvas or cover above the queue may be, as a share of the window.
 const CANVAS_SHARE: f32 = 0.55;
 /// How much of the canvas or cover above the queue shows through, so it sits back behind the list the
 /// way a cover would rather than competing with it.
@@ -258,25 +260,34 @@ impl QueuePosition {
     }
 }
 
-/// What sits in the slot above the queue: the playing track's Canvas, or its cover when it has
-/// none, so every provider's tracks fill the sidebar the same way.
+/// What sits in the slot above the queue: the playing track's music video, its Canvas, or its
+/// cover when it has neither, so every provider's tracks fill the sidebar the same way.
 #[derive(Debug, PartialEq)]
 enum QueueArt {
+    Video,
     Canvas,
     Cover(SharedString),
 }
 
 impl QueueArt {
     /// Chooses the slot's art. `shown` is whether the slot exists at all (titled aside, Queue
-    /// tab), `canvas` whether a Canvas plays, and `large` an upgraded cover for the playing
-    /// track that wins over its own `small` one.
-    fn pick(shown: bool, canvas: bool, small: Option<&str>, large: Option<&str>) -> Option<Self> {
+    /// tab), `video` whether a music video plays here rather than in the PiP window, `canvas`
+    /// whether a Canvas plays, and `large` an upgraded cover for the playing track that wins
+    /// over its own `small` one.
+    fn pick(
+        shown: bool,
+        video: bool,
+        canvas: bool,
+        small: Option<&str>,
+        large: Option<&str>,
+    ) -> Option<Self> {
         if !shown {
             return None;
         }
-        match canvas {
-            true => Some(Self::Canvas),
-            false => large
+        match (video, canvas) {
+            (true, _) => Some(Self::Video),
+            (false, true) => Some(Self::Canvas),
+            (false, false) => large
                 .or(small)
                 .map(|url| Self::Cover(SharedString::from(url.to_owned()))),
         }
@@ -286,7 +297,12 @@ impl QueueArt {
 pub(crate) struct Aside {
     /// The playing track's Canvas, shown above the queue while one plays; its cover stands in
     /// otherwise.
-    canvas_art: Entity<crate::shared::canvas::CanvasArt>,
+    canvas_art: Entity<CanvasArt>,
+    /// The playing track's music video, which takes the slot over the Canvas and the cover.
+    video_art: Entity<CanvasArt>,
+    /// Whether the slot is on screen, as last told to `Video`: the sidebar's own aside, open,
+    /// on the Queue tab. Fullscreen's stripped aside never has one.
+    slotted: bool,
     queue: Entity<Queue>,
     playback: Entity<Playback>,
     lyrics: Entity<Lyrics>,
@@ -353,7 +369,14 @@ impl Aside {
         cx.observe(&canvas_state, |_, _, cx| cx.notify()).detach();
         let cover = Sonora::global(cx).cover.clone();
         cx.observe(&cover, |_, _, cx| cx.notify()).detach();
-        let canvas_art = cx.new(crate::shared::canvas::CanvasArt::new);
+        let canvas_art = cx.new(CanvasArt::new);
+        let video_art = cx.new(CanvasArt::video);
+        let video = Sonora::global(cx).video.clone();
+        cx.observe(&video, |this, _, cx| {
+            this.settle_place(cx);
+            cx.notify();
+        })
+        .detach();
         cx.observe(&queue, |this, queue, cx| {
             let revision = queue.read(cx).revision();
             if this
@@ -369,7 +392,12 @@ impl Aside {
         .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
         let chrome = Chrome::entity(cx);
-        cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
+        // the sidebar opening, closing or getting squeezed out shows up here first
+        cx.observe(&chrome, |this, _, cx| {
+            this.report(cx);
+            cx.notify();
+        })
+        .detach();
 
         let me = cx.entity_id();
         let scroll = UniformListScrollHandle::new();
@@ -424,6 +452,8 @@ impl Aside {
             departure: 0,
             lyrics_wrap_width: None,
             canvas_art,
+            video_art,
+            slotted: false,
             lyrics_wrap_size: None,
             lyrics_wraps: HashMap::new(),
             lane_rooms: HashMap::new(),
@@ -468,7 +498,36 @@ impl Aside {
             self.anchor_verse();
         }
         self.anchor = true;
+        self.report(cx);
         cx.notify();
+    }
+
+    /// Works out whether the slot is on screen and, when that changed, tells `Video`. Called
+    /// from the hooks that change it, never from `render`.
+    fn report(&mut self, cx: &mut Context<Self>) {
+        let slotted =
+            self.titled && self.tab == SideTab::Queue && Chrome::sidebar_right(cx) > Pixels::ZERO;
+        if slotted == self.slotted {
+            return;
+        }
+        self.slotted = slotted;
+        self.settle_place(cx);
+    }
+
+    /// Keeps `Video`'s place true to the slot: a shown slot claims a video nobody shows, and a
+    /// hidden one lets go of a video still placed in it, as after fullscreen hands it back
+    /// while the sidebar is closed. Fullscreen and PiP are left alone.
+    fn settle_place(&mut self, cx: &mut Context<Self>) {
+        if !self.titled {
+            return;
+        }
+        let video = Sonora::global(cx).video.clone();
+        let place = match (self.slotted, video.read(cx).place()) {
+            (true, VideoPlace::None) => VideoPlace::Slot,
+            (false, VideoPlace::Slot) => VideoPlace::None,
+            _ => return,
+        };
+        video.update(cx, |video, cx| video.set_place(place, cx));
     }
 
     pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
@@ -1863,17 +1922,60 @@ impl Render for Aside {
             .and_then(|track| track.album_id.as_deref())
             .filter(|_| !local)
             .and_then(|album| Sonora::global(cx).cover.read(cx).large_for(album));
-        let art = QueueArt::pick(
-            shown,
-            crate::shared::canvas::canvas_playing(cx),
-            small,
-            large,
-        );
+        let video =
+            Sonora::global(cx).video.read(cx).place() != VideoPlace::Pip && video_showing(cx);
+        let art = QueueArt::pick(shown, video, canvas_playing(cx), small, large);
+        let video = matches!(art, Some(QueueArt::Video));
         let width = Chrome::sidebar_right(cx) - theme.metrics.pad * 2.;
-        // square, like a cover, cropped from the upright clip or a wide thumbnail
-        let height = width.min(window.viewport_size().height * CANVAS_SHARE);
+        // square, like a cover, cropped from the upright clip or a wide thumbnail; a video
+        // keeps its own wide shape and is not dimmed, since it is what the listener watches
+        let (tall, dim) = match video {
+            true => (width * (9. / 16.), 1.),
+            false => (width, CANVAS_DIM),
+        };
+        let height = tall.min(window.viewport_size().height * CANVAS_SHARE);
         let radius = theme.radius * 2.;
         let queue_art = art.map(|art| match art {
+            QueueArt::Video => {
+                self.video_art
+                    .update(cx, |art, _| art.set_side(width, height, radius));
+                div()
+                    .relative()
+                    .w(width)
+                    .h(height)
+                    .child(self.video_art.clone())
+                    .child(
+                        div()
+                            .absolute()
+                            .top(theme.metrics.pad)
+                            .right(theme.metrics.pad)
+                            .flex()
+                            .gap_1()
+                            .child(
+                                Button::new("video-pip")
+                                    .ghost()
+                                    .when(effects(), Button::frosted)
+                                    .small()
+                                    .icon("icons/picture-in-picture.svg")
+                                    .tooltip("video-pip")
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(TogglePip), cx)
+                                    }),
+                            )
+                            .child(
+                                Button::new("video-large")
+                                    .ghost()
+                                    .when(effects(), Button::frosted)
+                                    .small()
+                                    .icon("icons/maximize.svg")
+                                    .tooltip("video-large")
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(ToggleFullscreen), cx)
+                                    }),
+                            ),
+                    )
+                    .into_any_element()
+            }
             QueueArt::Canvas => {
                 self.canvas_art
                     .update(cx, |art, _| art.set_side(width, height, radius));
@@ -1935,7 +2037,7 @@ impl Render for Aside {
                             div()
                                 .flex_none()
                                 .p(theme.metrics.pad)
-                                .opacity(CANVAS_DIM)
+                                .opacity(dim)
                                 .child(art),
                         )
                     })
@@ -3384,7 +3486,7 @@ mod tests {
     #[test]
     fn a_playing_canvas_takes_the_slot_over_the_cover() {
         assert_eq!(
-            QueueArt::pick(true, true, Some("small"), Some("large")),
+            QueueArt::pick(true, false, true, Some("small"), Some("large")),
             Some(QueueArt::Canvas)
         );
     }
@@ -3392,7 +3494,7 @@ mod tests {
     #[test]
     fn a_track_without_a_canvas_shows_its_cover() {
         assert_eq!(
-            QueueArt::pick(true, false, Some("small"), None),
+            QueueArt::pick(true, false, false, Some("small"), None),
             Some(QueueArt::Cover(SharedString::from("small")))
         );
     }
@@ -3400,15 +3502,34 @@ mod tests {
     #[test]
     fn the_large_cover_wins_over_the_small_one() {
         assert_eq!(
-            QueueArt::pick(true, false, Some("small"), Some("large")),
+            QueueArt::pick(true, false, false, Some("small"), Some("large")),
             Some(QueueArt::Cover(SharedString::from("large")))
         );
     }
 
     #[test]
     fn nothing_shows_without_a_cover_or_off_the_queue() {
-        assert_eq!(QueueArt::pick(true, false, None, None), None);
-        assert_eq!(QueueArt::pick(false, true, Some("small"), None), None);
-        assert_eq!(QueueArt::pick(false, false, Some("small"), None), None);
+        assert_eq!(QueueArt::pick(true, false, false, None, None), None);
+        assert_eq!(
+            QueueArt::pick(false, false, true, Some("small"), None),
+            None
+        );
+        assert_eq!(
+            QueueArt::pick(false, false, false, Some("small"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn the_slot_picks_video_over_canvas_and_cover() {
+        assert_eq!(
+            QueueArt::pick(true, true, true, Some("small"), Some("large")),
+            Some(QueueArt::Video)
+        );
+        assert_eq!(QueueArt::pick(false, true, true, Some("small"), None), None);
+        assert_eq!(
+            QueueArt::pick(true, true, false, None, None),
+            Some(QueueArt::Video)
+        );
     }
 }

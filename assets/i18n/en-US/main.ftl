@@ -241,6 +241,10 @@ player-next = Next track
 player-mini = Mini player
 player-fullscreen = Fullscreen
 player-fullscreen-leave = Leave fullscreen
+player-video-on = Show video
+player-video-off = Hide video
+video-pip = Picture in picture
+video-large = Fullscreen
 fullscreen-artwork = Artwork
 
 # filters

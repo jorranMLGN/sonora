@@ -458,10 +458,14 @@ impl Root {
             .update(cx, |workspace, cx| workspace.show_side(tab, cx));
     }
 
-    /// Tells the adaptive theme and the wake lock whether fullscreen is up. The ambient
-    /// background is painted out of the cover's hues, so fullscreen samples the cover even with
-    /// the adaptive theme off, and leaving drops the tint again.
+    /// Tells the adaptive theme, the wake lock and the fullscreen view itself whether fullscreen
+    /// is up. The ambient background is painted out of the cover's hues, so fullscreen samples
+    /// the cover even with the adaptive theme off, and leaving drops the tint again. The view
+    /// moves a playing video in and out with it.
     fn announce_fullscreen(&self, fullscreen: bool, cx: &mut Context<Self>) {
+        self.shells
+            .fullscreen
+            .update(cx, |view, cx| view.set_open(fullscreen, cx));
         self.adaptive
             .update(cx, |adaptive, cx| adaptive.set_fullscreen(fullscreen, cx));
         let wake = Sonora::global(cx).wake.clone();
