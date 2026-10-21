@@ -3,7 +3,6 @@
 //! track ever has a movie, and only while a place shows it (or for a short grace after the last
 //! one went away), so a hidden video costs no download and no decoding.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -82,9 +81,9 @@ struct Snapshot {
 /// A started movie with the download feeding it. Dropping it stops both.
 struct Loaded {
     movie: Movie,
-    /// The feed's `stream`, kept only so the download lives as long as the movie reading it.
-    /// Boxed because `music` does not export the stream's type.
-    _stream: Box<dyn Any>,
+    /// The feed's download, kept so it lives as long as the movie reading it, and asked
+    /// whether it broke, which leaves the movie unable to read on.
+    download: music::VideoDownload,
     height: u32,
 }
 
@@ -115,8 +114,9 @@ pub struct Video {
     pending: Option<Pending>,
     /// The height `task` is loading, if a load is in flight.
     loading: Option<u32>,
-    /// The track and height whose load failed. Not tried again until either changes or a
-    /// decoder arrives, since `Playback` notifies twice a second.
+    /// The track and height whose load failed, or whose movie's download broke mid-play. Not
+    /// tried again until either changes, a decoder arrives, a place comes into view or the
+    /// video is switched off and on, since `Playback` notifies twice a second.
     failed: Option<(String, u32)>,
     /// Grows each time the movie is set or dropped, and on every new track, so a view can tell
     /// a new movie's first frame from the last one of the movie before it.
@@ -232,9 +232,16 @@ impl Video {
     /// Reports where the video is shown. `Place::None` starts the grace period; any other place
     /// cancels it, and a place needing another height reloads at that height. The old movie
     /// stays on screen until the new one has caught up with the clock.
+    ///
+    /// A place coming into view also tries a failed or broken movie once more.
     pub fn set_place(&mut self, place: Place, cx: &mut Context<Self>) {
         if place == self.place {
             return;
+        }
+        // a movie that broke unseen counts as failed before this change forgives it
+        self.drop_broken(cx);
+        if retries(self.place, place) {
+            self.failed = None;
         }
         self.place = place;
         match place {
@@ -305,9 +312,12 @@ impl Video {
         if !on {
             self.probe = None;
             self.probe_failed = None;
+            // switching the video back on is a fresh try
+            self.failed = None;
             self.stop(cx);
             return;
         }
+        self.drop_broken(cx);
         let Some(id) = self.track.clone() else { return };
         let loaded = self.loaded.as_ref().map(|loaded| loaded.height);
         // a reload catching up counts as in flight
@@ -388,6 +398,33 @@ impl Video {
         }
     }
 
+    /// Drops a movie, or a reload catching up, whose download broke: it cannot read on, and
+    /// left on screen it would hold its last picture and keep `plan` from loading another.
+    /// Marks its height failed so it is not reloaded on every playback tick; `has_video` stays
+    /// true, since the track still has a video.
+    fn drop_broken(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.track.clone() else { return };
+        if let Some(pending) = self
+            .pending
+            .take_if(|pending| pending.loaded.download.broken())
+        {
+            log::warn!(
+                "video: the {}p download of {id} broke, dropping its reload",
+                pending.loaded.height
+            );
+            self.failed = Some((id.clone(), pending.loaded.height));
+        }
+        if let Some(loaded) = self.loaded.take_if(|loaded| loaded.download.broken()) {
+            log::warn!(
+                "video: the {}p download of {id} broke, dropping the movie",
+                loaded.height
+            );
+            self.failed = Some((id, loaded.height));
+            self.generation += 1;
+            cx.notify();
+        }
+    }
+
     /// Drops the movie, its download, any load in flight and any reload catching up.
     fn stop(&mut self, cx: &mut Context<Self>) {
         self.task = None;
@@ -438,7 +475,6 @@ impl Video {
             let stream = feed.stream;
             let reader = feed.reader;
             let started = join(io.spawn_blocking(move || Movie::start(reader, clock))).await;
-            let stream: Box<dyn Any> = Box::new(stream);
             this.update(cx, |this, cx| this.started(id, height, started, stream, cx))
                 .ok();
         }));
@@ -481,7 +517,7 @@ impl Video {
         id: String,
         height: u32,
         started: anyhow::Result<Movie>,
-        stream: Box<dyn Any>,
+        download: music::VideoDownload,
         cx: &mut Context<Self>,
     ) {
         self.settle(cx);
@@ -492,7 +528,7 @@ impl Video {
             Ok(movie) => {
                 let loaded = Loaded {
                     movie,
-                    _stream: stream,
+                    download,
                     height,
                 };
                 match self.loaded.is_some() {
@@ -627,6 +663,13 @@ fn height(place: Place, cap: u32) -> Option<u32> {
 /// Whether a video that has been without a place for `idle` keeps running.
 fn keep(place: Place, idle: Duration) -> bool {
     place != Place::None || idle < GRACE
+}
+
+/// Whether moving the video from `from` to `to` tries a failed movie again: only a place
+/// coming into view does, once per change, so a movie that keeps breaking is not reloaded in
+/// a loop.
+fn retries(from: Place, to: Place) -> bool {
+    to != Place::None && to != from
 }
 
 /// Whether a movie may start: the setting on, a decoder loaded, and a place to show it.
@@ -794,6 +837,17 @@ mod tests {
         assert!(!wanted(false, true, Place::Slot));
         assert!(!wanted(true, true, Place::None));
         assert!(wanted(true, true, Place::Fullscreen));
+    }
+
+    #[test]
+    fn a_place_coming_into_view_tries_a_broken_movie_again() {
+        // collapsing the sidebar forgives nothing; expanding it again does
+        assert!(!retries(Place::Slot, Place::None));
+        assert!(retries(Place::None, Place::Slot));
+        assert!(retries(Place::Slot, Place::Fullscreen));
+        assert!(retries(Place::Fullscreen, Place::Pip));
+        assert!(!retries(Place::Slot, Place::Slot));
+        assert!(!retries(Place::None, Place::None));
     }
 
     #[test]

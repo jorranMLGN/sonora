@@ -203,7 +203,6 @@ impl Fetch for YouTube {
     }
 }
 
-/// Opens the stream and waits for the preroll, each under its own deadline.
 /// Opens the video of `id` no taller than `max_height` as a feed that downloads ahead of its
 /// reader.
 pub(crate) async fn open_video_feed(
@@ -215,16 +214,40 @@ pub(crate) async fn open_video_feed(
         .await
         .context("video metadata timed out")??;
     let total = source.total();
-    let stream = Stream::pulling_ranged(source, total);
+    let stream = Stream::pulling_ranged_windowed(source, total, window(format.bitrate));
     let reader = stream.reader();
+    log::debug!(
+        "video: {id} at {}p, itag {}, {:.1} MiB, {} kbps",
+        format.height,
+        format.itag,
+        total.unwrap_or_default() as f64 / (1024.0 * 1024.0),
+        format.bitrate / 1000
+    );
     Ok(crate::VideoFeed {
         width: format.width,
         height: format.height,
         reader,
-        stream,
+        stream: crate::VideoDownload::new(stream),
     })
 }
 
+/// How far a video's download runs ahead of what is being watched: `AHEAD` of it at the
+/// format's bitrate, so a stall in the connection has minutes to recover in, within bounds
+/// that keep a wrong bitrate from fetching too little or most of the file.
+fn window(bitrate: u32) -> usize {
+    const AHEAD: u64 = 180;
+    const LEAST: usize = 8 * 1024 * 1024;
+    const MOST: usize = 128 * 1024 * 1024;
+    const UNKNOWN: usize = 64 * 1024 * 1024;
+    match bitrate {
+        0 => UNKNOWN,
+        bits => usize::try_from(u64::from(bits) / 8 * AHEAD)
+            .unwrap_or(MOST)
+            .clamp(LEAST, MOST),
+    }
+}
+
+/// Opens the stream and waits for the preroll, each under its own deadline.
 async fn attempt_open(api: &Arc<YtMusic>, id: &str) -> Result<Loaded> {
     let started = Instant::now();
     let (format, audio) = tokio::time::timeout(PATIENCE, api.open_audio(id))

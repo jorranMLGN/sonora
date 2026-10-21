@@ -86,12 +86,20 @@ impl Chrome {
             reserved_right,
         };
         let chrome = Self::entity(cx);
-        chrome.update(cx, |chrome, cx| {
-            if *chrome != next {
+        let changed = chrome.update(cx, |chrome, cx| {
+            let changed = *chrome != next;
+            if changed {
                 *chrome = next;
                 cx.notify();
             }
+            changed
         });
+        // This runs inside the workspace's render, where gpui only redraws the views that read
+        // the chrome and skips its observers, so an aside would never hear the sidebar open or
+        // close. Notifying again once the frame is drawn reaches them.
+        if changed {
+            cx.defer(move |cx| chrome.update(cx, |_, cx| cx.notify()));
+        }
     }
 
     pub fn get(cx: &App) -> Self {

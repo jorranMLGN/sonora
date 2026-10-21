@@ -65,14 +65,30 @@ pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Measuring, Waveform};
 
 /// A video to show beside a track's sound: a seekable reader over its bytes and its size.
 ///
-/// The `stream` keeps downloading ahead of the reader, so a caller holds it for as long as it
-/// reads. Once the feed is dropped the download stops, and a read blocked on bytes that will
-/// never come fails with a timed-out error within 20 seconds at most rather than waiting forever.
+/// The `stream` keeps downloading a few minutes ahead of the reader, so a caller holds it for as
+/// long as it reads. Once the feed is dropped the download stops, and a read blocked on bytes
+/// that will never come fails with a timed-out error within 20 seconds at most rather than
+/// waiting forever.
 pub struct VideoFeed {
     pub width: u32,
     pub height: u32,
     pub reader: stream::Reader,
-    pub stream: stream::Stream,
+    pub stream: VideoDownload,
+}
+
+/// The download behind a [`VideoFeed`]: it runs for as long as this is held.
+pub struct VideoDownload(stream::Stream);
+
+impl VideoDownload {
+    pub(crate) fn new(stream: stream::Stream) -> Self {
+        Self(stream)
+    }
+
+    /// Whether the download broke for good, so every read past what had arrived fails and a
+    /// movie reading it can only be started again from a fresh feed.
+    pub fn broken(&self) -> bool {
+        self.0.failed().is_some()
+    }
 }
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
