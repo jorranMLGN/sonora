@@ -47,6 +47,9 @@ pub(crate) struct CanvasArt {
     width: Pixels,
     height: Pixels,
     radius: Pixels,
+    /// Whether the clip fills whatever box its parent gives it instead of the `set_side` one.
+    /// Such a clip is rounded only at its bottom corners, by `radius`.
+    fill: bool,
     armed: bool,
     /// When `pull` last ran, which is when this view was last on screen.
     drawn: Instant,
@@ -80,6 +83,7 @@ impl CanvasArt {
             width: px(0.),
             height: px(0.),
             radius: px(0.),
+            fill: false,
             armed: false,
             drawn: Instant::now(),
             generation: 0,
@@ -90,25 +94,41 @@ impl CanvasArt {
     /// sits inside it, letterboxed.
     pub(crate) fn set_side(&mut self, width: Pixels, height: Pixels, radius: Pixels) {
         (self.width, self.height, self.radius) = (width, height, radius);
+        self.fill = false;
+    }
+
+    /// Makes the clip fill the window-sized box its parent lays it in, with no lag behind a
+    /// resize, rounding only its bottom corners by `radius` so the top meets the title bar.
+    pub(crate) fn fill(&mut self, radius: Pixels) {
+        self.radius = radius;
+        self.fill = true;
     }
 
     /// Takes the player's newest frame when it is new, and keeps the loop armed while one plays.
     fn pull(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (width, height) = match self.fill {
+            true => (window.viewport_size().width, window.viewport_size().height),
+            false => (self.width, self.height),
+        };
         let drawn = match self.source {
             // an upright clip cropped to the box is as wide as the box, or wider
-            Source::Canvas => self.width.max(self.height * (9. / 16.)),
+            Source::Canvas => width.max(height * (9. / 16.)),
             // a wide clip fitted into the box is as wide as the box, or narrower
-            Source::Video => self.width.min(self.height * (16. / 9.)),
+            Source::Video => width.min(height * (16. / 9.)),
         };
         let wide = (f32::from(drawn) * window.scale_factor()).ceil();
         let Some((generation, newest)) = newest(self.source, Some(wide as u32), cx) else {
             self.release(window, cx);
             return;
         };
-        // another clip since the last draw, maybe while this view was off screen: its first
-        // frame is not here yet, and the one held belongs to the song before
+        // another clip since the last draw, maybe while this view was off screen
         if generation != self.generation {
-            self.release(window, cx);
+            let recent = self.drawn.elapsed() <= LINGER;
+            match keep_frame(self.source, true, newest.is_some(), recent) {
+                // any frame of the new clip replaces the held one, whatever its index
+                true => self.index = 0,
+                false => self.release(window, cx),
+            }
             self.generation = generation;
         }
         if let Some(frame) = newest
@@ -175,13 +195,17 @@ impl Render for CanvasArt {
             return gpui::div().into_any_element();
         };
         img(image)
-            .w(self.width)
-            .h(self.height)
+            .map(|this| match self.fill {
+                true => this
+                    .size_full()
+                    .rounded_bl(self.radius)
+                    .rounded_br(self.radius),
+                false => this.w(self.width).h(self.height).rounded(self.radius),
+            })
             .object_fit(match self.source {
                 Source::Canvas => ObjectFit::Cover,
                 Source::Video => ObjectFit::Contain,
             })
-            .rounded(self.radius)
             .into_any_element()
     }
 }
@@ -207,5 +231,31 @@ fn newest(source: Source, width: Option<u32>, cx: &App) -> Option<(u64, Option<A
             }
             Some((video.generation(), movie.frame()))
         }
+    }
+}
+
+/// Whether the picture held stays up when the clip's generation may have `changed`. A Canvas
+/// drops it at once, since its next clip is another song. A video keeps it while the new movie
+/// has no frame yet, which is a reload at another height of the same video, but only when
+/// this view drew it a moment ago: an older picture may be from the track before.
+fn keep_frame(source: Source, changed: bool, has_frame: bool, drawn_recently: bool) -> bool {
+    !changed || (source == Source::Video && !has_frame && drawn_recently)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reloaded_video_keeps_its_last_picture_until_the_new_one() {
+        assert!(keep_frame(Source::Video, true, false, true));
+        assert!(!keep_frame(Source::Video, true, true, true));
+        assert!(keep_frame(Source::Video, false, true, false));
+    }
+
+    #[test]
+    fn a_stale_picture_or_a_new_canvas_is_dropped() {
+        assert!(!keep_frame(Source::Video, true, false, false));
+        assert!(!keep_frame(Source::Canvas, true, false, true));
     }
 }

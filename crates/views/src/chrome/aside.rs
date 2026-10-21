@@ -271,7 +271,7 @@ enum QueueArt {
 
 impl QueueArt {
     /// Chooses the slot's art. `shown` is whether the slot exists at all (titled aside, Queue
-    /// tab), `video` whether a music video plays here rather than in the PiP window, `canvas`
+    /// tab), `video` whether a music video is placed in the slot, `canvas`
     /// whether a Canvas plays, and `large` an upgraded cover for the playing track that wins
     /// over its own `small` one.
     fn pick(
@@ -1923,7 +1923,7 @@ impl Render for Aside {
             .filter(|_| !local)
             .and_then(|album| Sonora::global(cx).cover.read(cx).large_for(album));
         let video =
-            Sonora::global(cx).video.read(cx).place() != VideoPlace::Pip && video_showing(cx);
+            Sonora::global(cx).video.read(cx).place() == VideoPlace::Slot && video_showing(cx);
         let art = QueueArt::pick(shown, video, canvas_playing(cx), small, large);
         let video = matches!(art, Some(QueueArt::Video));
         let width = Chrome::sidebar_right(cx) - theme.metrics.pad * 2.;

@@ -89,9 +89,9 @@ pub struct FullscreenView {
     /// The panel a video put away, given back once no video shows or the view closes. It is
     /// never saved, so the reader's `fullscreen_tab` stays what they picked.
     held: Option<SideTab>,
-    /// `Video::generation` of the video that last put the panel away, so a panel the reader
-    /// opens over that same video stays open.
-    hidden_for: Option<u64>,
+    /// Whether the video played here when `hold_panel` last looked, so the panel is put away
+    /// only as a video arrives and a panel the reader opens over it stays open.
+    here: bool,
     /// Whether the view is up, as the root last said through `set_open`.
     open: bool,
     seek: ScrubberState,
@@ -163,7 +163,7 @@ impl FullscreenView {
             aside,
             panel,
             held: None,
-            hidden_for: None,
+            here: false,
             open: false,
             seek: ScrubberState::new("fullscreen-seek"),
             pending: None,
@@ -237,22 +237,17 @@ impl FullscreenView {
     /// Puts the side panel away when a video starts filling the view, and gives it back once
     /// none does. Runs from the hooks that change either, never from `render`.
     fn hold_panel(&mut self, cx: &mut Context<Self>) {
-        let generation = Sonora::global(cx).video.read(cx).generation();
-        match self.video_here(cx) {
-            true if self.hidden_for != Some(generation) => {
-                self.hidden_for = Some(generation);
-                if let Some(panel) = self.panel.take() {
-                    self.held = Some(panel);
-                }
+        let here = self.video_here(cx);
+        let was = std::mem::replace(&mut self.here, here);
+        if should_hide(was, here) {
+            if let Some(panel) = self.panel.take() {
+                self.held = Some(panel);
             }
-            true => {}
-            false => {
-                self.hidden_for = None;
-                if let Some(tab) = self.held.take() {
-                    self.panel = Some(tab);
-                    self.aside.update(cx, |aside, cx| aside.show(tab, cx));
-                }
-            }
+            return;
+        }
+        if !here && let Some(tab) = self.held.take() {
+            self.panel = Some(tab);
+            self.aside.update(cx, |aside, cx| aside.show(tab, cx));
         }
     }
 
@@ -1248,11 +1243,8 @@ impl Render for FullscreenView {
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let corner: Option<Pixels> = None;
         if video {
-            // the view as laid out last frame, which leaves out the title bar above it
-            let room = self.root_bounds.get().size;
-            self.video_art.update(cx, |art, _| {
-                art.set_side(room.width, room.height, corner.unwrap_or_default())
-            });
+            self.video_art
+                .update(cx, |art, _| art.fill(corner.unwrap_or_default()));
         }
 
         div()
@@ -1286,15 +1278,7 @@ impl Render for FullscreenView {
             )
             // the video takes the whole view, under the controls, and the cover steps aside
             .when(video, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(self.video_art.clone()),
-                )
+                this.child(div().absolute().inset_0().child(self.video_art.clone()))
             })
             .when(visualizer_on, |this| {
                 this.child(
@@ -1402,6 +1386,12 @@ impl Render for FullscreenView {
     }
 }
 
+/// Whether the side panel goes away now: only as a video starts playing here, so a reload of
+/// the same video at another height leaves a panel the reader opened alone.
+fn should_hide(was_here: bool, is_here: bool) -> bool {
+    !was_here && is_here
+}
+
 fn presentation_scale(presented: Pixels, layout: Pixels) -> f32 {
     presented.as_f32() / layout.as_f32()
 }
@@ -1417,5 +1407,13 @@ mod tests {
         let scale = presentation_scale(presented, layout);
 
         assert!((layout.as_f32() * scale - presented.as_f32()).abs() < 0.001);
+    }
+
+    #[test]
+    fn the_panel_hides_only_as_a_video_arrives() {
+        assert!(should_hide(false, true));
+        assert!(!should_hide(true, true));
+        assert!(!should_hide(true, false));
+        assert!(!should_hide(false, false));
     }
 }
