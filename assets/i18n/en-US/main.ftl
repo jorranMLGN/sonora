@@ -245,6 +245,7 @@ player-video-on = Show video
 player-video-off = Hide video
 video-pip = Picture in picture
 video-large = Fullscreen
+video-back = Back to Sonora
 fullscreen-artwork = Artwork
 
 # filters

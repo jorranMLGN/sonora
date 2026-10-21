@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext as _, Bounds, Global, Pixels, Point, Size, TitlebarOptions, WindowBounds,
     WindowDecorations, WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
-use state::{MiniCorner, Sonora};
+use state::{MiniCorner, Place, Sonora};
 use ui::ActiveTheme as _;
 use views::MiniPlayer;
 
@@ -29,7 +29,7 @@ const ABOVE: WindowKind = WindowKind::PopUp;
 #[cfg(not(any(target_os = "macos", windows)))]
 const ABOVE: WindowKind = WindowKind::Normal;
 
-fn kind(on_top: bool) -> WindowKind {
+pub(crate) fn kind(on_top: bool) -> WindowKind {
     match on_top {
         true => ABOVE,
         false => WindowKind::Normal,
@@ -37,17 +37,29 @@ fn kind(on_top: bool) -> WindowKind {
 }
 
 fn placement(corner: MiniCorner, cx: &App) -> Bounds<Pixels> {
-    let screen = cx
-        .primary_display()
+    cornered(corner, MINI_SIZE, screen(cx))
+}
+
+/// The primary display's bounds, or a 1920×1080 stand-in when there is none.
+pub(crate) fn screen(cx: &App) -> Bounds<Pixels> {
+    cx.primary_display()
         .map(|display| display.bounds())
         .unwrap_or_else(|| Bounds {
             origin: Point::default(),
             size: size(px(1920.), px(1080.)),
-        });
+        })
+}
+
+/// Where a floating window of `size` sits in `corner` of `screen`, `INSET` from its edges.
+pub(crate) fn cornered(
+    corner: MiniCorner,
+    size: Size<Pixels>,
+    screen: Bounds<Pixels>,
+) -> Bounds<Pixels> {
     let left = screen.origin.x + INSET;
-    let right = screen.origin.x + screen.size.width - MINI_SIZE.width - INSET;
+    let right = screen.origin.x + screen.size.width - size.width - INSET;
     let top = screen.origin.y + INSET;
-    let bottom = screen.origin.y + screen.size.height - MINI_SIZE.height - INSET;
+    let bottom = screen.origin.y + screen.size.height - size.height - INSET;
 
     let origin = match corner {
         MiniCorner::TopLeft => point(left, top),
@@ -56,10 +68,7 @@ fn placement(corner: MiniCorner, cx: &App) -> Bounds<Pixels> {
         MiniCorner::BottomRight => point(right, bottom),
     };
 
-    Bounds {
-        origin,
-        size: MINI_SIZE,
-    }
+    Bounds { origin, size }
 }
 
 /// Reopens an open mini player whenever its corner or window kind changes.
@@ -99,6 +108,7 @@ pub fn close(cx: &mut App) {
     handle
         .update(cx, |_, window, _| window.remove_window())
         .ok();
+    give_back(cx);
 }
 
 /// Reopens the window, because gpui can size a window but not move one.
@@ -116,6 +126,7 @@ pub fn open(cx: &mut App) {
     }
     let settings = Sonora::global(cx).settings.read(cx);
     let (corner, on_top) = (settings.mini_corner(), settings.mini_on_top());
+    take_away(cx);
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(placement(corner, cx))),
@@ -149,11 +160,37 @@ pub fn open(cx: &mut App) {
                     .ok();
             }
             cx.set_global(Mini(Some(handle)));
-            cx.observe_release(&handle.entity(cx).unwrap(), |_, cx| {
-                cx.set_global(Mini(None));
+            // a window `close` already let go of, as in `reposition`, is no longer the open one
+            let id = handle.window_id();
+            cx.observe_release(&handle.entity(cx).unwrap(), move |_, cx| {
+                let open = cx.try_global::<Mini>().and_then(|mini| mini.0);
+                if open.is_some_and(|open| open.window_id() == id) {
+                    cx.set_global(Mini(None));
+                    give_back(cx);
+                }
             })
             .detach();
         }
-        Err(error) => log::warn!("mini: cannot open the window: {error:#}"),
+        Err(error) => {
+            log::warn!("mini: cannot open the window: {error:#}");
+            give_back(cx);
+        }
+    }
+}
+
+/// The mini player in use is no place for the video, unless the PiP or fullscreen shows it.
+fn take_away(cx: &mut App) {
+    let video = Sonora::global(cx).video.clone();
+    if matches!(video.read(cx).place(), Place::Slot) {
+        video.update(cx, |video, cx| video.set_place(Place::None, cx));
+    }
+}
+
+/// Offers the video back to the sidebar slot once the mini player closes; the sidebar lets go
+/// of it again when its slot is not showing.
+fn give_back(cx: &mut App) {
+    let video = Sonora::global(cx).video.clone();
+    if video.read(cx).place() == Place::None {
+        video.update(cx, |video, cx| video.set_place(Place::Slot, cx));
     }
 }

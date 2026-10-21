@@ -8,6 +8,7 @@ mod http;
 mod logging;
 mod memory;
 mod mini;
+mod pip;
 mod single;
 #[cfg(windows)]
 mod thumbbar;
@@ -175,6 +176,7 @@ fn main() {
         }
         actions::register(lingers, cx);
         mini::watch(cx);
+        pip::watch(cx);
         memory::watch(cx);
 
         open_window(cx);
