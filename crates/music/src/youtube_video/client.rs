@@ -187,6 +187,10 @@ impl MusicApi for YouTubeVideoClient {
             .map(Some)
     }
 
+    async fn has_video(&self, _track_id: &str) -> Result<bool> {
+        Ok(true)
+    }
+
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
         let id = escape::component(id);
         match kind {

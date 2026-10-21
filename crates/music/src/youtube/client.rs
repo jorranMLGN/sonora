@@ -60,6 +60,16 @@ impl YouTubeClient {
 #[async_trait]
 impl MusicApi for YouTubeClient {
     async fn video(&self, track_id: &str, max_height: u32) -> Result<Option<crate::VideoFeed>> {
+        match self.has_video(track_id).await? {
+            true => crate::youtube::playback::open_video_feed(&self.api, track_id, max_height)
+                .await
+                .map(Some),
+            false => Ok(None),
+        }
+    }
+
+    /// One Music-client player request per track, cached, read for its `musicVideoType`.
+    async fn has_video(&self, track_id: &str) -> Result<bool> {
         let cached = self
             .kinds
             .lock()
@@ -82,12 +92,7 @@ impl MusicApi for YouTubeClient {
                 shows
             }
         };
-        match shows {
-            true => crate::youtube::playback::open_video_feed(&self.api, track_id, max_height)
-                .await
-                .map(Some),
-            false => Ok(None),
-        }
+        Ok(shows)
     }
 
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {

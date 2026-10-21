@@ -12,7 +12,7 @@ use gpui::{Context, Entity, Task};
 use music::video::{Clock, Movie};
 
 use crate::{
-    AppSettings, Codec, Io, Playback, PlaybackState, Session, SessionEvent, join,
+    AppSettings, Codec, CodecState, Io, Playback, PlaybackState, Session, SessionEvent, join,
     playback::PlaybackEvent,
 };
 
@@ -45,6 +45,17 @@ enum Change {
     Drop,
 }
 
+/// What `reconcile` does about the movie, given its height, the height loading and the height
+/// the place wants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Plan {
+    /// Nothing to do.
+    Keep,
+    /// The movie already plays at the wanted height; drop the load of another one.
+    Cancel,
+    Load(u32),
+}
+
 /// The playback position as last read from `Playback`, run forward on wall time while playing.
 /// It is what a `Movie` picks its frames by, read from the decoding thread.
 #[derive(Clone, Default)]
@@ -53,7 +64,11 @@ struct PlaybackClock(Arc<Mutex<Snapshot>>);
 struct Snapshot {
     at: Duration,
     since: Instant,
+    /// Playing, as opposed to paused; a paused clock reads `None`.
     playing: bool,
+    /// Whether `Playback`'s own clock moves. It is parked while playing too, from a seek until
+    /// the engine reports audio from its target, and then reads `at` without advancing.
+    running: bool,
 }
 
 /// A started movie with the download feeding it. Dropping it stops both.
@@ -78,8 +93,6 @@ pub struct Video {
     /// The tagged id of the track this entity is following.
     track: Option<String>,
     place: Place,
-    /// When the place last became `None`, which the grace timer measures from.
-    idle: Option<Instant>,
     /// Whether each track asked about has a video, so a track without one is asked once.
     known: HashMap<String, bool>,
     loaded: Option<Loaded>,
@@ -92,6 +105,9 @@ pub struct Video {
     /// a new movie's first frame from the last one of the movie before it.
     generation: u64,
     task: Option<Task<()>>,
+    /// Asks whether the current track has a video while no decoder is loaded, which is what
+    /// raises the decoder prompt. Only metadata: nothing is downloaded.
+    probe: Option<Task<()>>,
     grace: Option<Task<()>>,
 }
 
@@ -130,13 +146,13 @@ impl Video {
             clock: PlaybackClock::default(),
             track: None,
             place: Place::None,
-            idle: None,
             known: HashMap::new(),
             loaded: None,
             loading: None,
             failed: None,
             generation: 0,
             task: None,
+            probe: None,
             grace: None,
         }
     }
@@ -177,10 +193,7 @@ impl Video {
         self.place = place;
         match place {
             Place::None => self.wait(cx),
-            Place::Slot | Place::Fullscreen | Place::Pip => {
-                self.idle = None;
-                self.grace = None;
-            }
+            Place::Slot | Place::Fullscreen | Place::Pip => self.grace = None,
         }
         self.reconcile(cx);
         cx.notify();
@@ -189,7 +202,6 @@ impl Video {
     /// Starts the grace timer; when it runs out with still no place, everything stops.
     fn wait(&mut self, cx: &mut Context<Self>) {
         let idle = Instant::now();
-        self.idle = Some(idle);
         self.grace = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(GRACE).await;
             this.update(cx, |this, cx| {
@@ -206,7 +218,8 @@ impl Video {
     fn sync_clock(&mut self, cx: &mut Context<Self>) {
         let playback = self.playback.read(cx);
         let playing = *playback.state() == PlaybackState::Playing;
-        self.clock.set(playback.live_position(), playing);
+        self.clock
+            .set(playback.live_position(), playing, playback.clock_running());
     }
 
     /// Runs on every playback change, so the common case (same track, nothing to do) has to
@@ -221,6 +234,7 @@ impl Video {
         if next(self.track.as_deref(), track.as_deref()) == Change::Drop {
             self.track = track;
             self.task = None;
+            self.probe = None;
             self.loading = None;
             self.failed = None;
             if self.loaded.take().is_some() {
@@ -234,35 +248,79 @@ impl Video {
 
     /// Brings the movie in line with the setting, the place and the decoder: stops it when the
     /// setting is off, and loads one when a place wants a height nothing is playing or loading
-    /// at. With no place it changes nothing; the grace timer decides.
+    /// at. With no place it changes nothing; the grace timer decides. Without a decoder it only
+    /// asks whether the track has a video, and only while the decoder could still be offered.
     fn reconcile(&mut self, cx: &mut Context<Self>) {
         let settings = self.settings.read(cx);
         let on = settings.video();
         let cap = settings.video_max_height();
         if !on {
+            self.probe = None;
             self.stop(cx);
             return;
         }
-        let Some(height) = height(self.place, cap) else {
-            return;
-        };
         let Some(id) = self.track.clone() else { return };
+        let loaded = self.loaded.as_ref().map(|loaded| loaded.height);
+        let height = match plan(loaded, self.loading, height(self.place, cap)) {
+            Plan::Keep => return,
+            Plan::Cancel => {
+                self.settle(cx);
+                return;
+            }
+            Plan::Load(height) => height,
+        };
         let known = self.known.get(&id).copied();
-        if known == Some(false)
-            || self.loading == Some(height)
-            || self.loaded.as_ref().map(|loaded| loaded.height) == Some(height)
-            || self.failed.as_ref() == Some(&(id.clone(), height))
-        {
+        if known == Some(false) || self.failed.as_ref() == Some(&(id.clone(), height)) {
             return;
         }
         let ready = self.codec.update(cx, |codec, _| codec.ready());
-        // A track known to have a video only waits for the decoder; one never asked about is
-        // asked first, since that answer is what raises the decoder prompt.
-        if known == Some(true) && !wanted(on, ready, self.place) {
+        match wanted(on, ready, self.place) {
+            true => self.load(id, height, cx),
+            false => self.ask(id, known, cx),
+        }
+    }
+
+    /// No decoder: raises the prompt for a track known to have a video, and otherwise asks the
+    /// provider, from metadata alone. Asks nothing once the decoder was declined, failed or
+    /// cannot exist here, since no answer could change anything.
+    fn ask(&mut self, id: String, known: Option<bool>, cx: &mut Context<Self>) {
+        let codec = self.codec.read(cx);
+        if codec.state() != CodecState::Missing || !codec.supported() {
+            return;
+        }
+        if known == Some(true) {
             self.codec.update(cx, |codec, cx| codec.want(cx));
             return;
         }
-        self.load(id, height, cx);
+        if self.probe.is_some() {
+            return;
+        }
+        let session = self.session.read(cx);
+        let Some(client) = session
+            .slug_for(&id)
+            .and_then(|slug| session.client_for_slug(slug))
+        else {
+            return;
+        };
+        let io = self.io.clone();
+        let asked = id.clone();
+        self.probe = Some(cx.spawn(async move |this, cx| {
+            let answer = join(io.spawn(async move { client.has_video(&asked).await })).await;
+            this.update(cx, |this, cx| {
+                this.probe = None;
+                match answer {
+                    Ok(has) => {
+                        this.known.insert(id.clone(), has);
+                        cx.notify();
+                        if has && this.track.as_deref() == Some(id.as_str()) {
+                            this.codec.update(cx, |codec, cx| codec.want(cx));
+                        }
+                    }
+                    Err(error) => log::warn!("video: cannot ask whether {id} has one: {error:#}"),
+                }
+            })
+            .ok();
+        }));
     }
 
     /// The decoder arrived: try the current track again, a failed one included, since a new
@@ -346,13 +404,7 @@ impl Video {
             }
         };
         self.known.insert(id.to_owned(), feed.is_some());
-        let ready = self.codec.update(cx, |codec, cx| {
-            let ready = codec.ready();
-            if !ready && feed.is_some() {
-                codec.want(cx);
-            }
-            ready
-        });
+        let ready = self.codec.update(cx, |codec, _| codec.ready());
         // A place lost meanwhile does not stop the load: the grace timer decides that.
         let on = self.settings.read(cx).video();
         let current = self.track.as_deref() == Some(id);
@@ -404,8 +456,8 @@ impl Video {
 }
 
 impl PlaybackClock {
-    /// Restarts the clock at `at`, running when `playing`.
-    fn set(&self, at: Duration, playing: bool) {
+    /// Restarts the clock at `at`: `None` unless `playing`, and held at `at` unless `running`.
+    fn set(&self, at: Duration, playing: bool, running: bool) {
         let Ok(mut snapshot) = self.0.lock() else {
             return;
         };
@@ -413,6 +465,7 @@ impl PlaybackClock {
             at,
             since: Instant::now(),
             playing,
+            running,
         };
     }
 }
@@ -420,9 +473,11 @@ impl PlaybackClock {
 impl Clock for PlaybackClock {
     fn now(&self) -> Option<Duration> {
         let snapshot = self.0.lock().ok()?;
-        snapshot
-            .playing
-            .then(|| snapshot.at + snapshot.since.elapsed())
+        let moved = match snapshot.running {
+            true => snapshot.since.elapsed(),
+            false => Duration::ZERO,
+        };
+        snapshot.playing.then(|| snapshot.at + moved)
     }
 }
 
@@ -432,6 +487,7 @@ impl Default for Snapshot {
             at: Duration::ZERO,
             since: Instant::now(),
             playing: false,
+            running: false,
         }
     }
 }
@@ -454,6 +510,21 @@ fn keep(place: Place, idle: Duration) -> bool {
 /// Whether a movie may start: the setting on, a decoder loaded, and a place to show it.
 fn wanted(video_on: bool, codec_ready: bool, place: Place) -> bool {
     video_on && codec_ready && place != Place::None
+}
+
+/// What to do about the movie: keep it, drop a load at another height when the movie already
+/// plays at the `wanted` one, or load the `wanted` height. No place (`wanted` `None`) keeps
+/// everything; the grace timer decides.
+fn plan(loaded: Option<u32>, loading: Option<u32>, wanted: Option<u32>) -> Plan {
+    let Some(wanted) = wanted else {
+        return Plan::Keep;
+    };
+    match (loaded == Some(wanted), loading) {
+        (true, Some(_)) => Plan::Cancel,
+        (true, None) => Plan::Keep,
+        (false, Some(loading)) if loading == wanted => Plan::Keep,
+        (false, _) => Plan::Load(wanted),
+    }
 }
 
 /// What the playing track changing from `current` to `playing` does to the movie.
@@ -490,7 +561,7 @@ mod tests {
     #[test]
     fn a_seek_resets_the_clock() {
         let clock = PlaybackClock::default();
-        clock.set(Duration::from_secs(3600), true);
+        clock.set(Duration::from_secs(3600), true, true);
         let now = clock.now().unwrap();
         assert!(now >= Duration::from_secs(3600));
         assert!(now < Duration::from_millis(3_600_100));
@@ -499,8 +570,32 @@ mod tests {
     #[test]
     fn a_paused_clock_reads_none() {
         let clock = PlaybackClock::default();
-        clock.set(Duration::from_secs(12), false);
+        clock.set(Duration::from_secs(12), false, false);
         assert_eq!(clock.now(), None);
+    }
+
+    #[test]
+    fn a_parked_clock_holds_its_place() {
+        let clock = PlaybackClock::default();
+        clock.set(Duration::from_secs(42), true, false);
+        let first = clock.now();
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(first, Some(Duration::from_secs(42)));
+        assert_eq!(clock.now(), first);
+        clock.set(Duration::from_secs(42), true, true);
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(clock.now().unwrap() > Duration::from_secs(42));
+    }
+
+    #[test]
+    fn a_returning_place_cancels_the_other_height() {
+        assert_eq!(plan(Some(480), Some(1080), Some(480)), Plan::Cancel);
+        assert_eq!(plan(Some(480), None, Some(480)), Plan::Keep);
+        assert_eq!(plan(Some(480), None, Some(1080)), Plan::Load(1080));
+        assert_eq!(plan(Some(480), Some(1080), Some(1080)), Plan::Keep);
+        assert_eq!(plan(None, Some(1080), Some(480)), Plan::Load(480));
+        assert_eq!(plan(Some(480), Some(1080), None), Plan::Keep);
+        assert_eq!(plan(None, None, Some(480)), Plan::Load(480));
     }
 
     #[test]

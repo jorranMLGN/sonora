@@ -113,6 +113,10 @@ impl MusicApi for Tagged {
         self.inner.video(tag::untag(track_id), max_height).await
     }
 
+    async fn has_video(&self, track_id: &str) -> Result<bool> {
+        self.inner.has_video(tag::untag(track_id)).await
+    }
+
     async fn waveform(&self, track_id: &str) -> Result<Option<crate::Waveform>> {
         self.inner.waveform(tag::untag(track_id)).await
     }

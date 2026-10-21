@@ -191,6 +191,12 @@ pub trait MusicApi: Send + Sync {
         Ok(None)
     }
 
+    /// Whether this track has a video, learned from metadata alone, so nothing is downloaded.
+    /// Asked when no decoder is loaded yet, to decide whether to offer one.
+    async fn has_video(&self, _track_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     /// The track's level over its length as the provider publishes it, or `None` when it
     /// publishes none. Only SoundCloud answers; a track played through `engine` is measured
     /// from its own audio instead, through `Player::analysis`.

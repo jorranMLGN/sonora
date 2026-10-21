@@ -1907,7 +1907,7 @@ impl AppSettings {
             return;
         }
         self.state.pip_corner = corner;
-        self.schedule_state_save(cx);
+        self.schedule_save(cx);
     }
 
     pub fn set_pip_size(&mut self, size: (f32, f32), cx: &mut Context<Self>) {
@@ -2097,6 +2097,9 @@ impl AppSettings {
     }
 
     pub fn set_video(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.values.appearance.video == on {
+            return;
+        }
         self.values.appearance.video = on;
         self.schedule_save(cx);
     }

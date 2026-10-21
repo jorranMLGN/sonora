@@ -2036,6 +2036,12 @@ impl Playback {
         }
     }
 
+    /// Whether `live_position` is moving. It is parked while paused, and also while playing
+    /// until the engine reports audio from a seek's target.
+    pub fn clock_running(&self) -> bool {
+        self.clock.since.is_some()
+    }
+
     pub fn track(&self) -> Option<&Track> {
         self.track.as_ref()
     }
