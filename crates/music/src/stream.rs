@@ -821,8 +821,10 @@ enum Woken {
 }
 
 impl<S: Ranged> Ranges<S> {
-    /// Pulls runs into the spool until every byte of it has arrived, moving to wherever a
-    /// reader asks, and stops as soon as nothing is left that could read it.
+    /// Pulls runs into the spool, moving to wherever a reader asks: until every byte has
+    /// arrived, or, when windowed, only up to `window` past the reader, idling there until it
+    /// comes closer. Stops as soon as nothing is left that could read it, the stream and every
+    /// reader dropped.
     ///
     /// This one task is the only writer, and it never polls a source it has moved away from,
     /// so nothing a stopped run was fetching can land after the next run has started.

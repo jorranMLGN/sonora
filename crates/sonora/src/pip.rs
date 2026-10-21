@@ -60,8 +60,8 @@ pub fn toggle(cx: &mut App) {
     }
 }
 
-/// Closes the window and hands the video back to the sidebar slot, which lets go of it in turn
-/// when the sidebar is not showing.
+/// Closes the window and lets go of the video, which the sidebar slot claims when it is on
+/// screen.
 pub fn close(cx: &mut App) {
     let Some(handle) = cx.try_global::<Pip>().and_then(|pip| pip.0) else {
         return;
@@ -82,13 +82,16 @@ pub fn reposition(cx: &mut App) {
     open(cx);
 }
 
-/// Opens the window and moves the video into it. A track without a video opens nothing.
+/// Opens the window and moves the video into it. Opens nothing while video is off or for a
+/// track known to have no video; one not yet asked about opens, and `watch` closes the window
+/// again if the answer is no.
 pub fn open(cx: &mut App) {
     if is_open(cx) {
         return;
     }
     let video = Sonora::global(cx).video.clone();
-    if !video.read(cx).has_video() {
+    let on = Sonora::global(cx).settings.read(cx).video();
+    if !on || !video.read(cx).may_have_video() {
         return;
     }
     let settings = Sonora::global(cx).settings.read(cx);
@@ -154,13 +157,11 @@ fn should_close(place: Place, video_on: bool, lacks_video: bool) -> bool {
     place != Place::Pip || !video_on || lacks_video
 }
 
-/// Moves a video still placed in the PiP back to the slot. A place something else has taken
-/// since, such as fullscreen, stays.
+/// Lets go of a video still placed in the PiP, for the sidebar slot to claim when it is on
+/// screen. A place something else has taken since, such as fullscreen, stays.
 fn hand_back(cx: &mut App) {
     let video = Sonora::global(cx).video.clone();
-    if video.read(cx).place() == Place::Pip {
-        video.update(cx, |video, cx| video.set_place(Place::Slot, cx));
-    }
+    video.update(cx, |video, cx| video.release(Place::Pip, cx));
 }
 
 /// Where the window opens: `PIP_SIZE`, or the size it was last left at, in `corner` of

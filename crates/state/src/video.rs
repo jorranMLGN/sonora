@@ -78,7 +78,8 @@ struct Snapshot {
     running: bool,
 }
 
-/// A started movie with the download feeding it. Dropping it stops both.
+/// A started movie with the download feeding it. Dropping it stops the movie; the download
+/// stops once the movie's decoding thread has exited and let go of its reader.
 struct Loaded {
     movie: Movie,
     /// The feed's download, kept so it lives as long as the movie reading it, and asked
@@ -201,28 +202,32 @@ impl Video {
         self.generation
     }
 
-    /// Whether the current track has a video: one is playing, loading, or the provider said so
-    /// earlier. A track never asked about (the setting off, or no place yet) reads `false`.
+    /// Whether the current track has a video: one is playing, one is catching up at another
+    /// height, or the provider said so. A load still in flight does not count, since the track
+    /// may turn out to have none, and a track never asked about (the setting off, or no place
+    /// yet) reads `false`.
     pub fn has_video(&self) -> bool {
-        let known = self
-            .track
-            .as_ref()
-            .and_then(|id| self.known.get(id))
-            .copied();
-        self.loaded.is_some()
-            || self.pending.is_some()
-            || self.loading.is_some()
-            || known == Some(true)
+        has(self.loaded.is_some(), self.pending.is_some(), self.known())
     }
 
     /// Whether the provider has said the current track has no video. Unlike `!has_video()`, a
     /// track not yet asked about reads `false`, so a window waiting on the answer stays.
     pub fn lacks_video(&self) -> bool {
+        self.known() == Some(false)
+    }
+
+    /// Whether a track is playing that is not known to lack a video, so a place may be offered
+    /// for it before the provider has answered.
+    pub fn may_have_video(&self) -> bool {
+        may_have(self.track.is_some(), self.known())
+    }
+
+    /// What the provider said about the current track's video, if it was asked.
+    fn known(&self) -> Option<bool> {
         self.track
             .as_ref()
             .and_then(|id| self.known.get(id))
             .copied()
-            == Some(false)
     }
 
     pub fn place(&self) -> Place {
@@ -249,6 +254,17 @@ impl Video {
             Place::Slot | Place::Fullscreen | Place::Pip => self.grace = None,
         }
         self.reconcile(cx);
+        cx.notify();
+    }
+
+    /// Says `from` lets go of the video, as a closing PiP window, mini player or fullscreen
+    /// view does. A video placed there goes to no place, and a video some other place has taken
+    /// since stays. Every observer hears of it either way, so the sidebar slot claims the video
+    /// when it is on screen, and nothing loads for one that is hidden.
+    pub fn release(&mut self, from: Place, cx: &mut Context<Self>) {
+        if let Some(place) = released(self.place, from) {
+            self.set_place(place, cx);
+        }
         cx.notify();
     }
 
@@ -471,7 +487,8 @@ impl Video {
                 .ok()
                 .flatten();
             let Some(feed) = feed else { return };
-            // held here, so dropping this task ends the download and unblocks a pending read
+            // kept for `Loaded`, which asks it whether the download broke; dropping this task
+            // does not end the download until `Movie::start` returns and lets go of the reader
             let stream = feed.stream;
             let reader = feed.reader;
             let started = join(io.spawn_blocking(move || Movie::start(reader, clock))).await;
@@ -672,6 +689,24 @@ fn retries(from: Place, to: Place) -> bool {
     to != Place::None && to != from
 }
 
+/// Whether the track has a video, given a movie on screen (`loaded`), one catching up
+/// (`pending`) and the provider's answer (`known`).
+fn has(loaded: bool, pending: bool, known: Option<bool>) -> bool {
+    loaded || pending || known == Some(true)
+}
+
+/// Whether a place may be offered for the video: a track is playing and the provider has not
+/// said it has none.
+fn may_have(track: bool, known: Option<bool>) -> bool {
+    track && known != Some(false)
+}
+
+/// The place the video moves to when `from` lets go of it while it is at `current`: no place,
+/// only if `from` still holds it.
+fn released(current: Place, from: Place) -> Option<Place> {
+    (current == from && current != Place::None).then_some(Place::None)
+}
+
 /// Whether a movie may start: the setting on, a decoder loaded, and a place to show it.
 fn wanted(video_on: bool, codec_ready: bool, place: Place) -> bool {
     video_on && codec_ready && place != Place::None
@@ -848,6 +883,38 @@ mod tests {
         assert!(retries(Place::Fullscreen, Place::Pip));
         assert!(!retries(Place::Slot, Place::Slot));
         assert!(!retries(Place::None, Place::None));
+    }
+
+    #[test]
+    fn a_load_in_flight_is_not_a_video() {
+        // a track still being looked up may have none, so it counts for nothing yet
+        assert!(!has(false, false, None));
+        assert!(has(true, false, None));
+        assert!(has(false, true, None));
+        assert!(has(false, false, Some(true)));
+        assert!(!has(false, false, Some(false)));
+    }
+
+    #[test]
+    fn a_track_not_known_to_lack_a_video_may_have_one() {
+        assert!(may_have(true, None));
+        assert!(may_have(true, Some(true)));
+        assert!(!may_have(true, Some(false)));
+        assert!(!may_have(false, None));
+    }
+
+    #[test]
+    fn a_place_letting_go_hands_the_video_to_no_place() {
+        // the slot claims it from there when it is on screen; nothing loads for a hidden one
+        assert_eq!(released(Place::Pip, Place::Pip), Some(Place::None));
+        assert_eq!(
+            released(Place::Fullscreen, Place::Fullscreen),
+            Some(Place::None)
+        );
+        // a place something else has taken since stays
+        assert_eq!(released(Place::Fullscreen, Place::Pip), None);
+        assert_eq!(released(Place::Slot, Place::Fullscreen), None);
+        assert_eq!(released(Place::None, Place::None), None);
     }
 
     #[test]

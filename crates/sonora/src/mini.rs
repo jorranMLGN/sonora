@@ -186,11 +186,9 @@ fn take_away(cx: &mut App) {
     }
 }
 
-/// Offers the video back to the sidebar slot once the mini player closes; the sidebar lets go
-/// of it again when its slot is not showing.
+/// Offers the video back once the mini player closes: the sidebar slot claims a video with no
+/// place when it is on screen, and nothing loads for a hidden one.
 fn give_back(cx: &mut App) {
     let video = Sonora::global(cx).video.clone();
-    if video.read(cx).place() == Place::None {
-        video.update(cx, |video, cx| video.set_place(Place::Slot, cx));
-    }
+    video.update(cx, |video, cx| video.release(Place::None, cx));
 }

@@ -65,10 +65,10 @@ pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Measuring, Waveform};
 
 /// A video to show beside a track's sound: a seekable reader over its bytes and its size.
 ///
-/// The `stream` keeps downloading a few minutes ahead of the reader, so a caller holds it for as
-/// long as it reads. Once the feed is dropped the download stops, and a read blocked on bytes
-/// that will never come fails with a timed-out error within 20 seconds at most rather than
-/// waiting forever.
+/// The download runs a few minutes ahead of the reader, and for as long as either the `stream`
+/// or the `reader` is held: dropping the `stream` alone does not stop it, since the reader (in a
+/// movie, until its decoding thread exits) keeps it going. A read blocked on bytes that never
+/// come fails with a timed-out error within 20 seconds at most rather than waiting forever.
 pub struct VideoFeed {
     pub width: u32,
     pub height: u32,
@@ -76,7 +76,8 @@ pub struct VideoFeed {
     pub stream: VideoDownload,
 }
 
-/// The download behind a [`VideoFeed`]: it runs for as long as this is held.
+/// The download behind a [`VideoFeed`]: one of the two handles that keep it running, the
+/// feed's reader being the other.
 pub struct VideoDownload(stream::Stream);
 
 impl VideoDownload {

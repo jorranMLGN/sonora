@@ -208,22 +208,18 @@ impl FullscreenView {
 
     /// Follows the view opening and closing, which is where the video moves. Opening takes it
     /// here, from the slot or the PiP window, so a video that starts while the view is up plays
-    /// here too. Closing hands a video placed here back to the slot, which lets go of it in
-    /// turn when the sidebar is not showing.
+    /// here too. Closing lets go of a video placed here, which the sidebar slot claims when it
+    /// is on screen.
     pub fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         if self.open == open {
             return;
         }
         self.open = open;
         let video = Sonora::global(cx).video.clone();
-        let place = match (open, video.read(cx).place()) {
-            (true, _) => Some(Place::Fullscreen),
-            (false, Place::Fullscreen) => Some(Place::Slot),
-            (false, _) => None,
-        };
-        if let Some(place) = place {
-            video.update(cx, |video, cx| video.set_place(place, cx));
-        }
+        video.update(cx, |video, cx| match open {
+            true => video.set_place(Place::Fullscreen, cx),
+            false => video.release(Place::Fullscreen, cx),
+        });
         self.hold_panel(cx);
     }
 

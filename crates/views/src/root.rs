@@ -22,6 +22,7 @@ use crate::chrome::{TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
 use crate::screens::search::SearchView;
 use crate::screens::settings::SettingsHeader;
 use crate::shared::ambient::{self, Ambient};
+use crate::shared::canvas::video_showing;
 use crate::shared::tracks::{LIBRARY_COLUMNS, album_columns};
 use crate::shells::Shell;
 use crate::shells::workspace::Workspace;
@@ -496,7 +497,8 @@ impl Root {
             return;
         }
         let setting = Sonora::global(cx).settings.read(cx).os_fullscreen();
-        let video = Sonora::global(cx).video.read(cx).has_video();
+        // a movie on screen, not one still loading: a track may turn out to have no video
+        let video = video_showing(cx);
         let in_view = matches!(self.view, RootView::Fullscreen);
         if !wants_os_fullscreen(in_view, setting, video) {
             return;

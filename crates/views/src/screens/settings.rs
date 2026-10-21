@@ -651,7 +651,9 @@ impl SettingsView {
                     .flatten(),
             )
             .chain(
-                (self.codec.read(cx).supported() || self.settings.read(cx).video())
+                // offered where Cisco ships a decoder, and shown wherever one is installed
+                (self.codec.read(cx).supported()
+                    || self.codec.read(cx).state() == CodecState::Ready)
                     .then_some(Slot::CanvasCodec),
             )
             .chain([Slot::Title("settings-group-spectrum-app")])

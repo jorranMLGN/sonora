@@ -10,9 +10,10 @@ use gpui::{
 use gpui::{Window, div, px};
 use i18n::t;
 use input::{
-    ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleMiniPlayer, ToggleQueue, ToggleVideo,
+    ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleMiniPlayer, TogglePip, ToggleQueue,
+    ToggleVideo,
 };
-use state::{AppSettings, Playback, Queue, SideTab, Sonora, WaveformPlace};
+use state::{AppSettings, Place, Playback, Queue, SideTab, Sonora, WaveformPlace};
 use ui::{
     Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Popup, Room, Scrollbar, Scrubber,
     ScrubberState, clock, tabular,
@@ -274,6 +275,25 @@ impl PlayerBar {
         )
     }
 
+    /// Floats the music video in the picture-in-picture window, or brings it back. The way to
+    /// it while the sidebar is closed, so it shows whenever video is on and the playing track is
+    /// not known to have none.
+    fn pip_button(&self, cx: &Context<Self>) -> Option<Button> {
+        let video = Sonora::global(cx).video.read(cx);
+        if !self.settings.read(cx).video() || !video.may_have_video() {
+            return None;
+        }
+        Some(
+            Button::new("toggle-pip")
+                .ghost()
+                .small()
+                .icon("icons/picture-in-picture.svg")
+                .tooltip_above("video-pip")
+                .selected(video.place() == Place::Pip)
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(TogglePip), cx)),
+        )
+    }
+
     fn fullscreen_button(&self) -> Button {
         Button::new("toggle-fullscreen")
             .ghost()
@@ -523,6 +543,7 @@ impl Render for PlayerBar {
                         .children(sides)
                         .child(self.sound(px(VOLUME_TIGHT), cx))
                         .children(self.video_button(cx))
+                        .children(self.pip_button(cx))
                         .child(self.mini_button())
                         .child(self.fullscreen_button()),
                 ),
@@ -553,6 +574,7 @@ impl Render for PlayerBar {
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
                         .children(self.video_button(cx))
+                        .children(self.pip_button(cx))
                         .child(self.mini_button())
                         .child(self.fullscreen_button()),
                 ),
