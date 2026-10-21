@@ -23,6 +23,14 @@ const GRACE: Duration = Duration::from_secs(5);
 const SMALL: u32 = 480;
 /// The stream height fullscreen asks for.
 const LARGE: u32 = 1080;
+/// How far behind the clock a reloaded movie's picture may be and still count as caught up:
+/// about one frame at 24 fps, plus the poll's own lag.
+const CAUGHT_UP: Duration = Duration::from_millis(60);
+/// How long, in playing time, a reloaded movie may take to catch up before it is shown anyway,
+/// so two movies never decode side by side for long.
+const OVERLAP: Duration = Duration::from_secs(3);
+/// How often a reloaded movie is checked for having caught up.
+const POLL: Duration = Duration::from_millis(16);
 
 /// Where the video is shown. It is shown in one place at a time; views report theirs through
 /// `Video::set_place`.
@@ -80,6 +88,13 @@ struct Loaded {
     height: u32,
 }
 
+/// A movie reloaded at another height for the same track, decoding beside the one on screen
+/// until it has caught up with the clock. Dropping it stops the movie and the poll with it.
+struct Pending {
+    loaded: Loaded,
+    _poll: Task<()>,
+}
+
 /// Follows the playing track and the place a view shows its video in, and owns the one `Movie`
 /// that plays there. Nothing here draws; a view reads `movie()` and `generation()` and watches
 /// the movie each frame it draws it.
@@ -96,6 +111,8 @@ pub struct Video {
     /// Whether each track asked about has a video, so a track without one is asked once.
     known: HashMap<String, bool>,
     loaded: Option<Loaded>,
+    /// A reload at another height still catching up; `loaded` stays on screen until it has.
+    pending: Option<Pending>,
     /// The height `task` is loading, if a load is in flight.
     loading: Option<u32>,
     /// The track and height whose load failed. Not tried again until either changes or a
@@ -151,6 +168,7 @@ impl Video {
             place: Place::None,
             known: HashMap::new(),
             loaded: None,
+            pending: None,
             loading: None,
             failed: None,
             generation: 0,
@@ -167,6 +185,17 @@ impl Video {
         self.loaded.as_ref().map(|loaded| &loaded.movie)
     }
 
+    /// Says a surface draws the video `width` pixels wide this frame. Watches the movie on
+    /// screen and a reload catching up behind it, so the reload decodes before it is shown.
+    pub fn watch(&self, width: u32) {
+        if let Some(loaded) = &self.loaded {
+            loaded.movie.watch(width);
+        }
+        if let Some(pending) = &self.pending {
+            pending.loaded.movie.watch(width);
+        }
+    }
+
     /// Which movie `movie()` is; see the field.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -180,7 +209,10 @@ impl Video {
             .as_ref()
             .and_then(|id| self.known.get(id))
             .copied();
-        self.loaded.is_some() || self.loading.is_some() || known == Some(true)
+        self.loaded.is_some()
+            || self.pending.is_some()
+            || self.loading.is_some()
+            || known == Some(true)
     }
 
     /// Whether the provider has said the current track has no video. Unlike `!has_video()`, a
@@ -199,7 +231,7 @@ impl Video {
 
     /// Reports where the video is shown. `Place::None` starts the grace period; any other place
     /// cancels it, and a place needing another height reloads at that height. The old movie
-    /// keeps playing until the new one has started.
+    /// stays on screen until the new one has caught up with the clock.
     pub fn set_place(&mut self, place: Place, cx: &mut Context<Self>) {
         if place == self.place {
             return;
@@ -252,6 +284,7 @@ impl Video {
             self.probe_failed = None;
             self.loading = None;
             self.failed = None;
+            self.pending = None;
             if self.loaded.take().is_some() {
                 log::info!("video: stopped for a new track");
             }
@@ -277,9 +310,12 @@ impl Video {
         }
         let Some(id) = self.track.clone() else { return };
         let loaded = self.loaded.as_ref().map(|loaded| loaded.height);
-        let height = match plan(loaded, self.loading, height(self.place, cap)) {
+        // a reload catching up counts as in flight
+        let pending = self.pending.as_ref().map(|pending| pending.loaded.height);
+        let height = match plan(loaded, self.loading.or(pending), height(self.place, cap)) {
             Plan::Keep => return,
             Plan::Cancel => {
+                self.pending = None;
                 self.settle(cx);
                 return;
             }
@@ -352,10 +388,11 @@ impl Video {
         }
     }
 
-    /// Drops the movie, its download and any load in flight.
+    /// Drops the movie, its download, any load in flight and any reload catching up.
     fn stop(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.loading = None;
+        self.pending = None;
         if self.loaded.take().is_some() {
             log::info!("video: stopped");
             self.generation += 1;
@@ -374,7 +411,8 @@ impl Video {
     }
 
     /// Asks the provider for the feed at `height`, then starts the movie off the ui thread.
-    /// Replaces any load in flight. Every way out of the task clears `task` and `loading`.
+    /// Replaces any load in flight and any reload catching up. Every way out of the task clears
+    /// `task` and `loading`.
     fn load(&mut self, id: String, height: u32, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let Some(client) = session
@@ -386,6 +424,7 @@ impl Video {
         let io = self.io.clone();
         let clock: Arc<dyn Clock> = Arc::new(self.clock.clone());
         let asked = id.clone();
+        self.pending = None;
         self.loading = Some(height);
         cx.notify();
         self.task = Some(cx.spawn(async move |this, cx| {
@@ -451,20 +490,83 @@ impl Video {
         }
         match started {
             Ok(movie) => {
-                log::info!("video: playing {id} at {height}p");
-                self.loaded = Some(Loaded {
+                let loaded = Loaded {
                     movie,
                     _stream: stream,
                     height,
-                });
-                self.generation += 1;
-                cx.notify();
+                };
+                match self.loaded.is_some() {
+                    // a reload: the movie on screen stays until this one catches up
+                    true => {
+                        let poll = self.catch_up(cx);
+                        self.pending = Some(Pending {
+                            loaded,
+                            _poll: poll,
+                        });
+                    }
+                    false => {
+                        log::info!("video: playing {id} at {height}p");
+                        self.loaded = Some(loaded);
+                        self.generation += 1;
+                        cx.notify();
+                    }
+                }
             }
             Err(error) => {
                 log::warn!("video: cannot play {id}: {error:#}");
                 self.failed = Some((id, height));
             }
         }
+    }
+
+    /// Polls the pending reload until it has caught up with the clock, or has been given
+    /// `OVERLAP` of playing time, then puts it on screen in place of the movie there. A paused
+    /// clock decodes nothing, so time paused does not count against it. Ends with the pending
+    /// reload, which owns the returned task.
+    fn catch_up(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        let clock = self.clock.clone();
+        cx.spawn(async move |this, cx| {
+            let mut waited = Duration::ZERO;
+            loop {
+                let tick = Instant::now();
+                cx.background_executor().timer(POLL).await;
+                let now = clock.now();
+                if now.is_some() {
+                    waited += tick.elapsed();
+                }
+                let done = this
+                    .update(cx, |this, cx| {
+                        let Some(pending) = &this.pending else {
+                            return true;
+                        };
+                        let pts = pending.loaded.movie.pts();
+                        if !swap_now(pts, now, waited) {
+                            return false;
+                        }
+                        this.promote(waited, cx);
+                        true
+                    })
+                    .unwrap_or(true);
+                if done {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Puts the pending reload on screen and drops the movie it replaces.
+    fn promote(&mut self, waited: Duration, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let height = pending.loaded.height;
+        match waited >= OVERLAP {
+            true => log::info!("video: switched to {height}p before it caught up"),
+            false => log::info!("video: switched to {height}p after {waited:?}"),
+        }
+        self.loaded = Some(pending.loaded);
+        self.generation += 1;
+        cx.notify();
     }
 
     /// Marks the load in flight as over.
@@ -547,6 +649,19 @@ fn plan(loaded: Option<u32>, loading: Option<u32>, wanted: Option<u32>) -> Plan 
     }
 }
 
+/// Whether a reload whose newest picture plays at `pts` may replace the movie on screen, the
+/// clock reading `now` (`None` while paused) after `waited` of playing time. It may once its
+/// picture is within `CAUGHT_UP` of the clock, or once it has had `OVERLAP` to get there.
+fn swap_now(pts: Option<Duration>, now: Option<Duration>, waited: Duration) -> bool {
+    if waited >= OVERLAP {
+        return true;
+    }
+    match (pts, now) {
+        (Some(pts), Some(now)) => now.saturating_sub(pts) <= CAUGHT_UP,
+        _ => false,
+    }
+}
+
 /// Whether to ask the provider if the track has a video: only while a decoder could still be
 /// offered (`missing`), for a track not yet answered, with no probe in flight, and not again
 /// after one failed for this track.
@@ -623,6 +738,44 @@ mod tests {
         assert_eq!(plan(None, Some(1080), Some(480)), Plan::Load(480));
         assert_eq!(plan(Some(480), Some(1080), None), Plan::Keep);
         assert_eq!(plan(None, None, Some(480)), Plan::Load(480));
+    }
+
+    #[test]
+    fn a_reload_waits_until_it_has_caught_up() {
+        let at = Duration::from_secs(30);
+        let short = Duration::from_millis(500);
+        // no picture yet, or one from the keyframe well before the clock
+        assert!(!swap_now(None, Some(at), short));
+        assert!(!swap_now(
+            Some(at - Duration::from_millis(400)),
+            Some(at),
+            short
+        ));
+        // within about a frame of the clock, or ahead of it
+        assert!(swap_now(
+            Some(at - Duration::from_millis(40)),
+            Some(at),
+            short
+        ));
+        assert!(swap_now(
+            Some(at + Duration::from_millis(10)),
+            Some(at),
+            short
+        ));
+        // paused: nothing decodes, so it waits
+        assert!(!swap_now(Some(at - Duration::from_secs(1)), None, short));
+    }
+
+    #[test]
+    fn a_reload_that_never_catches_up_is_shown_anyway() {
+        let at = Duration::from_secs(30);
+        assert!(swap_now(None, Some(at), OVERLAP));
+        assert!(swap_now(
+            Some(at - Duration::from_secs(2)),
+            Some(at),
+            OVERLAP
+        ));
+        assert!(swap_now(None, None, OVERLAP + Duration::from_millis(1)));
     }
 
     #[test]

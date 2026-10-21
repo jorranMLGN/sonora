@@ -132,11 +132,14 @@ sonora → views → state → music
   and the sound never waits on it. `state::Video` follows the playing track and owns the movie;
   the video plays in one `Place` at a time (`Slot` in the sidebar, `Fullscreen`, `Pip`) and
   fetches at 480p for `Slot` and `Pip`, 1080p for `Fullscreen`, all capped by the "maximum video
-  quality" setting. With `Place::None` it keeps the movie for a 5 s grace and then stops the
-  download. A PiP window opens only when the user asks. `crates/sonora/src/pip.rs` owns that
+  quality" setting. A change of height starts a second movie that decodes beside the one on
+  screen and replaces it only once its picture is within a frame of the clock (or after 3 s of
+  playing time), so the switch never shows the catch-up from the keyframe. With `Place::None` it
+  keeps the movie for a 5 s grace and then stops the download. A PiP window opens only when the user asks. `crates/sonora/src/pip.rs` owns that
   always-on-top, resizable window (it remembers its size and opens in the `pip_corner` setting)
   and closes it when the place moves on, the setting goes off or the track has no video;
-  `crates/views/src/shells/pip.rs` draws it.
+  `crates/views/src/shells/pip.rs` draws it, cropped rather than letterboxed, snaps the window to
+  the video's shape once a resize settles, and shows its back button only under the pointer.
 - `ui` depends only on `gpui`, `serde` and `i18n`, plus the per-platform crates `ui::motion` needs
   to read the system reduce-motion preference (`objc2-app-kit`, `windows-sys`, `ashpd`). It must
   never know about `music`, `state`, or playback.

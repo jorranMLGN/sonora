@@ -36,7 +36,7 @@ pub(crate) fn video_showing(cx: &App) -> bool {
 enum Source {
     /// Spotify's looping Canvas, cropped to fill its box.
     Canvas,
-    /// The music video, letterboxed inside its box.
+    /// The music video, letterboxed inside its box unless `CanvasArt::cover` crops it.
     Video,
 }
 
@@ -50,6 +50,9 @@ pub(crate) struct CanvasArt {
     /// Whether the clip fills whatever box its parent gives it instead of the `set_side` one.
     /// Such a clip is rounded only at its bottom corners, by `radius`.
     fill: bool,
+    /// Whether a video is cropped to cover its box, as a Canvas always is, instead of
+    /// letterboxed inside it.
+    cover: bool,
     armed: bool,
     /// When `pull` last ran, which is when this view was last on screen.
     drawn: Instant,
@@ -84,6 +87,7 @@ impl CanvasArt {
             height: px(0.),
             radius: px(0.),
             fill: false,
+            cover: false,
             armed: false,
             drawn: Instant::now(),
             generation: 0,
@@ -104,17 +108,34 @@ impl CanvasArt {
         self.fill = true;
     }
 
+    /// Crops a video to cover its box rather than letterboxing it, for a box whose shape only
+    /// briefly differs from the video's, such as a window being resized.
+    pub(crate) fn cover(&mut self) {
+        self.cover = true;
+    }
+
+    /// How the clip fits its box: a Canvas, or a video asked to `cover`, is cropped to fill
+    /// it, and any other video is letterboxed.
+    fn fit(&self) -> ObjectFit {
+        match self.source == Source::Canvas || self.cover {
+            true => ObjectFit::Cover,
+            false => ObjectFit::Contain,
+        }
+    }
+
     /// Takes the player's newest frame when it is new, and keeps the loop armed while one plays.
     fn pull(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (width, height) = match self.fill {
             true => (window.viewport_size().width, window.viewport_size().height),
             false => (self.width, self.height),
         };
-        let drawn = match self.source {
+        let drawn = match (self.source, self.fit()) {
             // an upright clip cropped to the box is as wide as the box, or wider
-            Source::Canvas => width.max(height * (9. / 16.)),
+            (Source::Canvas, _) => width.max(height * (9. / 16.)),
+            // a wide clip cropped to the box is as wide as the box, or wider
+            (Source::Video, ObjectFit::Cover) => width.max(height * (16. / 9.)),
             // a wide clip fitted into the box is as wide as the box, or narrower
-            Source::Video => width.min(height * (16. / 9.)),
+            (Source::Video, _) => width.min(height * (16. / 9.)),
         };
         let wide = (f32::from(drawn) * window.scale_factor()).ceil();
         let Some((generation, newest)) = newest(self.source, Some(wide as u32), cx) else {
@@ -202,10 +223,7 @@ impl Render for CanvasArt {
                     .rounded_br(self.radius),
                 false => this.w(self.width).h(self.height).rounded(self.radius),
             })
-            .object_fit(match self.source {
-                Source::Canvas => ObjectFit::Cover,
-                Source::Video => ObjectFit::Contain,
-            })
+            .object_fit(self.fit())
             .into_any_element()
     }
 }
@@ -227,7 +245,8 @@ fn newest(source: Source, width: Option<u32>, cx: &App) -> Option<(u64, Option<A
             let video = sonora.video.read(cx);
             let movie = video.movie()?;
             if let Some(width) = width {
-                movie.watch(width);
+                // the reload catching up behind the movie decodes at the same width
+                video.watch(width);
             }
             Some((video.generation(), movie.frame()))
         }

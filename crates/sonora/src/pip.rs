@@ -92,11 +92,8 @@ pub fn open(cx: &mut App) {
         return;
     }
     let settings = Sonora::global(cx).settings.read(cx);
-    let placed = bounds(
-        settings.pip_corner(),
-        settings.pip_size(),
-        crate::mini::screen(cx),
-    );
+    let screen = crate::mini::screen(cx);
+    let placed = bounds(settings.pip_corner(), settings.pip_size(), screen);
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(placed)),
@@ -117,7 +114,7 @@ pub fn open(cx: &mut App) {
         },
         |window, cx| {
             window.set_rem_size(cx.theme().font_size);
-            cx.new(|cx| PipView::new(window, cx))
+            cx.new(|cx| PipView::new(PIP_MIN, screen.size, window, cx))
         },
     );
 
