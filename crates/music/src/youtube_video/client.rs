@@ -181,6 +181,16 @@ impl<T: Clone + Send + Sync + 'static> Memo<T> {
 
 #[async_trait]
 impl MusicApi for YouTubeVideoClient {
+    async fn video(&self, track_id: &str, max_height: u32) -> Result<Option<crate::VideoFeed>> {
+        crate::youtube::playback::open_video_feed(&self.api, track_id, max_height)
+            .await
+            .map(Some)
+    }
+
+    async fn has_video(&self, _track_id: &str) -> Result<bool> {
+        Ok(true)
+    }
+
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
         let id = escape::component(id);
         match kind {

@@ -28,6 +28,8 @@ actions!(
         ToggleLyrics,
         ToggleJam,
         ToggleMiniPlayer,
+        TogglePip,
+        ToggleVideo,
         CloseWindow,
         MinimizeWindow,
         ZoomWindow,

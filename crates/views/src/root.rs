@@ -22,6 +22,7 @@ use crate::chrome::{TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
 use crate::screens::search::SearchView;
 use crate::screens::settings::SettingsHeader;
 use crate::shared::ambient::{self, Ambient};
+use crate::shared::canvas::video_showing;
 use crate::shared::tracks::{LIBRARY_COLUMNS, album_columns};
 use crate::shells::Shell;
 use crate::shells::workspace::Workspace;
@@ -86,6 +87,8 @@ pub struct Root {
     /// The OS fullscreen move the next render owes the fullscreen view, true as it opens and
     /// false as it closes.
     os_follow: Option<bool>,
+    /// Whether the open fullscreen view still has to decide on going OS fullscreen.
+    os_wait: bool,
     /// Whether the window is in OS fullscreen because opening the fullscreen view put it there.
     os_entered: bool,
     screens: Screens,
@@ -106,6 +109,8 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let video = Sonora::global(cx).video.clone();
+        cx.observe(&video, |_, _, cx| cx.notify()).detach();
         cx.observe(&session, |this, session, cx| {
             if matches!(session.read(cx).state(), SessionState::SignedOut) {
                 this.navigation_transition = None;
@@ -300,6 +305,7 @@ impl Root {
             navigation_transition: None,
             shell_entrance: None,
             os_follow: None,
+            os_wait: false,
             os_entered: false,
             screens: Screens {
                 home,
@@ -458,35 +464,49 @@ impl Root {
             .update(cx, |workspace, cx| workspace.show_side(tab, cx));
     }
 
-    /// Tells the adaptive theme and the wake lock whether fullscreen is up. The ambient
-    /// background is painted out of the cover's hues, so fullscreen samples the cover even with
-    /// the adaptive theme off, and leaving drops the tint again.
+    /// Tells the adaptive theme, the wake lock and the fullscreen view itself whether fullscreen
+    /// is up. The ambient background is painted out of the cover's hues, so fullscreen samples
+    /// the cover even with the adaptive theme off, and leaving drops the tint again. The view
+    /// moves a playing video in and out with it.
     fn announce_fullscreen(&self, fullscreen: bool, cx: &mut Context<Self>) {
+        self.shells
+            .fullscreen
+            .update(cx, |view, cx| view.set_open(fullscreen, cx));
         self.adaptive
             .update(cx, |adaptive, cx| adaptive.set_fullscreen(fullscreen, cx));
         let wake = Sonora::global(cx).wake.clone();
         wake.update(cx, |wake, cx| wake.set_fullscreen(fullscreen, cx));
     }
 
-    /// Carries the window into or out of OS fullscreen with the fullscreen view when the setting
-    /// asks for it. Closing the view leaves OS fullscreen only if opening it went there, so a
-    /// window put there with F11 stays.
+    /// Carries the window into or out of OS fullscreen with the fullscreen view. The setting asks
+    /// for it, and a playing video always does. A video that starts after the view opened takes
+    /// the window there then, once. Closing the view leaves OS fullscreen only if opening it went
+    /// there, so a window put there with F11 stays, and a video ending mid-view changes nothing.
     fn follow_os_fullscreen(&mut self, window: &mut Window, cx: &App) {
-        let Some(opening) = self.os_follow.take() else {
-            return;
-        };
-        match opening {
-            true => {
-                if Sonora::global(cx).settings.read(cx).os_fullscreen() && !window.is_fullscreen() {
-                    window.toggle_fullscreen();
-                    self.os_entered = true;
-                }
-            }
-            false => {
+        match self.os_follow.take() {
+            Some(true) => self.os_wait = true,
+            Some(false) => {
+                self.os_wait = false;
                 if std::mem::take(&mut self.os_entered) && window.is_fullscreen() {
                     window.toggle_fullscreen();
                 }
             }
+            None => {}
+        }
+        if !self.os_wait {
+            return;
+        }
+        let setting = Sonora::global(cx).settings.read(cx).os_fullscreen();
+        // a movie on screen, not one still loading: a track may turn out to have no video
+        let video = video_showing(cx);
+        let in_view = matches!(self.view, RootView::Fullscreen);
+        if !wants_os_fullscreen(in_view, setting, video) {
+            return;
+        }
+        self.os_wait = false;
+        if !window.is_fullscreen() {
+            window.toggle_fullscreen();
+            self.os_entered = true;
         }
     }
 
@@ -957,5 +977,24 @@ impl Render for Root {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let root = root.child(WindowFrame::new());
         root
+    }
+}
+
+/// Whether the fullscreen view should fill the screen: it does when the setting asks for it, and
+/// always while a video plays.
+fn wants_os_fullscreen(in_view: bool, setting: bool, video: bool) -> bool {
+    in_view && (setting || video)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_os_fullscreen;
+
+    #[test]
+    fn video_forces_os_fullscreen() {
+        assert!(wants_os_fullscreen(true, false, true));
+        assert!(wants_os_fullscreen(true, true, false));
+        assert!(!wants_os_fullscreen(true, false, false));
+        assert!(!wants_os_fullscreen(false, true, true));
     }
 }

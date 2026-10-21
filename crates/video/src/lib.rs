@@ -4,8 +4,11 @@
 mod annexb;
 pub mod codec;
 mod convert;
+mod fmp4;
+mod movie;
 mod player;
 
+pub use movie::{Clock, Movie};
 pub use player::{Frame, Player};
 
 use std::sync::OnceLock;

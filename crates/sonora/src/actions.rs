@@ -2,8 +2,8 @@ use gpui::{App, Menu, MenuItem, OsAction};
 use i18n::t;
 use input::{
     CloseWindow, Hide, HideOthers, MinimizeWindow, OpenSettings, Quit, RefreshLibrary, ShowAll,
-    SignOut, SongNext, SongPrevious, ToggleMiniPlayer, TogglePlayback, ToggleRepeat, ToggleShuffle,
-    ZoomWindow,
+    SignOut, SongNext, SongPrevious, ToggleMiniPlayer, TogglePip, TogglePlayback, ToggleRepeat,
+    ToggleShuffle, ToggleVideo, ZoomWindow,
 };
 use router::Destination;
 use state::{Shelf, Sonora};
@@ -30,6 +30,15 @@ pub fn register(lingers: bool, cx: &mut App) {
     .detach();
 
     cx.on_action(|_: &ToggleMiniPlayer, cx: &mut App| crate::mini::toggle(cx));
+    cx.on_action(|_: &TogglePip, cx: &mut App| crate::pip::toggle(cx));
+
+    cx.on_action(|_: &ToggleVideo, cx: &mut App| {
+        let settings = Sonora::global(cx).settings.clone();
+        settings.update(cx, |settings, cx| {
+            let on = settings.video();
+            settings.set_video(!on, cx);
+        });
+    });
 
     cx.on_action(|_: &SignOut, cx: &mut App| {
         let session = Sonora::global(cx).session.clone();

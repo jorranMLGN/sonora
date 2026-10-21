@@ -16,6 +16,9 @@
 //! A [`Ranged`] source can also start again at any byte. Its spool is filled out of order: a
 //! read far from where the download is moves the download there, and once a run reaches the
 //! end or bytes already in, the download goes back for the first hole left.
+//!
+//! A ranged spool can also be windowed, for a video nobody may watch to the end: its download
+//! stays a bounded distance ahead of where it is being read, and never fetches what lies behind.
 
 use std::fs::File;
 use std::future::Future;
@@ -38,9 +41,13 @@ pub const PREROLL: usize = 256 * 1024;
 /// output for the rest of the session.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// The most one track may spool. A long album side is tens of megabytes, so this is only a
-/// ceiling on what a wrong `Content-Length` or an endless body can cost.
-const CEILING: usize = 256 * 1024 * 1024;
+/// The most a body of unknown length may spool. A long album side is tens of megabytes, so this
+/// is only a ceiling on what an endless body can cost. A ranged body is bounded by the length it
+/// announced instead. Small under test, so a test can run past it.
+const CEILING: usize = match cfg!(test) {
+    true => 4 * 1024 * 1024,
+    false => 256 * 1024 * 1024,
+};
 
 /// How far past a ranged download's frontier a read waits for it rather than moving it. Within
 /// this the running download gets there sooner than a new request would.
@@ -361,18 +368,52 @@ struct Run {
     at: usize,
     /// Where a reader has asked the download to move, until the pump takes it.
     want: Option<usize>,
+    /// Where the latest read ended, or where a read is waiting: what a windowed download keeps
+    /// ahead of.
+    read: usize,
+    /// How far past `read` a windowed download may run. `None` downloads the whole file.
+    window: Option<usize>,
+    /// A windowed download has stopped, being far enough ahead of `read`, and waits for a
+    /// reader to catch up.
+    held: bool,
+    /// A windowed download has nothing left to fetch past `read`, and waits for a reader to
+    /// ask for a hole behind it.
+    idle: bool,
 }
 
 impl Run {
+    /// A run from the start of the file, `window` ahead of its reader when windowed.
+    fn new(window: Option<usize>) -> Self {
+        Self {
+            start: 0,
+            at: 0,
+            want: None,
+            read: 0,
+            window,
+            held: false,
+            idle: false,
+        }
+    }
+
     /// Whether the current run will not reach `at`, unfilled, before a fresh request would:
-    /// it lies behind where the run started, too far ahead of it, or past bytes that have
-    /// already arrived, where the run stops.
+    /// no run is going, or `at` lies behind where the run started, too far ahead of it, or
+    /// past bytes that have already arrived, where the run stops.
     fn misses(&self, at: usize, spool: &Spool) -> bool {
-        at < self.start
+        self.idle
+            || at < self.start
             || at as u64 > self.at as u64 + LEAP
             || spool
                 .next_filled(self.at)
                 .is_some_and(|filled| filled <= at)
+    }
+
+    /// Records that a reader got to `at`, and says whether a held download should now go on.
+    fn reached(&mut self, at: usize) -> bool {
+        self.read = at;
+        let Some(window) = self.window else {
+            return false;
+        };
+        self.held && !self.idle && !holds(true, self.at, at, window)
     }
 }
 
@@ -635,14 +676,26 @@ impl<B: Body> Stream<B> {
 
 impl Stream<Plain> {
     /// Starts pulling `source` like [`pulling`](Stream::pulling), but lets a read far ahead of
-    /// the download, or behind where it restarted, move the download there.
+    /// the download, or behind where it restarted, move the download there. The whole file is
+    /// fetched in the end, so [`finished`](Self::finished) is reached.
     pub fn pulling_ranged(source: impl Ranged, total: Option<u64>) -> Self {
-        Self::ranged(source, total, CEILING)
+        Self::ranged(source, total, None)
     }
 
-    /// [`pulling_ranged`](Self::pulling_ranged) with the most one run may pull. A spool that
-    /// cannot be scattered, in memory or for a body of unknown length, is filled in order.
-    fn ranged<S: Ranged>(source: S, total: Option<u64>, ceiling: usize) -> Self {
+    /// [`pulling_ranged`](Self::pulling_ranged) that only fetches `window` bytes past where the
+    /// stream is being read, and nothing behind it unless a read asks for it. For a video, which
+    /// may be watched for a minute of an hour.
+    ///
+    /// Such a stream is [`finished`](Self::finished) only once every byte has been read for,
+    /// which may be never, so nothing should wait on that. A body of unknown length cannot be
+    /// windowed and is downloaded whole, in order, up to the ceiling.
+    pub fn pulling_ranged_windowed(source: impl Ranged, total: Option<u64>, window: usize) -> Self {
+        Self::ranged(source, total, Some(window.max(1)))
+    }
+
+    /// A ranged stream, windowed or not. A spool that cannot be scattered, in memory or for a
+    /// body of unknown length, is filled in order.
+    fn ranged<S: Ranged>(source: S, total: Option<u64>, window: Option<usize>) -> Self {
         let mut spool = Spool::new(total);
         let Some(length) = total
             .and_then(|total| usize::try_from(total).ok())
@@ -650,19 +703,15 @@ impl Stream<Plain> {
         else {
             return Self::spooling(source, spool, total, Plain);
         };
-        let run = Run {
-            start: 0,
-            at: 0,
-            want: None,
-        };
-        let (shared, progress, stream) = Self::empty(spool, total, Plain, Some(run));
+        let (shared, progress, stream) = Self::empty(spool, total, Plain, Some(Run::new(window)));
         let jump = shared.jump.clone();
         let ranged = Ranges {
             current: source,
             at: 0,
-            pulled: 0,
             total: length,
-            ceiling,
+            window,
+            holding: false,
+            idle: false,
         };
         tokio::spawn(ranged.pump(Arc::downgrade(&shared), jump, progress));
         stream
@@ -756,10 +805,13 @@ struct Ranges<S> {
     current: S,
     /// The next byte `current` writes.
     at: usize,
-    /// How much the current run has pulled, against `ceiling`.
-    pulled: usize,
     total: usize,
-    ceiling: usize,
+    /// How far past the reader a windowed download runs; `None` fetches the whole file.
+    window: Option<usize>,
+    /// The download is held, far enough ahead of the reader; see [`holds`].
+    holding: bool,
+    /// A windowed download with nothing left to fetch past the reader.
+    idle: bool,
 }
 
 /// What woke a ranged pump.
@@ -769,8 +821,10 @@ enum Woken {
 }
 
 impl<S: Ranged> Ranges<S> {
-    /// Pulls runs into the spool until every byte of it has arrived, moving to wherever a
-    /// reader asks, and stops as soon as nothing is left that could read it.
+    /// Pulls runs into the spool, moving to wherever a reader asks: until every byte has
+    /// arrived, or, when windowed, only up to `window` past the reader, idling there until it
+    /// comes closer. Stops as soon as nothing is left that could read it, the stream and every
+    /// reader dropped.
     ///
     /// This one task is the only writer, and it never polls a source it has moved away from,
     /// so nothing a stopped run was fetching can land after the next run has started.
@@ -781,13 +835,23 @@ impl<S: Ranged> Ranges<S> {
         progress: watch::Sender<usize>,
     ) {
         loop {
+            let paused = match weak.upgrade() {
+                Some(shared) => self.pause(&shared),
+                None => return,
+            };
             // A pending jump wins over a chunk that is ready at the same time. `chunk` may be
             // dropped part way, which a source has to bear: its position moves only with a
-            // chunk it hands out.
-            let woken = tokio::select! {
-                biased;
-                () = jump.notified() => Woken::Jump,
-                chunk = self.current.chunk() => Woken::Chunk(chunk),
+            // chunk it hands out. A paused download polls no chunk at all, only for a reader.
+            let woken = match paused {
+                true => {
+                    jump.notified().await;
+                    Woken::Jump
+                }
+                false => tokio::select! {
+                    biased;
+                    () = jump.notified() => Woken::Jump,
+                    chunk = self.current.chunk() => Woken::Chunk(chunk),
+                },
             };
             let Some(shared) = weak.upgrade() else {
                 return;
@@ -828,6 +892,31 @@ impl<S: Ranged> Ranges<S> {
         }
     }
 
+    /// Whether a windowed download waits for its reader rather than pulling the next chunk:
+    /// it is far enough ahead, or has nothing left past the reader. One that goes on after
+    /// waiting asks again from where it stopped, since a connection left idle that long may
+    /// have been dropped by the host.
+    fn pause(&mut self, shared: &Shared<Plain>) -> bool {
+        let Some(window) = self.window else {
+            return false;
+        };
+        let Ok(mut state) = shared.held() else {
+            return false;
+        };
+        let Some(run) = state.run.as_mut() else {
+            return false;
+        };
+        let holding = holds(self.holding, self.at, run.read, window);
+        if self.holding && !holding && !self.idle {
+            log::debug!("playback: the download goes on from byte {}", self.at);
+            self.current = self.source(self.at);
+        }
+        self.holding = holding;
+        run.held = holding;
+        run.idle = self.idle;
+        holding || self.idle
+    }
+
     /// Moves to where a reader asked, if that is still a hole. True when the run moved.
     fn jump(&mut self, shared: &Shared<Plain>) -> Result<bool, String> {
         let mut state = shared.held().map_err(|error| error.to_string())?;
@@ -842,7 +931,7 @@ impl<S: Ranged> Ranges<S> {
         else {
             return Ok(false);
         };
-        if to == self.at {
+        if to == self.at && !self.idle {
             return Ok(false);
         }
         log::debug!("playback: the download moves from byte {} to {to}", self.at);
@@ -854,8 +943,11 @@ impl<S: Ranged> Ranges<S> {
     /// Writes `chunk` where the run is, up to the end of the file or the next range that has
     /// arrived, where the run ends and the download moves to the first hole left.
     fn write(&mut self, shared: &Shared<Plain>, chunk: &[u8]) -> Result<bool, String> {
-        if self.pulled + chunk.len() > self.ceiling {
-            return Err(format!("the track is longer than {} bytes", self.ceiling));
+        if self.at + chunk.len() > self.total {
+            return Err(format!(
+                "the stream runs past the {} bytes it announced",
+                self.total
+            ));
         }
         let mut state = shared.held().map_err(|error| error.to_string())?;
         let Buffered { spool, run, .. } = &mut *state;
@@ -866,7 +958,6 @@ impl<S: Ranged> Ranges<S> {
             return Err(format!("cannot keep the track: {error}"));
         }
         self.at += kept;
-        self.pulled += kept;
         if let Some(run) = run.as_mut() {
             run.at = self.at;
         }
@@ -879,11 +970,20 @@ impl<S: Ranged> Ranges<S> {
     }
 
     /// Starts a run at the first hole left, or marks the download complete when there is none.
+    /// A windowed download looks only past its reader, and idles when nothing is left there.
     fn next(&mut self, shared: &Shared<Plain>) -> Result<bool, String> {
         let mut state = shared.held().map_err(|error| error.to_string())?;
-        let Some(hole) = state.spool.hole(0, self.total) else {
+        if state.spool.hole(0, self.total).is_none() {
             drop(state);
             shared.finish(None);
+            return Ok(true);
+        }
+        let from = match (self.window, state.run.as_ref()) {
+            (Some(_), Some(run)) => run.read,
+            _ => 0,
+        };
+        let Some(hole) = state.spool.hole(from, self.total) else {
+            self.idle = true;
             return Ok(true);
         };
         self.current = self.source(hole);
@@ -901,9 +1001,12 @@ impl<S: Ranged> Ranges<S> {
     /// Records that the run now starts at `at`.
     fn start(&mut self, run: &mut Run, at: usize) {
         self.at = at;
-        self.pulled = 0;
+        self.holding = false;
+        self.idle = false;
         run.start = at;
         run.at = at;
+        run.held = false;
+        run.idle = false;
     }
 }
 
@@ -1040,6 +1143,9 @@ impl<B: Body> Reader<B> {
             let end = start + wanted.min(reach - start);
             body.ready(spool, start..end)?;
             spool.read_at(start, &mut out[..end - start])?;
+            if run.as_mut().is_some_and(|run| run.reached(end)) {
+                self.shared.jump.notify_one();
+            }
             return Ok(Some(end - start));
         }
         if let Some(failed) = failed {
@@ -1048,12 +1154,14 @@ impl<B: Body> Reader<B> {
         if *complete {
             return Ok(Some(0));
         }
-        if let Some(run) = run.as_mut()
-            && run.misses(start, spool)
-            && run.want != Some(start)
-        {
-            run.want = Some(start);
-            self.shared.jump.notify_one();
+        if let Some(run) = run.as_mut() {
+            let wake = run.reached(start);
+            if run.misses(start, spool) && run.want != Some(start) {
+                run.want = Some(start);
+                self.shared.jump.notify_one();
+            } else if wake {
+                self.shared.jump.notify_one();
+            }
         }
         Ok(None)
     }
@@ -1094,6 +1202,17 @@ impl<B: Body> Seek for Reader<B> {
         }
         self.at = target as u64;
         Ok(self.at)
+    }
+}
+
+/// Whether a windowed download at `at` holds off, its reader at `read`: it stops once it is
+/// more than `window` ahead, and once stopped goes on only when the reader is within half a
+/// window, so it fetches in long runs rather than a chunk each time the reader moves.
+fn holds(holding: bool, at: usize, read: usize, window: usize) -> bool {
+    let lead = at.saturating_sub(read);
+    match holding {
+        true => lead > window / 2,
+        false => lead > window,
     }
 }
 
@@ -1409,21 +1528,135 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_ceiling_counts_per_run() {
-        // Half a mebibyte in, so 3 MiB is more than a leap ahead.
-        let (source, _data, gate) = fake(6 * MIB, 8);
+    async fn a_ranged_stream_is_bounded_by_its_length_not_the_ceiling() {
+        // one run, from the start to the end, longer than the ceiling
+        let len = CEILING + 2 * MIB;
+        let (source, data, _gate) = fake(len, 4096);
         let log = source.log.clone();
-        let mut stream = Stream::ranged(source, Some(6 * MIB as u64), 4 * MIB);
-        stream.wait_for(MIB / 2).await.unwrap();
-        read_at(&stream, 3 * MIB, 64 * 1024);
-        gate.add_permits(4096);
+        let stream = Stream::pulling_ranged(source, Some(len as u64));
 
         tokio::time::timeout(Duration::from_secs(10), stream.finished())
             .await
             .expect("the download finishes");
         assert_eq!(stream.failed(), None);
-        // The jump's run reaches the end, and the hole the first run left behind is fetched
-        // by a fresh source rather than by the one the jump stopped.
-        assert_eq!(*log.lock().unwrap(), vec![3 * MIB as u64, MIB as u64 / 2]);
+        assert!(log.lock().unwrap().is_empty(), "in one run");
+        let mut out = Vec::new();
+        stream.reader().read_to_end(&mut out).unwrap();
+        assert!(out == *data, "every byte is in place");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_body_of_unknown_length_still_stops_at_the_ceiling() {
+        let (source, _data, _gate) = fake(CEILING + MIB, 4096);
+        let stream = Stream::pulling_ranged(source, None);
+        tokio::time::timeout(Duration::from_secs(10), stream.finished())
+            .await
+            .expect("the download ends");
+        assert!(
+            stream
+                .failed()
+                .is_some_and(|failed| failed.contains("longer than"))
+        );
+    }
+
+    /// How far the download has filled from `at` without a gap, once it has stopped moving.
+    async fn settled(stream: &Stream, at: usize) -> usize {
+        let reach = || stream.with(|_, spool| spool.reach(at)).unwrap();
+        let mut last = reach();
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let now = reach();
+            if now == last {
+                return now;
+            }
+            last = now;
+        }
+        panic!("the download never stopped");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_windowed_stream_stays_a_window_ahead_of_its_reader() {
+        let (source, data, _gate) = fake(16 * MIB, 4096);
+        let log = source.log.clone();
+        let stream = Stream::pulling_ranged_windowed(source, Some(16 * MIB as u64), 2 * MIB);
+        assert_eq!(read_at(&stream, 0, 64 * 1024), data[..64 * 1024]);
+
+        let held = settled(&stream, 0).await;
+        assert!(held > 2 * MIB, "it runs a window ahead, got {held}");
+        assert!(held <= 2 * MIB + 128 * 1024, "and stops there, got {held}");
+
+        // more than half a window ahead of the reader it still holds
+        read_at(&stream, held - 3 * MIB / 2 - 64 * 1024, 64 * 1024);
+        assert_eq!(settled(&stream, 0).await, held);
+        assert!(log.lock().unwrap().is_empty());
+
+        // past that it goes on, from where it stopped, and holds again a window on
+        let at = held - 64 * 1024;
+        assert_eq!(read_at(&stream, at, 64 * 1024), data[at..held]);
+        let resumed = settled(&stream, 0).await;
+        assert!(
+            resumed > held + 2 * MIB - 64 * 1024,
+            "it went on, got {resumed}"
+        );
+        assert!(
+            resumed <= held + 2 * MIB + 128 * 1024,
+            "a window on, got {resumed}"
+        );
+        assert_eq!(*log.lock().unwrap(), vec![held as u64]);
+        assert!(!stream.done(), "a windowed stream need never finish");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_windowed_stream_restarts_where_a_read_jumps_beyond_it() {
+        let (source, data, _gate) = fake(16 * MIB, 4096);
+        let log = source.log.clone();
+        let stream = Stream::pulling_ranged_windowed(source, Some(16 * MIB as u64), 2 * MIB);
+        read_at(&stream, 0, 64 * 1024);
+        settled(&stream, 0).await;
+
+        let far = 12 * MIB;
+        assert_eq!(read_at(&stream, far, 64 * 1024), data[far..far + 64 * 1024]);
+        let reach = settled(&stream, far).await;
+        assert!(
+            reach <= far + 2 * MIB + 192 * 1024,
+            "a window past the jump, got {reach}"
+        );
+        assert_eq!(log.lock().unwrap().first(), Some(&(far as u64)));
+        // the hole between the first window and the jump is left alone
+        assert_eq!(
+            stream.with(|_, spool| spool.reach(4 * MIB)).unwrap(),
+            4 * MIB
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_windowed_stream_idles_at_the_end_and_fills_a_hole_asked_for() {
+        let (source, data, _gate) = fake(8 * MIB, 4096);
+        let log = source.log.clone();
+        let stream = Stream::pulling_ranged_windowed(source, Some(8 * MIB as u64), MIB);
+        read_at(&stream, 0, 64 * 1024);
+        settled(&stream, 0).await;
+        // more than a leap ahead, near enough the end that the run reaches it
+        read_at(&stream, 7 * MIB, 64 * 1024);
+        assert_eq!(settled(&stream, 7 * MIB).await, 8 * MIB);
+        assert!(!stream.done(), "the hole behind is not fetched");
+
+        let hole = stream.with(|_, spool| spool.reach(0)).unwrap();
+        assert_eq!(
+            read_at(&stream, hole, 64 * 1024),
+            data[hole..hole + 64 * 1024]
+        );
+        assert_eq!(*log.lock().unwrap(), vec![7 * MIB as u64, hole as u64]);
+    }
+
+    #[test]
+    fn a_held_download_goes_on_only_within_half_a_window() {
+        let window = 100;
+        assert!(!holds(false, 150, 50, window));
+        assert!(holds(false, 151, 50, window));
+        assert!(holds(true, 151, 100, window));
+        assert!(!holds(true, 150, 100, window));
+        // a reader ahead of the download never holds it
+        assert!(!holds(true, 10, 500, window));
     }
 }

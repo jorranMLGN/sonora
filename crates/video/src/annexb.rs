@@ -141,6 +141,7 @@ impl<'a> NalUnit<'a> {
 /// It also inserts SPS and PPS units from the MP4 header into the stream.
 /// They are also required for Annex B format to be decodable, but are not present in the MP4 bitstream,
 /// as they are stored in the headers.
+#[derive(Clone)]
 pub(crate) struct Mp4BitstreamConverter {
     length_size: u8,
     sps: Vec<Vec<u8>>,
@@ -154,7 +155,6 @@ impl Mp4BitstreamConverter {
     /// Create a new converter for the given track.
     ///
     /// The track must contain an AVC1 configuration.
-    /// The track must contain an AVC1 configuration.
     pub(crate) fn for_mp4_track(track: &Mp4Track) -> Result<Self, anyhow::Error> {
         let avcc_config = &track
             .trak
@@ -167,24 +167,32 @@ impl Mp4BitstreamConverter {
             .ok_or_else(|| anyhow!("Track does not contain AVC1 config"))?
             .avcc;
 
-        Ok(Self {
-            length_size: avcc_config.length_size_minus_one + 1,
-            sps: avcc_config
+        Ok(Self::new(
+            avcc_config.length_size_minus_one + 1,
+            avcc_config
                 .sequence_parameter_sets
                 .iter()
-                .cloned()
-                .map(|v| v.bytes)
+                .map(|v| v.bytes.clone())
                 .collect(),
-            pps: avcc_config
+            avcc_config
                 .picture_parameter_sets
                 .iter()
-                .cloned()
-                .map(|v| v.bytes)
+                .map(|v| v.bytes.clone())
                 .collect(),
+        ))
+    }
+
+    /// A converter from an avcC's NAL length size and its SPS and PPS units, for a stream that
+    /// is not read through `mp4::Mp4Reader`.
+    pub(crate) fn new(length_size: u8, sps: Vec<Vec<u8>>, pps: Vec<Vec<u8>>) -> Self {
+        Self {
+            length_size,
+            sps,
+            pps,
             new_idr: true,
             sps_seen: false,
             pps_seen: false,
-        })
+        }
     }
 
     /// Convert a single packet from the MP4 format to the Annex B format.

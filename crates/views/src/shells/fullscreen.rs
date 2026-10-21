@@ -13,7 +13,8 @@ use i18n::t;
 use input::{ToggleFullscreen, ToggleWindowFullscreen, WORKSPACE_CONTEXT};
 use router::{Destination, navigate};
 use state::{
-    AppSettings, Cover, FullscreenControlsAutohide, Playback, Queue, SideTab, Sonora, WaveformPlace,
+    AppSettings, Cover, FullscreenControlsAutohide, Place, Playback, Queue, SideTab, Sonora,
+    WaveformPlace,
 };
 use ui::{
     ActiveTheme as _, Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Motion,
@@ -22,7 +23,7 @@ use ui::{
 };
 
 use crate::chrome::{Aside, TitleBarOptions};
-use crate::shared::canvas::{CanvasArt, canvas_playing};
+use crate::shared::canvas::{CanvasArt, canvas_playing, video_showing};
 use crate::shared::menus::ItemMenu;
 use crate::shared::transport::{
     NOTCH, drawn, like, moved, percent, transport, volume_icon, waveform,
@@ -82,7 +83,17 @@ pub struct FullscreenView {
     cover: Entity<Cover>,
     settings: Entity<AppSettings>,
     aside: Entity<Aside>,
+    /// The side panel on screen. While a video fills the view it is `None` and the reader's
+    /// own choice waits in `held`.
     panel: Option<SideTab>,
+    /// The panel a video put away, given back once no video shows or the view closes. It is
+    /// never saved, so the reader's `fullscreen_tab` stays what they picked.
+    held: Option<SideTab>,
+    /// Whether the video played here when `hold_panel` last looked, so the panel is put away
+    /// only as a video arrives and a panel the reader opens over it stays open.
+    here: bool,
+    /// Whether the view is up, as the root last said through `set_open`.
+    open: bool,
     seek: ScrubberState,
     pending: Option<f32>,
     over_seek: Option<f32>,
@@ -112,6 +123,8 @@ pub struct FullscreenView {
     meta_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The playing track's Canvas, laid over the cover while one plays.
     canvas_art: Entity<CanvasArt>,
+    /// The playing track's music video, filling the view while it plays here.
+    video_art: Entity<CanvasArt>,
 }
 
 impl FullscreenView {
@@ -128,6 +141,13 @@ impl FullscreenView {
         let waveforms = Sonora::global(cx).waveforms.clone();
         cx.observe(&waveforms, |_, _, cx| cx.notify()).detach();
         let canvas_art = cx.new(CanvasArt::new);
+        let video_art = cx.new(CanvasArt::video);
+        let video = Sonora::global(cx).video.clone();
+        cx.observe(&video, |this, _, cx| {
+            this.hold_panel(cx);
+            cx.notify();
+        })
+        .detach();
         let panel = settings.read(cx).fullscreen_tab();
         let shown = panel.unwrap_or(SideTab::Lyrics);
         let aside = cx.new(|cx| Aside::new(queue.clone(), playback.clone(), shown, cx));
@@ -142,6 +162,9 @@ impl FullscreenView {
             settings,
             aside,
             panel,
+            held: None,
+            here: false,
+            open: false,
             seek: ScrubberState::new("fullscreen-seek"),
             pending: None,
             over_seek: None,
@@ -173,6 +196,7 @@ impl FullscreenView {
             root_bounds: Rc::new(Cell::new(Bounds::default())),
             meta_bounds: Rc::new(Cell::new(Bounds::default())),
             canvas_art,
+            video_art,
         };
         this.stir(cx);
         this
@@ -182,7 +206,50 @@ impl FullscreenView {
         window.focus(&self.focus, cx);
     }
 
+    /// Follows the view opening and closing, which is where the video moves. Opening takes it
+    /// here, from the slot or the PiP window, so a video that starts while the view is up plays
+    /// here too. Closing lets go of a video placed here, which the sidebar slot claims when it
+    /// is on screen.
+    pub fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.open == open {
+            return;
+        }
+        self.open = open;
+        let video = Sonora::global(cx).video.clone();
+        video.update(cx, |video, cx| match open {
+            true => video.set_place(Place::Fullscreen, cx),
+            false => video.release(Place::Fullscreen, cx),
+        });
+        self.hold_panel(cx);
+    }
+
+    /// Whether the music video plays in this view now.
+    fn video_here(&self, cx: &App) -> bool {
+        self.open
+            && Sonora::global(cx).video.read(cx).place() == Place::Fullscreen
+            && video_showing(cx)
+    }
+
+    /// Puts the side panel away when a video starts filling the view, and gives it back once
+    /// none does. Runs from the hooks that change either, never from `render`.
+    fn hold_panel(&mut self, cx: &mut Context<Self>) {
+        let here = self.video_here(cx);
+        let was = std::mem::replace(&mut self.here, here);
+        if should_hide(was, here) {
+            if let Some(panel) = self.panel.take() {
+                self.held = Some(panel);
+            }
+            return;
+        }
+        if !here && let Some(tab) = self.held.take() {
+            self.panel = Some(tab);
+            self.aside.update(cx, |aside, cx| aside.show(tab, cx));
+        }
+    }
+
     fn show(&mut self, panel: Option<SideTab>, cx: &mut Context<Self>) {
+        // the reader's pick replaces whatever a video put away
+        self.held = None;
         self.panel = panel;
         self.settings
             .update(cx, |settings, cx| settings.set_fullscreen_tab(panel, cx));
@@ -1144,11 +1211,13 @@ impl Render for FullscreenView {
         let cover_scale = presentation_scale(presented_side, raster_side);
         let lift = (presented_side - side) / 2.;
         let staged = self.panel.is_none() || split;
+        let video = self.video_here(cx);
 
         let spectrum = self.settings.read(cx).spectrum();
         let profile = spectrum.app;
         let look = profile.look();
-        let visualizer_on = self.panel.is_none() && spectrum.in_fullscreen && look.style.shown();
+        let visualizer_on =
+            !video && self.panel.is_none() && spectrum.in_fullscreen && look.style.shown();
         match visualizer_on
             .then(|| self.playback.read(cx).spectrum(cx))
             .flatten()
@@ -1169,6 +1238,10 @@ impl Render for FullscreenView {
         let corner = crate::chrome::window_radius(self.settings.read(cx), cx, window);
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let corner: Option<Pixels> = None;
+        if video {
+            self.video_art
+                .update(cx, |art, _| art.fill(corner.unwrap_or_default()));
+        }
 
         div()
             .id("fullscreen")
@@ -1199,6 +1272,10 @@ impl Render for FullscreenView {
                     .absolute()
                     .size_full(),
             )
+            // the video takes the whole view, under the controls, and the cover steps aside
+            .when(video, |this| {
+                this.child(div().absolute().inset_0().child(self.video_art.clone()))
+            })
             .when(visualizer_on, |this| {
                 this.child(
                     Visualizer::new(self.visualizer.levels(), visualizer_max)
@@ -1259,7 +1336,13 @@ impl Render for FullscreenView {
                                     |this| this.flex_1().h_full(),
                                     |this| this.w_full(),
                                 )
-                                .child(self.artwork(side, raster_side, cover_scale, cx))
+                                .when_else(
+                                    video,
+                                    |this| this.h_full().justify_end(),
+                                    |this| {
+                                        this.child(self.artwork(side, raster_side, cover_scale, cx))
+                                    },
+                                )
                                 .child(self.meta(hide, lift, cx))
                                 .when(split, |this| {
                                     this.child(self.dock(
@@ -1299,6 +1382,12 @@ impl Render for FullscreenView {
     }
 }
 
+/// Whether the side panel goes away now: only as a video starts playing here, so a reload of
+/// the same video at another height leaves a panel the reader opened alone.
+fn should_hide(was_here: bool, is_here: bool) -> bool {
+    !was_here && is_here
+}
+
 fn presentation_scale(presented: Pixels, layout: Pixels) -> f32 {
     presented.as_f32() / layout.as_f32()
 }
@@ -1314,5 +1403,13 @@ mod tests {
         let scale = presentation_scale(presented, layout);
 
         assert!((layout.as_f32() * scale - presented.as_f32()).abs() < 0.001);
+    }
+
+    #[test]
+    fn the_panel_hides_only_as_a_video_arrives() {
+        assert!(should_hide(false, true));
+        assert!(!should_hide(true, true));
+        assert!(!should_hide(true, false));
+        assert!(!should_hide(false, false));
     }
 }

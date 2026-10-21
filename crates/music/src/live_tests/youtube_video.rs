@@ -71,3 +71,127 @@ async fn live_a_long_set_seeks_to_ninety_minutes_quickly() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "talks to youtube.com as a guest"]
+async fn live_a_set_opens_a_480p_video_feed() -> Result<()> {
+    let client = YouTubeVideoClient::new(crate::youtube_video::provider().guest_client());
+    let feed = client
+        .video(LONG_SET, 480)
+        .await?
+        .context("the set has no video")?;
+    println!("feed {}x{}", feed.width, feed.height);
+    if feed.height != 480 {
+        bail!("expected 480p, got {}p", feed.height);
+    }
+
+    let started = Instant::now();
+    // The reader blocks on the download, which the runtime has to keep driving.
+    let mut reader = feed.reader;
+    tokio::task::spawn_blocking(move || {
+        let mut buffer = vec![0u8; 64 * 1024];
+        std::io::Read::read_exact(&mut reader, &mut buffer).context("cannot read 64 KiB")
+    })
+    .await??;
+    let took = started.elapsed();
+    println!("read 64 KiB in {took:?}");
+    if took > DEADLINE {
+        bail!("64 KiB took {took:?}");
+    }
+    drop(feed.stream);
+    Ok(())
+}
+
+/// A clock that runs with the wall from `from`, standing in for playback.
+struct WallClock {
+    from: Duration,
+    began: Instant,
+}
+
+impl crate::video::Clock for WallClock {
+    fn now(&self) -> Option<Duration> {
+        Some(self.from + self.began.elapsed())
+    }
+}
+
+/// A manual performance check, not a pass/fail test: plays a real video feed against a wall
+/// clock, drawn the way fullscreen draws it, and prints how often a new frame comes out. Run
+/// it by exact name, in a dev and a release build, after changing the `video` crate:
+///
+/// `cargo test --package music --lib live_video_frame_cadence -- --ignored --exact
+/// live_tests::youtube_video::live_video_frame_cadence --nocapture`
+///
+/// `CADENCE_ID`, `CADENCE_HEIGHT` (1080), `CADENCE_WIDTH` (1920) and `CADENCE_SECS` (20)
+/// change what is played. Smooth is about the feed's frame rate with no gap over 100 ms.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "talks to youtube.com as a guest; a manual performance check"]
+async fn live_video_frame_cadence() -> Result<()> {
+    let knob = |name: &str, default: u64| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    };
+    let id = std::env::var("CADENCE_ID").unwrap_or_else(|_| "BY5QK7AdEfw".into());
+    let height = knob("CADENCE_HEIGHT", 1080) as u32;
+    let width = knob("CADENCE_WIDTH", 1920) as u32;
+    let secs = Duration::from_secs(knob("CADENCE_SECS", 20));
+    let start = Duration::from_secs(30 * 60);
+
+    let client = YouTubeVideoClient::new(crate::youtube_video::provider().guest_client());
+    let feed = client.video(&id, height).await?.context("no video")?;
+    let (stream, reader) = (feed.stream, feed.reader);
+    let clock = Arc::new(WallClock {
+        from: start,
+        began: Instant::now(),
+    });
+    let movie =
+        tokio::task::spawn_blocking(move || crate::video::Movie::start(reader, clock)).await??;
+    let report = tokio::task::spawn_blocking(move || {
+        let began = Instant::now();
+        let (mut index, mut since) = (0, Instant::now());
+        let (mut gaps, mut steps) = (Vec::new(), Vec::new());
+        let mut last_pts = None;
+        while began.elapsed() < secs {
+            movie.watch(width);
+            let Some((frame, pts)) = movie.frame().zip(movie.pts()) else {
+                std::thread::sleep(Duration::from_millis(4));
+                continue;
+            };
+            if frame.index != index {
+                if index != 0 {
+                    gaps.push(since.elapsed());
+                }
+                if let Some(last) = last_pts {
+                    steps.push(pts.saturating_sub(last));
+                }
+                (index, since, last_pts) = (frame.index, Instant::now(), Some(pts));
+            }
+            std::thread::sleep(Duration::from_millis(4));
+        }
+        if gaps.is_empty() {
+            return format!("{index} frames shown in {secs:?}");
+        }
+        gaps.sort();
+        let shown: Duration = gaps.iter().sum();
+        let fps = gaps.len() as f64 / shown.as_secs_f64().max(f64::EPSILON);
+        let at = |q: f64| gaps[((gaps.len() - 1) as f64 * q) as usize];
+        let frame = steps.iter().min().copied().unwrap_or_default();
+        format!(
+            "{}x{} drawn {width} wide: {fps:.1} fps shown (feed frame {frame:?}); gap p50 {:?} \
+             p90 {:?} max {:?}; {} gaps over 100 ms",
+            feed.width,
+            feed.height,
+            at(0.5),
+            at(0.9),
+            at(1.0),
+            gaps.iter()
+                .filter(|gap| **gap > Duration::from_millis(100))
+                .count(),
+        )
+    })
+    .await?;
+    println!("{report}");
+    drop(stream);
+    Ok(())
+}

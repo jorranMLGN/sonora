@@ -288,6 +288,9 @@ const RELOAD_RETRIES: usize = 3;
 const THEMES_DIRECTORY: &str = "themes";
 const THEME_FORMAT_VERSION: u32 = 1;
 const DEFAULT_VOLUME: f32 = 0.7;
+/// The choices of the "maximum video quality" setting, in pixels of height.
+pub const VIDEO_HEIGHTS: [u32; 4] = [360, 480, 720, 1080];
+const DEFAULT_VIDEO_HEIGHT: u32 = 1080;
 const DEFAULT_JAM_PORT: u16 = 8990;
 const JAM_PORT_ENV: &str = "SONORA_JAM_PORT";
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
@@ -370,6 +373,10 @@ struct Appearance {
     ambient_motion: bool,
     /// Plays a track's Canvas in place of its cover where one exists.
     canvas: bool,
+    /// Plays a track's music video beside its sound where the provider has one.
+    video: bool,
+    /// The tallest video stream fetched, in pixels; see `VIDEO_HEIGHTS`.
+    video_max_height: u32,
     /// Draws the playing track's level over its length as bars in the seek bar, where one is
     /// known. The master switch: the options below only count while it is on.
     waveform: bool,
@@ -769,6 +776,11 @@ struct StateValues {
     mini_corner: MiniCorner,
     #[serde(default = "yes")]
     mini_on_top: bool,
+    /// The corner the picture-in-picture video opens in.
+    #[serde(default)]
+    pip_corner: MiniCorner,
+    /// The picture-in-picture window's last size in logical pixels, once it was resized.
+    pip_size: Option<(f32, f32)>,
     fullscreen_tab: Option<SideTab>,
     shuffle: bool,
     repeat: Repeat,
@@ -798,6 +810,8 @@ impl Default for StateValues {
             sidebar_right_open: false,
             mini_corner: MiniCorner::default(),
             mini_on_top: true,
+            pip_corner: MiniCorner::default(),
+            pip_size: None,
             sidebar_right_tab: SideTab::Queue,
             fullscreen_tab: Some(SideTab::Lyrics),
             shuffle: false,
@@ -911,6 +925,8 @@ impl Default for Appearance {
             ambient: true,
             ambient_motion: true,
             canvas: true,
+            video: true,
+            video_max_height: DEFAULT_VIDEO_HEIGHT,
             waveform: true,
             waveform_style: ui::WaveStyle::default().id().to_owned(),
             waveform_density: ui::WaveDensity::default().id().to_owned(),
@@ -1218,6 +1234,16 @@ impl AppSettings {
         self.state.mini_on_top
     }
 
+    /// The corner the picture-in-picture video opens in.
+    pub fn pip_corner(&self) -> MiniCorner {
+        self.state.pip_corner
+    }
+
+    /// The picture-in-picture window's remembered size, `None` until it was first resized.
+    pub fn pip_size(&self) -> Option<(f32, f32)> {
+        self.state.pip_size
+    }
+
     pub fn jam_port(&self) -> u16 {
         match std::env::var(JAM_PORT_ENV) {
             Err(_) => self.values.jam.port,
@@ -1339,6 +1365,21 @@ impl AppSettings {
 
     pub fn canvas(&self) -> bool {
         self.values.appearance.canvas
+    }
+
+    /// Whether a track's music video plays where the provider has one.
+    pub fn video(&self) -> bool {
+        self.values.appearance.video
+    }
+
+    /// The tallest video stream to fetch, always one of `VIDEO_HEIGHTS`. A hand-edited value
+    /// outside them falls back to the default.
+    pub fn video_max_height(&self) -> u32 {
+        let height = self.values.appearance.video_max_height;
+        match VIDEO_HEIGHTS.contains(&height) {
+            true => height,
+            false => DEFAULT_VIDEO_HEIGHT,
+        }
     }
 
     /// Whether the seek bar draws the track's waveform when one is known.
@@ -1861,6 +1902,22 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
+    pub fn set_pip_corner(&mut self, corner: MiniCorner, cx: &mut Context<Self>) {
+        if self.state.pip_corner == corner {
+            return;
+        }
+        self.state.pip_corner = corner;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_pip_size(&mut self, size: (f32, f32), cx: &mut Context<Self>) {
+        if self.state.pip_size == Some(size) {
+            return;
+        }
+        self.state.pip_size = Some(size);
+        self.save_state_quietly(cx);
+    }
+
     pub fn set_mini_corner(&mut self, corner: MiniCorner, cx: &mut Context<Self>) {
         if self.state.mini_corner == corner {
             return;
@@ -2036,6 +2093,23 @@ impl AppSettings {
 
     pub fn set_canvas(&mut self, canvas: bool, cx: &mut Context<Self>) {
         self.values.appearance.canvas = canvas;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_video(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.values.appearance.video == on {
+            return;
+        }
+        self.values.appearance.video = on;
+        self.schedule_save(cx);
+    }
+
+    /// Takes one of `VIDEO_HEIGHTS`; any other value is ignored.
+    pub fn set_video_max_height(&mut self, height: u32, cx: &mut Context<Self>) {
+        if !VIDEO_HEIGHTS.contains(&height) {
+            return;
+        }
+        self.values.appearance.video_max_height = height;
         self.schedule_save(cx);
     }
 

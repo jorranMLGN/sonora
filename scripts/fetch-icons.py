@@ -19,6 +19,7 @@ PACKS = {
 }
 
 MAP = {
+    "app-window": ("app-window", "window-frame-linear", "window-line"),
     "arrow-up-down": ("sort", "sort-linear", "arrow-up-down-line"),
     "check": ("check", None, "check-line"),
     "chevron-down": ("nav-arrow-down", "alt-arrow-down-linear", "arrow-down-s-line"),

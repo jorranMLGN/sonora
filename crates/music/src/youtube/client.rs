@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
@@ -19,6 +19,8 @@ const EPISODES: &str = "SE";
 pub struct YouTubeClient {
     api: Arc<YtMusic>,
     account: String,
+    /// Whether each video id is a music video, from one Music-client player request.
+    kinds: Mutex<HashMap<String, bool>>,
 }
 
 impl YouTubeClient {
@@ -26,6 +28,7 @@ impl YouTubeClient {
         Self {
             api,
             account: String::new(),
+            kinds: Mutex::new(HashMap::new()),
         }
     }
 
@@ -56,6 +59,42 @@ impl YouTubeClient {
 
 #[async_trait]
 impl MusicApi for YouTubeClient {
+    async fn video(&self, track_id: &str, max_height: u32) -> Result<Option<crate::VideoFeed>> {
+        match self.has_video(track_id).await? {
+            true => crate::youtube::playback::open_video_feed(&self.api, track_id, max_height)
+                .await
+                .map(Some),
+            false => Ok(None),
+        }
+    }
+
+    /// One Music-client player request per track, cached, read for its `musicVideoType`.
+    async fn has_video(&self, track_id: &str) -> Result<bool> {
+        let cached = self
+            .kinds
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(track_id)
+            .copied();
+        let shows = match cached {
+            Some(shows) => shows,
+            None => {
+                let kind = self
+                    .api
+                    .music_video_type(track_id)
+                    .await
+                    .context("cannot read the track's video type")?;
+                let shows = shows_video(kind.as_deref());
+                self.kinds
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(track_id.to_owned(), shows);
+                shows
+            }
+        };
+        Ok(shows)
+    }
+
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
         let id = escape::component(id);
         let url = match kind {
@@ -426,4 +465,23 @@ pub(crate) fn library_playlist(source: ytmusic::Playlist, account: &str) -> Opti
     }
 
     Some(playlist)
+}
+
+/// Whether a track of this `musicVideoType` has a video worth showing: an official or user
+/// made one, never the still art of an audio track.
+fn shows_video(kind: Option<&str>) -> bool {
+    kind.is_some_and(ytmusic::is_music_video)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shows_video;
+
+    #[test]
+    fn an_art_track_has_no_video() {
+        assert!(!shows_video(None));
+        assert!(!shows_video(Some("MUSIC_VIDEO_TYPE_ATV")));
+        assert!(shows_video(Some("MUSIC_VIDEO_TYPE_OMV")));
+        assert!(shows_video(Some("MUSIC_VIDEO_TYPE_UGC")));
+    }
 }

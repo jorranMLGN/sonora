@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Watch YouTube videos and music videos while they play: in the sidebar, full screen, or in a
+  floating window that stays on top.
 - Sign in to YouTube, or play as a guest, to search and play videos, DJ sets and live
   recordings that YouTube Music does not have. Your subscriptions, playlists, Watch Later and
   liked videos are in your library.

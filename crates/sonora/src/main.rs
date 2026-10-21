@@ -2,12 +2,14 @@
 
 mod above;
 mod actions;
+mod aspect;
 mod assets;
 mod dock;
 mod http;
 mod logging;
 mod memory;
 mod mini;
+mod pip;
 mod single;
 #[cfg(windows)]
 mod thumbbar;
@@ -175,6 +177,7 @@ fn main() {
         }
         actions::register(lingers, cx);
         mini::watch(cx);
+        pip::watch(cx);
         memory::watch(cx);
 
         open_window(cx);
@@ -309,6 +312,7 @@ fn open_window(cx: &mut App) {
         drm: _,
         codec: _,
         canvas: _,
+        video: _,
         library,
         history: _,
         jam: _,
