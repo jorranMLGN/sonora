@@ -222,6 +222,7 @@ opt-level = 2
 [profile.dev.package.video]
 debug = false
 opt-level = 2
+# std's debug checks keep the YUV to BGRA kernel from vectorising: 17 ms a 1080p frame, not 1.6
 debug-assertions = false
 
 [profile.dev.package."*"]

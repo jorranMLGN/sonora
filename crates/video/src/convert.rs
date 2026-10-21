@@ -43,7 +43,7 @@ pub(crate) fn bgra(yuv: &impl YUVSource, width: u32) -> (Vec<u8>, u32, u32) {
     let full = out_w == source_w;
 
     // one row of luma and chroma at the output width, refilled as the source row changes
-    let mut luma = vec![0u8; out_w];
+    let mut gathered = vec![0u8; out_w];
     let (mut u, mut v) = (vec![0u8; out_w], vec![0u8; out_w]);
     let mut chroma_row = None;
     let mut out = vec![0u8; out_w * out_h * 4];
@@ -51,11 +51,11 @@ pub(crate) fn bgra(yuv: &impl YUVSource, width: u32) -> (Vec<u8>, u32, u32) {
         let sy = (row * source_h / out_h).min(source_h - 1);
         let cy = (sy / 2).min(chroma_h - 1);
         let source = &plane_y[sy * y_stride..][..source_w];
-        let luma = match full {
+        let luma_row = match full {
             true => source,
             false => {
-                gather(source, &columns, &mut luma);
-                &luma
+                gather(source, &columns, &mut gathered);
+                &gathered
             }
         };
         if chroma_row != Some(cy) {
@@ -71,7 +71,7 @@ pub(crate) fn bgra(yuv: &impl YUVSource, width: u32) -> (Vec<u8>, u32, u32) {
                 &mut v,
             );
         }
-        convert_row(luma, &u, &v, line);
+        convert_row(luma_row, &u, &v, line);
     }
     (out, out_w as u32, out_h as u32)
 }
@@ -115,10 +115,10 @@ fn convert_row_portable(luma: &[u8], u: &[u8], v: &[u8], line: &mut [u8]) {
         .zip(u.iter().zip(v));
     for ((pixel, &y), (&u, &v)) in pixels {
         let (y, u, v) = (i32::from(y) - 16, i32::from(u) - 128, i32::from(v) - 128);
-        let luma = Y_GAIN * y + HALF;
-        let b = channel(luma + BU * u);
-        let g = channel(luma - GU * u - GV * v);
-        let r = channel(luma + RV * v);
+        let base = Y_GAIN * y + HALF;
+        let b = channel(base + BU * u);
+        let g = channel(base - GU * u - GV * v);
+        let r = channel(base + RV * v);
         *pixel = (b | g << 8 | r << 16 | 0xff00_0000).to_le_bytes();
     }
 }
@@ -224,6 +224,21 @@ mod tests {
             .map(|(a, b)| a.abs_diff(*b))
             .max()
             .unwrap()
+    }
+
+    #[test]
+    fn the_portable_row_matches_the_float_conversion() {
+        // the path every processor without AVX2 takes, and the only one off x86_64
+        let yuv = planes(255, 2);
+        let width = 255;
+        let (slow, _, _) = reference(&yuv, width as u32);
+        let luma = &yuv.y[..width];
+        let u: Vec<u8> = (0..width).map(|x| yuv.u[x / 2]).collect();
+        let v: Vec<u8> = (0..width).map(|x| yuv.v[x / 2]).collect();
+        let mut fast = vec![0u8; width * 4];
+        convert_row_portable(luma, &u, &v, &mut fast);
+        let worst = fast.iter().zip(&slow).map(|(a, b)| a.abs_diff(*b)).max();
+        assert!(worst.unwrap() <= 1);
     }
 
     #[test]

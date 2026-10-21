@@ -355,7 +355,8 @@ impl Stamps {
 /// The thread. Each turn reads the clock, seeks when it jumped, decodes until `AHEAD` past it
 /// or `BUFFER` frames are waiting, shows the latest frame that is due and sleeps until the
 /// next one is. The clock is read again as each picture comes out, so a picture already past
-/// is not converted and a frame that falls due mid-fill is shown before the next decode.
+/// is not converted, a frame that falls due mid-fill is shown before the next decode, and a
+/// jump of the clock mid-fill ends the turn so the next one seeks.
 fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn Clock) {
     let mut queue: VecDeque<(Duration, Picture)> = VecDeque::new();
     // where the screen is: the time of the frame shown, or the target of the last seek
@@ -371,14 +372,7 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
             std::thread::sleep(IDLE);
             continue;
         };
-        let seek = match head {
-            None => true,
-            Some(head) => {
-                now + BEHIND < head
-                    || (now > head + AHEAD && decoding.stream.segment_at(now) > decoding.current)
-            }
-        };
-        if seek {
+        if must_seek(now, head, &decoding) {
             queue.clear();
             decoded = None;
             ended = false;
@@ -392,16 +386,24 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
             };
         }
         let width = shared.width.load(Ordering::Relaxed);
-        // whether the fill stopped early to show a frame that fell due
+        // the fill reaches `AHEAD` past where the turn began, however far the clock moves on
+        let (started, began) = (now, Instant::now());
+        // whether the fill stopped early, to show a frame that fell due or to seek
         let mut cut = false;
         while !broken
             && !ended
             && queue.len() < BUFFER
-            && decoded.is_none_or(|pts| pts < now + AHEAD)
+            && decoded.is_none_or(|pts| pts < started + AHEAD)
             && !shared.stop.load(Ordering::Relaxed)
         {
-            // a picture whose successor is already due is never shown, so skip converting it
-            let keep = |pts, duration| pts + duration > clock.now().unwrap_or(now);
+            // a picture whose successor is already due is never shown, so skip converting it;
+            // but with nothing queued, one still due when the turn began is kept, so a decoder
+            // slower than the clock still shows the frame each seek lands on
+            let starved = queue.is_empty();
+            let keep = |pts: Duration, duration| {
+                let end = pts + duration;
+                end > clock.now().unwrap_or(now) || (starved && end > started)
+            };
             match decoding.next(width, keep) {
                 Ok(Some(picture)) => {
                     decoded = Some(picture.pts);
@@ -416,8 +418,10 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
                 }
             }
             now = clock.now().unwrap_or(now);
-            // show a frame as soon as it is due rather than after the buffer is full
-            if queue.front().is_some_and(|(pts, _)| *pts <= now) {
+            // show a frame as soon as it is due rather than after the buffer is full, and let
+            // a jump of the clock reach the seek at the top rather than decoding through it
+            let due = queue.front().is_some_and(|(pts, _)| *pts <= now);
+            if due || jumped(started, began.elapsed(), now) {
                 cut = true;
                 break;
             }
@@ -449,6 +453,27 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
             .clamp(NAP, IDLE);
         std::thread::sleep(wait);
     }
+}
+
+/// Whether the clock at `now` has jumped away from `head`, where the screen is: back past
+/// `BEHIND`, or on past `AHEAD` into a later fragment than the one being decoded.
+fn must_seek<R: Read + Seek>(
+    now: Duration,
+    head: Option<Duration>,
+    decoding: &Decoding<R>,
+) -> bool {
+    let Some(head) = head else {
+        return true;
+    };
+    now + BEHIND < head
+        || (now > head + AHEAD && decoding.stream.segment_at(now) > decoding.current)
+}
+
+/// Whether a clock that read `started` and then ran for `elapsed` jumped to reach `now`: back
+/// past `BEHIND`, or on more than `AHEAD` past where running would have taken it. A decoder
+/// merely falling behind is no jump; the top of the turn seeks for that.
+fn jumped(started: Duration, elapsed: Duration, now: Duration) -> bool {
+    now + BEHIND < started || now > started + elapsed + AHEAD
 }
 
 fn watched(shared: &Shared) -> bool {
@@ -744,21 +769,34 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_slow_decoder_still_shows_each_frame_on_time() {
+    /// A movie of the fixture on `clock` whose every decode takes `cost` longer, or `None`
+    /// when no decoder is installed.
+    fn slow_movie(cost: Duration, clock: Arc<dyn Clock>) -> Option<Movie> {
         if crate::codec::find().is_none() {
             eprintln!("skipped: no openh264 installed");
-            return;
+            return None;
         }
         let stream = Stream::open(Cursor::new(FIXTURE.to_vec())).unwrap();
         let mut decoding = Decoding::new(stream).unwrap();
-        // half a frame per picture: the thread keeps up, but filling `BUFFER` takes 160 ms
-        decoding.cost = FRAME / 2;
-        let clock = Arc::new(WallClock {
+        decoding.cost = cost;
+        Some(Movie::spawn(decoding, clock).unwrap())
+    }
+
+    /// A wall clock from zero.
+    fn wall() -> Arc<WallClock> {
+        Arc::new(WallClock {
             began: Instant::now(),
             from: Duration::ZERO,
-        });
-        let movie = Movie::spawn(decoding, clock.clone()).unwrap();
+        })
+    }
+
+    #[test]
+    fn a_slow_decoder_still_shows_each_frame_on_time() {
+        let clock = wall();
+        // half a frame per picture: the thread keeps up, but filling `BUFFER` takes 160 ms
+        let Some(movie) = slow_movie(FRAME / 2, clock.clone()) else {
+            return;
+        };
         let (mut last, mut shown, mut worst) = (0, 0, Duration::ZERO);
         while clock.now().unwrap() < Duration::from_millis(3500) {
             movie.watch(WIDTH);
@@ -778,6 +816,50 @@ mod tests {
         // the old fill, which judged pictures against a stale clock, showed about half
         assert!(shown >= 60, "only {shown} of 88 frames shown");
         assert!(worst <= FRAME, "a frame was shown {worst:?} after its time");
+    }
+
+    #[test]
+    fn a_decoder_slower_than_the_clock_still_moves_on() {
+        let clock = wall();
+        // two frames per picture: it falls behind for good, so it seeks on and shows the frame
+        // each seek lands on, rather than freezing in a fill that never ends
+        let Some(movie) = slow_movie(FRAME * 2, clock.clone()) else {
+            return;
+        };
+        let (mut last, mut shown) = (0, 0);
+        while clock.now().unwrap() < Duration::from_millis(3000) {
+            movie.watch(WIDTH);
+            if let Some(frame) = movie.frame()
+                && frame.index != last
+            {
+                last = frame.index;
+                shown += 1;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(shown >= 2, "only {shown} frames shown in 3 s");
+        let pts = movie.pts().unwrap();
+        assert!(
+            pts >= Duration::from_millis(1000),
+            "stuck at {pts:?} after 3 s"
+        );
+    }
+
+    #[test]
+    fn a_jump_while_nothing_is_queued_seeks_rather_than_decoding_through() {
+        let clock = Arc::new(FakeClock(Mutex::new(Some(Duration::ZERO))));
+        // half a frame per picture, so decoding through to the target would take 1.75 s
+        let Some(movie) = slow_movie(FRAME / 2, clock.clone()) else {
+            return;
+        };
+        movie.watch(WIDTH);
+        // the thread wakes within `IDLE` and is mid-fill, nothing out of the decoder yet
+        std::thread::sleep(Duration::from_millis(30));
+        clock.set(Some(Duration::from_millis(3500)));
+        let held = draw_until(&movie, WIDTH, Duration::from_millis(1000), |movie| {
+            between(movie, 3460, 3500)
+        });
+        assert!(held, "pts is {:?}", movie.pts());
     }
 
     #[test]
