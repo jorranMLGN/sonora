@@ -131,7 +131,7 @@ pub struct Video {
     /// or the decoder's state changes, since `Playback` notifies twice a second.
     probe_failed: Option<String>,
     grace: Option<Task<()>>,
-    /// Whether the track before this one was offered a video. Keeps the player bar's video
+    /// Whether the track before this one had a video (`has_video`, not merely offered). Keeps the player bar's video
     /// buttons up while the new track is still being asked about, so a run of videos does not
     /// blink between tracks.
     carried: bool,
@@ -319,7 +319,8 @@ impl Video {
             .track()
             .and_then(|track| track.id.clone());
         if next(self.track.as_deref(), track.as_deref()) == Change::Drop {
-            self.carried = self.offers_video();
+            // from the answer alone, so a track never answered cannot pass the offer on
+            self.carried = self.has_video();
             self.track = track;
             self.task = None;
             self.probe = None;
@@ -920,6 +921,15 @@ mod tests {
         assert!(offers(true, false, None, true));
         assert!(!offers(true, false, Some(false), true));
         assert!(offers(true, true, Some(true), true));
+    }
+
+    #[test]
+    fn an_unanswered_track_does_not_pass_the_offer_on() {
+        // the carry is the answer alone, so a run of tracks never answered ends the offer
+        let first = has(true, false, Some(true));
+        assert!(offers(true, false, None, first));
+        let second = has(false, false, None);
+        assert!(!offers(true, false, None, second));
     }
 
     #[test]
