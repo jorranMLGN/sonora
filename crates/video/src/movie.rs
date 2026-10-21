@@ -105,6 +105,9 @@ struct Decoding<R> {
     /// Whether `decoder` has seen a packet since it was opened.
     fed: bool,
     annexb: Vec<u8>,
+    /// How long each decode is made to take longer, to test a decoder slower than the clock.
+    #[cfg(test)]
+    cost: Duration,
 }
 
 /// Pairs the pictures coming out of the decoder with their times. The decoder hands pictures
@@ -132,7 +135,14 @@ impl Movie {
     /// must return an error, never block forever, once its download is cancelled: a read that
     /// never returns keeps the thread alive after the `Movie` is dropped.
     pub fn start(source: impl Read + Seek + Send + 'static, clock: Arc<dyn Clock>) -> Result<Self> {
-        let decoding = Decoding::new(Stream::open(source)?)?;
+        Self::spawn(Decoding::new(Stream::open(source)?)?, clock)
+    }
+
+    /// Starts the thread over `decoding`, unwatched.
+    fn spawn<R: Read + Seek + Send + 'static>(
+        decoding: Decoding<R>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self> {
         let shared = Arc::new(Shared {
             shown: Mutex::new(None),
             width: AtomicU32::new(FIRST_WIDTH),
@@ -199,6 +209,8 @@ impl<R: Read + Seek> Decoding<R> {
             flushed: false,
             fed: false,
             annexb: Vec::new(),
+            #[cfg(test)]
+            cost: Duration::ZERO,
         })
     }
 
@@ -273,7 +285,10 @@ impl<R: Read + Seek> Decoding<R> {
                 self.convert.convert_packet(&sample.data, &mut self.annexb);
                 self.stamps.fed(sample.pts, sample.duration);
                 self.fed = true;
-                let decoded = match self.decoder.decode(&self.annexb) {
+                let result = self.decoder.decode(&self.annexb);
+                #[cfg(test)]
+                std::thread::sleep(self.cost);
+                let decoded = match result {
                     Ok(Some(image)) => self.stamps.out().map(|(pts, duration)| Decoded {
                         pts,
                         frame: keep(pts, duration).then(|| picture(&image, width)),
@@ -339,7 +354,8 @@ impl Stamps {
 
 /// The thread. Each turn reads the clock, seeks when it jumped, decodes until `AHEAD` past it
 /// or `BUFFER` frames are waiting, shows the latest frame that is due and sleeps until the
-/// next one is.
+/// next one is. The clock is read again as each picture comes out, so a picture already past
+/// is not converted and a frame that falls due mid-fill is shown before the next decode.
 fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn Clock) {
     let mut queue: VecDeque<(Duration, Picture)> = VecDeque::new();
     // where the screen is: the time of the frame shown, or the target of the last seek
@@ -348,8 +364,10 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
     let mut decoded: Option<Duration> = None;
     let mut index = 0u64;
     let mut broken = false;
+    // the decoder gave out its last picture; cleared by a seek
+    let mut ended = false;
     while !shared.stop.load(Ordering::Relaxed) {
-        let Some(now) = clock.now().filter(|_| watched(shared)) else {
+        let Some(mut now) = clock.now().filter(|_| watched(shared)) else {
             std::thread::sleep(IDLE);
             continue;
         };
@@ -363,6 +381,7 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
         if seek {
             queue.clear();
             decoded = None;
+            ended = false;
             head = Some(now);
             broken = match decoding.seek(now) {
                 Ok(()) => false,
@@ -373,24 +392,34 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
             };
         }
         let width = shared.width.load(Ordering::Relaxed);
+        // whether the fill stopped early to show a frame that fell due
+        let mut cut = false;
         while !broken
+            && !ended
             && queue.len() < BUFFER
             && decoded.is_none_or(|pts| pts < now + AHEAD)
             && !shared.stop.load(Ordering::Relaxed)
         {
             // a picture whose successor is already due is never shown, so skip converting it
-            match decoding.next(width, |pts, duration| pts + duration > now) {
+            let keep = |pts, duration| pts + duration > clock.now().unwrap_or(now);
+            match decoding.next(width, keep) {
                 Ok(Some(picture)) => {
                     decoded = Some(picture.pts);
                     if let Some(frame) = picture.frame {
                         queue.push_back((picture.pts, frame));
                     }
                 }
-                Ok(None) => break,
+                Ok(None) => ended = true,
                 Err(error) => {
                     log::warn!("video: cannot read the next fragment: {error:#}");
                     broken = true;
                 }
+            }
+            now = clock.now().unwrap_or(now);
+            // show a frame as soon as it is due rather than after the buffer is full
+            if queue.front().is_some_and(|(pts, _)| *pts <= now) {
+                cut = true;
+                break;
             }
         }
         let mut due = None;
@@ -409,6 +438,10 @@ fn run<R: Read + Seek>(mut decoding: Decoding<R>, shared: &Shared, clock: &dyn C
             if let Ok(mut shown) = shared.shown.lock() {
                 *shown = Some(Shown { frame, pts });
             }
+        }
+        // a fill cut short by a due frame goes on at once; otherwise sleep until the next one
+        if cut {
+            continue;
         }
         let wait = queue
             .front()
@@ -697,6 +730,54 @@ mod tests {
         let index = movie.frame().unwrap().index;
         draw_until(&movie, WIDTH, Duration::from_millis(300), |_| false);
         assert_eq!(movie.frame().unwrap().index, index);
+    }
+
+    /// A clock that runs with the wall from `from`.
+    struct WallClock {
+        began: Instant,
+        from: Duration,
+    }
+
+    impl Clock for WallClock {
+        fn now(&self) -> Option<Duration> {
+            Some(self.from + self.began.elapsed())
+        }
+    }
+
+    #[test]
+    fn a_slow_decoder_still_shows_each_frame_on_time() {
+        if crate::codec::find().is_none() {
+            eprintln!("skipped: no openh264 installed");
+            return;
+        }
+        let stream = Stream::open(Cursor::new(FIXTURE.to_vec())).unwrap();
+        let mut decoding = Decoding::new(stream).unwrap();
+        // half a frame per picture: the thread keeps up, but filling `BUFFER` takes 160 ms
+        decoding.cost = FRAME / 2;
+        let clock = Arc::new(WallClock {
+            began: Instant::now(),
+            from: Duration::ZERO,
+        });
+        let movie = Movie::spawn(decoding, clock.clone()).unwrap();
+        let (mut last, mut shown, mut worst) = (0, 0, Duration::ZERO);
+        while clock.now().unwrap() < Duration::from_millis(3500) {
+            movie.watch(WIDTH);
+            let now = clock.now().unwrap();
+            if let Some((frame, pts)) = movie.frame().zip(movie.pts())
+                && frame.index != last
+            {
+                last = frame.index;
+                shown += 1;
+                // the first picture waits on the decoder's reordering delay, which nothing can save
+                if shown > 1 {
+                    worst = worst.max(now.saturating_sub(pts));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // the old fill, which judged pictures against a stale clock, showed about half
+        assert!(shown >= 60, "only {shown} of 88 frames shown");
+        assert!(worst <= FRAME, "a frame was shown {worst:?} after its time");
     }
 
     #[test]

@@ -219,6 +219,11 @@ opt-level = 2
 debug = false
 opt-level = 2
 
+[profile.dev.package.video]
+debug = false
+opt-level = 2
+debug-assertions = false
+
 [profile.dev.package."*"]
 debug = false
 opt-level = 2
