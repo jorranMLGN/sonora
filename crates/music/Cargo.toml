@@ -7,9 +7,11 @@ license.workspace = true
 [features]
 # Every provider and codec the desktop app ships. A build for a platform that cannot carry one of
 # them (the iOS spike in `crates/mobile`) turns the defaults off and names what it wants.
-default = ["spotify", "youtube", "video", "opus"]
+default = ["spotify", "youtube", "youtube-video", "video", "opus"]
 spotify = ["dep:librespot-core", "dep:librespot-playback", "dep:librespot-protocol"]
 youtube = ["dep:ytmusic"]
+# Plain youtube.com videos, over the same session code as YouTube Music.
+youtube-video = ["youtube"]
 video = ["dep:video"]
 # Opus through libopus, a C library.
 opus = ["rodio/symphonia-libopus"]

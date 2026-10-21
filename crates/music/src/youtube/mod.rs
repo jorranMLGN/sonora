@@ -4,9 +4,10 @@ mod browser;
 mod client;
 mod genres;
 mod lyrics;
-mod playback;
+pub(crate) mod playback;
 mod radio;
 mod segments;
+mod site;
 mod subscriptions;
 mod wire;
 
@@ -21,6 +22,7 @@ use ytmusic::YtMusic;
 
 use self::browser::{Browser, Family, detect};
 use crate::youtube::playback::Factory;
+use crate::youtube::site::MUSIC;
 
 use crate::{
     Capabilities, InputSource, MusicProvider, PromptSink, ProviderSession, Shape, SignIn,
@@ -28,13 +30,11 @@ use crate::{
 };
 pub use client::YouTubeClient;
 pub use lyrics::YouTubeLyrics;
+pub(crate) use site::Site;
+#[cfg(feature = "youtube-video")]
+pub(crate) use wire::profile as user_profile;
 
 const GUEST_ID: &str = "youtube-guest";
-/// Google's sign-in page, told to come back to YouTube Music once the account is in: the same url
-/// YouTube Music's own Sign in button opens, `www.youtube.com/signin` hop included, so that the
-/// second load the sign-in window falls back on runs exactly what that button would.
-const SIGN_IN_URL: &str = "https://accounts.google.com/ServiceLogin?ltmpl=music&service=youtube&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F";
-const LANDING: &str = "music.youtube.com";
 const COOKIE_DOMAIN: &str = "youtube.com";
 /// How often a signed-in session asks Google for fresh cookies, the cadence of an open YouTube tab.
 const ROTATION: Duration = Duration::from_secs(10 * 60);
@@ -66,6 +66,7 @@ impl ytmusic::Minter for Minter {
 }
 
 pub struct YouTubeProvider {
+    site: &'static Site,
     credentials: PathBuf,
     /// The cookie store ytmusic writes back to as Google rotates the session. The pasted
     /// header in the credential file seeds it when it is missing.
@@ -76,14 +77,20 @@ pub struct YouTubeProvider {
 
 impl YouTubeProvider {
     pub fn new() -> Self {
-        Self::at(credentials::dir("youtube"))
+        Self::for_site(&MUSIC, credentials::dir(MUSIC.slug))
     }
 
     /// A provider that keeps its credentials, cookies and player caches in `cache`, for a
     /// platform whose cache directory is handed in rather than found, such as an iOS app's
     /// sandbox.
     pub fn at(cache: PathBuf) -> Self {
+        Self::for_site(&MUSIC, cache)
+    }
+
+    /// A provider for `site` that keeps its credentials, cookies and player caches in `cache`.
+    pub(crate) fn for_site(site: &'static Site, cache: PathBuf) -> Self {
         Self {
+            site,
             credentials: cache.join(credentials::FILE),
             cookies: cache.join("cookies.json"),
             resolved: cache.join("resolved.json"),
@@ -120,7 +127,7 @@ impl YouTubeProvider {
         )
     }
 
-    fn guest_client(&self) -> Arc<YtMusic> {
+    pub(crate) fn guest_client(&self) -> Arc<YtMusic> {
         Arc::new(
             YtMusic::anonymous()
                 .cache_player(self.player.clone())
@@ -133,11 +140,11 @@ impl YouTubeProvider {
     fn authenticated_session(&self, api: Arc<YtMusic>, profile: UserProfile) -> ProviderSession {
         let since = self.rotated_at().unwrap_or_else(SystemTime::now);
         keep_fresh(Arc::downgrade(&api), since);
-        let client = YouTubeClient::new(api.clone()).owned_by(profile.display_name.clone());
+        let client = (self.site.client)(api.clone(), Some(profile.display_name.clone()));
         ProviderSession {
             profile,
-            api: Arc::new(client),
-            playback: Arc::new(Factory::new(api)),
+            api: client,
+            playback: Arc::new(self.factory(api)),
             shape: Shape::Saved,
             authenticated: true,
             capabilities: Capabilities {
@@ -148,15 +155,21 @@ impl YouTubeProvider {
         }
     }
 
+    /// The playback for a session over `api`, under this site's slug so the two YouTube
+    /// providers keep their engines, and their jam feeds, apart.
+    fn factory(&self, api: Arc<YtMusic>) -> Factory {
+        Factory::new(api, self.site.slug)
+    }
+
     fn guest_session(&self, api: Arc<YtMusic>) -> ProviderSession {
         ProviderSession {
             profile: UserProfile {
                 id: GUEST_ID.to_string(),
-                display_name: "YouTube Music".to_string(),
+                display_name: self.site.guest_name.to_string(),
                 avatar: None,
             },
-            api: Arc::new(YouTubeClient::new(api.clone())),
-            playback: Arc::new(Factory::new(api)),
+            api: (self.site.client)(api.clone(), None),
+            playback: Arc::new(self.factory(api)),
             shape: Shape::Saved,
             authenticated: false,
             capabilities: Capabilities {
@@ -361,15 +374,15 @@ impl Default for YouTubeProvider {
 #[async_trait]
 impl MusicProvider for YouTubeProvider {
     fn name(&self) -> &'static str {
-        "YouTube Music"
+        self.site.name
     }
 
     fn slug(&self) -> &'static str {
-        "youtube"
+        self.site.slug
     }
 
     fn reach(&self) -> Option<String> {
-        Some("music.youtube.com".to_owned())
+        Some(self.site.reach.to_owned())
     }
 
     fn public_art(&self) -> bool {
@@ -452,11 +465,63 @@ impl MusicProvider for YouTubeProvider {
 
     fn web_sign_in(&self) -> Option<WebSignIn> {
         Some(WebSignIn {
-            url: SIGN_IN_URL,
-            landing: LANDING,
+            url: self.site.sign_in_url,
+            landing: self.site.landing,
             domain: COOKIE_DOMAIN,
             proof: auth::PROOF,
             agent: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MusicApi;
+
+    fn video_client(api: Arc<YtMusic>, owner: Option<String>) -> Arc<dyn MusicApi> {
+        let client = YouTubeClient::new(api);
+        Arc::new(match owner {
+            Some(owner) => client.owned_by(owner),
+            None => client,
+        })
+    }
+
+    static VIDEO: Site = Site {
+        name: "YouTube",
+        slug: "youtube-video",
+        reach: "www.youtube.com",
+        sign_in_url: "https://accounts.google.com/ServiceLogin?service=youtube",
+        landing: "www.youtube.com",
+        guest_name: "YouTube",
+        client: video_client,
+    };
+
+    #[test]
+    fn each_site_keeps_its_own_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"));
+        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"));
+        std::fs::create_dir_all(tmp.path().join("a")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("b")).unwrap();
+
+        music.store_guest();
+
+        assert!(music.stored());
+        assert!(!video.stored());
+        assert_eq!(music.slug(), "youtube");
+        assert_eq!(video.slug(), "youtube-video");
+        assert_eq!(video.name(), "YouTube");
+        assert_eq!(video.reach().as_deref(), Some("www.youtube.com"));
+    }
+
+    #[test]
+    fn each_site_plays_under_its_own_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"));
+        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"));
+
+        assert_eq!(music.factory(music.guest_client()).slug(), "youtube");
+        assert_eq!(video.factory(video.guest_client()).slug(), "youtube-video");
     }
 }

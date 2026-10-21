@@ -37,6 +37,8 @@ pub mod video;
 mod waveform;
 #[cfg(feature = "youtube")]
 pub mod youtube;
+#[cfg(feature = "youtube-video")]
+pub mod youtube_video;
 
 use std::collections::HashMap;
 use std::num::NonZero;
@@ -329,6 +331,12 @@ pub trait MusicApi: Send + Sync {
     }
 
     async fn search_playlists(&self, _query: &str) -> Result<Vec<Playlist>> {
+        Ok(Vec::new())
+    }
+
+    /// Artists (or channels) matching `query`, for a provider whose search lists them directly.
+    /// Defaults to none, in which case artists are derived from the track and album results.
+    async fn search_artists(&self, _query: &str) -> Result<Vec<SavedArtist>> {
         Ok(Vec::new())
     }
 

@@ -3,8 +3,9 @@
 //! The track streams through [`crate::stream`] like every other provider's, fed by ytmusic's
 //! ranged download, which asks again from the byte a stalled connection stopped at. The file is
 //! DASH fMP4, so the decoder opens it unseekable and a seek splices the header onto the segment
-//! the `sidx` names, the way Apple Music's does. The threads, the queue, the preload, the gapless
-//! join and the loudness gain are the engine's.
+//! the `sidx` names, the way Apple Music's does. A splice far past what has arrived moves the
+//! download there, so a seek into a long set plays within seconds. The threads, the queue, the
+//! preload, the gapless join and the loudness gain are the engine's.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ use ytmusic::{AudioStream, YtMusic};
 use crate::audio::Trimmed;
 use crate::cast::CastSink;
 use crate::engine::{self, Fetch, Loudness};
-use crate::stream::{PREROLL, Plain, Reader, Source, Stream};
+use crate::stream::{PREROLL, Plain, Ranged, Reader, Source, Stream};
 use crate::trim::{self, Trim};
 use crate::youtube::segments::Segments;
 use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
@@ -45,13 +46,21 @@ pub struct Loaded {
     duration: Option<Duration>,
 }
 
+/// Starts the engine for one YouTube site. Both sites share this playback, so each passes its
+/// own slug, which names the engine's jam feed and its threads.
 pub struct Factory {
     api: Arc<YtMusic>,
+    slug: &'static str,
 }
 
 impl Factory {
-    pub fn new(api: Arc<YtMusic>) -> Self {
-        Self { api }
+    pub fn new(api: Arc<YtMusic>, slug: &'static str) -> Self {
+        Self { api, slug }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn slug(&self) -> &'static str {
+        self.slug
     }
 }
 
@@ -64,21 +73,42 @@ impl PlaybackFactory for Factory {
         engine::start(
             YouTube {
                 api: self.api.clone(),
+                slug: self.slug,
             },
             config,
-            "youtube",
+            self.slug,
             cast,
         )
     }
 }
 
-struct YouTube {
+/// The engine's fetch for YouTube. `pub(crate)` so a live test can drive `load` and `open`
+/// without a running engine.
+pub(crate) struct YouTube {
     api: Arc<YtMusic>,
+    /// The site's slug, which names the engine's threads.
+    slug: &'static str,
+}
+
+impl YouTube {
+    #[cfg(test)]
+    pub(crate) fn new(api: Arc<YtMusic>) -> Self {
+        Self {
+            api,
+            slug: "youtube",
+        }
+    }
 }
 
 impl Source for AudioStream {
     async fn chunk(&mut self) -> Result<Option<Bytes>> {
         AudioStream::chunk(self).await
+    }
+}
+
+impl Ranged for AudioStream {
+    fn resumed(&self, at: u64) -> Self {
+        AudioStream::resumed(self, at)
     }
 }
 
@@ -88,7 +118,7 @@ impl Fetch for YouTube {
     type Source = Trimmed<rodio::Decoder<Reader>>;
 
     fn name(&self) -> &'static str {
-        "yt"
+        self.slug
     }
 
     /// Opens the stream and waits for the preroll, giving a stalled attempt one more go before
@@ -180,7 +210,12 @@ async fn attempt_open(api: &Arc<YtMusic>, id: &str) -> Result<Loaded> {
         .await
         .context("stream metadata timed out")??;
     let total = audio.total();
-    let stream = tokio::time::timeout(PATIENCE, Stream::pulling(audio, total, Plain).primed())
+    // A known length lets a seek far ahead move the download there instead of waiting for it.
+    let stream = match total {
+        Some(_) => Stream::pulling_ranged(audio, total),
+        None => Stream::pulling(audio, total, Plain),
+    };
+    let stream = tokio::time::timeout(PATIENCE, stream.primed())
         .await
         .context("stream preroll timed out")??;
     let (segments, edit) = stream

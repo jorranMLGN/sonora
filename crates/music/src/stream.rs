@@ -12,6 +12,10 @@
 //! it lands, and Apple Music indexes CENC fragments and hands each sample to a CDM the moment a
 //! reader asks for it. Everything else, the waiting and the seeking and what a broken
 //! connection does, is the same for all of them and lives here.
+//!
+//! A [`Ranged`] source can also start again at any byte. Its spool is filled out of order: a
+//! read far from where the download is moves the download there, and once a run reaches the
+//! end or bytes already in, the download goes back for the first hole left.
 
 use std::fs::File;
 use std::future::Future;
@@ -22,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use bytes::Bytes;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 /// How much has to be in before the decoder is let loose on the spool. At any ordinary bitrate
 /// this is several seconds of audio, and the download outruns playback many times over, so the
@@ -37,6 +41,10 @@ const PATIENCE: Duration = Duration::from_secs(20);
 /// The most one track may spool. A long album side is tens of megabytes, so this is only a
 /// ceiling on what a wrong `Content-Length` or an endless body can cost.
 const CEILING: usize = 256 * 1024 * 1024;
+
+/// How far past a ranged download's frontier a read waits for it rather than moving it. Within
+/// this the running download gets there sooner than a new request would.
+const LEAP: u64 = 2 * 1024 * 1024;
 
 /// What a provider does to the body of one track: as it arrives, and before it is served.
 ///
@@ -96,6 +104,14 @@ pub trait Source: Send + 'static {
     fn chunk(&mut self) -> impl Future<Output = Result<Option<Bytes>>> + Send;
 }
 
+/// A source that can start again at any byte of the same file, so a read far from where the
+/// download has got to can have the download moved to it instead of waiting.
+pub trait Ranged: Source + Sized {
+    /// A new source over the same file whose first chunk starts at byte `at`. The original is
+    /// left as it was.
+    fn resumed(&self, at: u64) -> Self;
+}
+
 impl Source for reqwest::Response {
     async fn chunk(&mut self) -> Result<Option<Bytes>> {
         Ok(reqwest::Response::chunk(self).await?)
@@ -106,8 +122,12 @@ impl Source for reqwest::Response {
 /// an unlinked file in the cache directory, which goes away with the last handle to it, or in
 /// memory when no such file can be made or written or the body is [`Body::confidential`].
 pub struct Spool {
+    /// How many bytes from the start have arrived without a gap.
     len: usize,
     store: Store,
+    /// The ranges that have arrived, sorted and apart, for a spool filled out of order. `None`
+    /// for one filled from the front only, where `len` says everything.
+    filled: Option<Vec<Range<usize>>>,
 }
 
 enum Store {
@@ -122,6 +142,7 @@ impl Spool {
             Ok(file) => Self {
                 len: 0,
                 store: Store::File(file),
+                filled: None,
             },
             Err(error) => {
                 log::warn!("playback: cannot spool to disk, buffering in memory: {error}");
@@ -136,10 +157,21 @@ impl Spool {
         Self {
             len: 0,
             store: Store::Memory(Vec::with_capacity(room.min(CEILING))),
+            filled: None,
         }
     }
 
-    /// How many bytes have arrived.
+    /// Lets an empty spool on disk be filled in any order. False for one in memory, which
+    /// stays in order.
+    fn scatter(&mut self) -> bool {
+        let on_disk = matches!(self.store, Store::File(_)) && self.len == 0;
+        if on_disk {
+            self.filled = Some(Vec::new());
+        }
+        on_disk
+    }
+
+    /// How many bytes from the start have arrived, up to the first one that has not.
     pub fn len(&self) -> usize {
         self.len
     }
@@ -203,10 +235,101 @@ impl Spool {
         Ok(())
     }
 
+    /// Writes `bytes` at `at`, wherever that is, in a spool filled out of order. A disk that
+    /// stops taking them moves the spool into memory, holes and all, rather than breaking the
+    /// track.
+    fn fill(&mut self, at: usize, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let end = at + bytes.len();
+        if let Store::File(file) = &self.store {
+            match write_all_at(file, bytes, at as u64) {
+                Ok(()) => {
+                    self.mark(at..end);
+                    return Ok(());
+                }
+                Err(error) => {
+                    log::warn!("playback: cannot spool to disk, buffering in memory: {error}");
+                    let size = self.filled.iter().flatten().map(|r| r.end).max();
+                    let mut held = vec![0; size.unwrap_or(0)];
+                    read_exact_at(file, &mut held, 0)?;
+                    self.store = Store::Memory(held);
+                }
+            }
+        }
+        if let Store::Memory(held) = &mut self.store {
+            if held.len() < end {
+                held.resize(end, 0);
+            }
+            held[at..end].copy_from_slice(bytes);
+        }
+        self.mark(at..end);
+        Ok(())
+    }
+
+    /// Records `range` as arrived, merging it with its neighbours.
+    fn mark(&mut self, range: Range<usize>) {
+        let Some(filled) = self.filled.as_mut() else {
+            return;
+        };
+        let (mut start, mut end) = (range.start, range.end);
+        filled.retain(|r| {
+            let apart = r.end < start || r.start > end;
+            if !apart {
+                start = start.min(r.start);
+                end = end.max(r.end);
+            }
+            apart
+        });
+        let place = filled.partition_point(|r| r.end < start);
+        filled.insert(place, start..end);
+        self.len = filled.first().filter(|r| r.start == 0).map_or(0, |r| r.end);
+    }
+
+    /// Where the bytes that have arrived from `at` onwards without a gap end: `at` itself when
+    /// that byte has not arrived.
+    fn reach(&self, at: usize) -> usize {
+        match &self.filled {
+            Some(filled) => filled
+                .iter()
+                .find(|r| r.start <= at && at < r.end)
+                .map_or(at, |r| r.end),
+            None => self.len.max(at),
+        }
+    }
+
+    /// The first byte at or after `from`, and before `total`, that has not arrived.
+    fn hole(&self, from: usize, total: usize) -> Option<usize> {
+        let mut at = from;
+        for range in self.filled.iter().flatten() {
+            if range.end <= at {
+                continue;
+            }
+            if range.start > at {
+                break;
+            }
+            at = range.end;
+        }
+        (at < total).then_some(at)
+    }
+
+    /// Where the first range that has arrived at or after `at` starts.
+    fn next_filled(&self, at: usize) -> Option<usize> {
+        self.filled
+            .iter()
+            .flatten()
+            .find(|r| r.end > at)
+            .map(|r| r.start.max(at))
+    }
+
     /// The end of `len` bytes from `at`, when all of them have arrived.
     fn check(&self, at: usize, len: usize) -> io::Result<usize> {
         at.checked_add(len)
-            .filter(|end| *end <= self.len)
+            .filter(|end| match self.filled {
+                Some(_) => *end == at || *end <= self.reach(at),
+                None => *end <= self.len,
+            })
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -225,11 +348,45 @@ struct Buffered<B> {
     complete: bool,
     failed: Option<String>,
     body: B,
+    /// Where a ranged download is writing. `None` for one that only fills from the front.
+    run: Option<Run>,
+}
+
+/// Where the download of a scattered spool is, so a reader can tell whether waiting will
+/// bring the byte it wants or the download has to move there.
+struct Run {
+    /// Where the current run started.
+    start: usize,
+    /// The next byte the current run will write.
+    at: usize,
+    /// Where a reader has asked the download to move, until the pump takes it.
+    want: Option<usize>,
+}
+
+impl Run {
+    /// Whether the current run will not reach `at`, unfilled, before a fresh request would:
+    /// it lies behind where the run started, too far ahead of it, or past bytes that have
+    /// already arrived, where the run stops.
+    fn misses(&self, at: usize, spool: &Spool) -> bool {
+        at < self.start
+            || at as u64 > self.at as u64 + LEAP
+            || spool
+                .next_filled(self.at)
+                .is_some_and(|filled| filled <= at)
+    }
 }
 
 struct Shared<B> {
     state: Mutex<Buffered<B>>,
     filled: Condvar,
+    /// Wakes a ranged pump when a reader asks it to move, or when the last handle goes.
+    jump: Arc<Notify>,
+}
+
+impl<B> Drop for Shared<B> {
+    fn drop(&mut self) {
+        self.jump.notify_one();
+    }
 }
 
 impl<B: Body> Shared<B> {
@@ -289,22 +446,46 @@ impl<B: Body> Stream<B> {
     /// Starts pulling `source` into a spool and returns at once, like [`new`](Self::new).
     /// `total` is the body length when it is known up front.
     pub fn pulling(source: impl Source, total: Option<u64>, body: B) -> Self {
+        let spool = match body.confidential() {
+            true => Spool::in_memory(total),
+            false => Spool::new(total),
+        };
+        Self::spooling(source, spool, total, body)
+    }
+
+    /// Starts pulling `source` in order into `spool`.
+    fn spooling(source: impl Source, spool: Spool, total: Option<u64>, body: B) -> Self {
+        let (shared, progress, stream) = Self::empty(spool, total, body, None);
+        tokio::spawn(pump(source, Arc::downgrade(&shared), progress));
+        stream
+    }
+
+    /// A stream over `spool` with nothing pulling into it yet, and the sender its pump reports
+    /// progress on.
+    fn empty(
+        spool: Spool,
+        total: Option<u64>,
+        body: B,
+        run: Option<Run>,
+    ) -> (Arc<Shared<B>>, watch::Sender<usize>, Self) {
         let shared = Arc::new(Shared {
             state: Mutex::new(Buffered {
-                spool: match body.confidential() {
-                    true => Spool::in_memory(total),
-                    false => Spool::new(total),
-                },
+                spool,
                 total,
                 complete: false,
                 failed: None,
                 body,
+                run,
             }),
             filled: Condvar::new(),
+            jump: Arc::new(Notify::new()),
         });
         let (progress, arrived) = watch::channel(0usize);
-        tokio::spawn(pump(source, Arc::downgrade(&shared), progress));
-        Self { shared, arrived }
+        let stream = Self {
+            shared: shared.clone(),
+            arrived,
+        };
+        (shared, progress, stream)
     }
     /// Starts the download and waits for the preroll, or for the whole body of a track shorter
     /// than that.
@@ -452,6 +633,42 @@ impl<B: Body> Stream<B> {
     }
 }
 
+impl Stream<Plain> {
+    /// Starts pulling `source` like [`pulling`](Stream::pulling), but lets a read far ahead of
+    /// the download, or behind where it restarted, move the download there.
+    pub fn pulling_ranged(source: impl Ranged, total: Option<u64>) -> Self {
+        Self::ranged(source, total, CEILING)
+    }
+
+    /// [`pulling_ranged`](Self::pulling_ranged) with the most one run may pull. A spool that
+    /// cannot be scattered, in memory or for a body of unknown length, is filled in order.
+    fn ranged<S: Ranged>(source: S, total: Option<u64>, ceiling: usize) -> Self {
+        let mut spool = Spool::new(total);
+        let Some(length) = total
+            .and_then(|total| usize::try_from(total).ok())
+            .filter(|_| spool.scatter())
+        else {
+            return Self::spooling(source, spool, total, Plain);
+        };
+        let run = Run {
+            start: 0,
+            at: 0,
+            want: None,
+        };
+        let (shared, progress, stream) = Self::empty(spool, total, Plain, Some(run));
+        let jump = shared.jump.clone();
+        let ranged = Ranges {
+            current: source,
+            at: 0,
+            pulled: 0,
+            total: length,
+            ceiling,
+        };
+        tokio::spawn(ranged.pump(Arc::downgrade(&shared), jump, progress));
+        stream
+    }
+}
+
 impl<B: Body> WeakStream<B> {
     pub fn upgrade(&self) -> Option<Stream<B>> {
         Some(Stream {
@@ -532,6 +749,164 @@ async fn pump<S: Source, B: Body>(
     }
 }
 
+/// The download behind a scattered spool: one source writing at a time. A source the download
+/// moves away from is dropped, never kept for later, since its `chunk` may have been cancelled
+/// part way and so cannot be trusted to resume where it says it stopped.
+struct Ranges<S> {
+    current: S,
+    /// The next byte `current` writes.
+    at: usize,
+    /// How much the current run has pulled, against `ceiling`.
+    pulled: usize,
+    total: usize,
+    ceiling: usize,
+}
+
+/// What woke a ranged pump.
+enum Woken {
+    Jump,
+    Chunk(Result<Option<Bytes>>),
+}
+
+impl<S: Ranged> Ranges<S> {
+    /// Pulls runs into the spool until every byte of it has arrived, moving to wherever a
+    /// reader asks, and stops as soon as nothing is left that could read it.
+    ///
+    /// This one task is the only writer, and it never polls a source it has moved away from,
+    /// so nothing a stopped run was fetching can land after the next run has started.
+    async fn pump(
+        mut self,
+        weak: Weak<Shared<Plain>>,
+        jump: Arc<Notify>,
+        progress: watch::Sender<usize>,
+    ) {
+        loop {
+            // A pending jump wins over a chunk that is ready at the same time. `chunk` may be
+            // dropped part way, which a source has to bear: its position moves only with a
+            // chunk it hands out.
+            let woken = tokio::select! {
+                biased;
+                () = jump.notified() => Woken::Jump,
+                chunk = self.current.chunk() => Woken::Chunk(chunk),
+            };
+            let Some(shared) = weak.upgrade() else {
+                return;
+            };
+            let moved = match woken {
+                Woken::Jump => self.jump(&shared),
+                Woken::Chunk(Ok(Some(chunk))) => self.write(&shared, &chunk),
+                Woken::Chunk(Ok(None)) => match self.at < self.total {
+                    true => Err(format!(
+                        "the stream ended at byte {} of {}",
+                        self.at, self.total
+                    )),
+                    false => self.next(&shared),
+                },
+                Woken::Chunk(Err(error)) => {
+                    log::warn!("playback: the stream broke: {error:#}");
+                    Err(format!("{error:#}"))
+                }
+            };
+            match moved {
+                Ok(true) => {
+                    shared.filled.notify_all();
+                    progress
+                        .send(shared.held().map_or(0, |state| state.spool.len()))
+                        .ok();
+                }
+                Ok(false) => {}
+                Err(failed) => {
+                    shared.finish(Some(failed));
+                    progress.send_modify(|_| {});
+                    return;
+                }
+            }
+            if shared.held().is_ok_and(|state| state.complete) {
+                progress.send_modify(|_| {});
+                return;
+            }
+        }
+    }
+
+    /// Moves to where a reader asked, if that is still a hole. True when the run moved.
+    fn jump(&mut self, shared: &Shared<Plain>) -> Result<bool, String> {
+        let mut state = shared.held().map_err(|error| error.to_string())?;
+        let Buffered { spool, run, .. } = &mut *state;
+        let Some(run) = run.as_mut() else {
+            return Ok(false);
+        };
+        let Some(to) = run
+            .want
+            .take()
+            .and_then(|want| spool.hole(want, self.total))
+        else {
+            return Ok(false);
+        };
+        if to == self.at {
+            return Ok(false);
+        }
+        log::debug!("playback: the download moves from byte {} to {to}", self.at);
+        self.current = self.source(to);
+        self.start(run, to);
+        Ok(true)
+    }
+
+    /// Writes `chunk` where the run is, up to the end of the file or the next range that has
+    /// arrived, where the run ends and the download moves to the first hole left.
+    fn write(&mut self, shared: &Shared<Plain>, chunk: &[u8]) -> Result<bool, String> {
+        if self.pulled + chunk.len() > self.ceiling {
+            return Err(format!("the track is longer than {} bytes", self.ceiling));
+        }
+        let mut state = shared.held().map_err(|error| error.to_string())?;
+        let Buffered { spool, run, .. } = &mut *state;
+        let stop = spool.next_filled(self.at).unwrap_or(self.total);
+        let kept = chunk.len().min(stop.saturating_sub(self.at));
+        if let Err(error) = spool.fill(self.at, &chunk[..kept]) {
+            log::warn!("playback: cannot keep the track: {error}");
+            return Err(format!("cannot keep the track: {error}"));
+        }
+        self.at += kept;
+        self.pulled += kept;
+        if let Some(run) = run.as_mut() {
+            run.at = self.at;
+        }
+        let ended = self.at >= self.total || spool.next_filled(self.at) == Some(self.at);
+        drop(state);
+        if ended {
+            self.next(shared)?;
+        }
+        Ok(true)
+    }
+
+    /// Starts a run at the first hole left, or marks the download complete when there is none.
+    fn next(&mut self, shared: &Shared<Plain>) -> Result<bool, String> {
+        let mut state = shared.held().map_err(|error| error.to_string())?;
+        let Some(hole) = state.spool.hole(0, self.total) else {
+            drop(state);
+            shared.finish(None);
+            return Ok(true);
+        };
+        self.current = self.source(hole);
+        if let Some(run) = state.run.as_mut() {
+            self.start(run, hole);
+        }
+        Ok(true)
+    }
+
+    /// A fresh source for a run from `at`.
+    fn source(&self, at: usize) -> S {
+        self.current.resumed(at as u64)
+    }
+
+    /// Records that the run now starts at `at`.
+    fn start(&mut self, run: &mut Run, at: usize) {
+        self.at = at;
+        self.pulled = 0;
+        run.start = at;
+        run.at = at;
+    }
+}
+
 /// A cursor over a `Stream`. Reading past what has arrived blocks the caller until more does,
 /// so a decoder simply waits out a slow connection.
 pub struct Reader<B = Plain> {
@@ -589,6 +964,18 @@ impl<B: Body> Read for Reader<B> {
         }
         let mut state = self.shared.held()?;
         loop {
+            if state.run.is_some() {
+                match self.scattered(&mut state, out)? {
+                    Some(read) => {
+                        self.at += read as u64;
+                        return Ok(read);
+                    }
+                    None => {
+                        state = self.wait(state)?;
+                        continue;
+                    }
+                }
+            }
             let Buffered {
                 spool,
                 body,
@@ -620,19 +1007,74 @@ impl<B: Body> Read for Reader<B> {
             if state.complete || ending {
                 return Ok(0);
             }
-            let (held, timed_out) = self
-                .shared
-                .filled
-                .wait_timeout(state, PATIENCE)
-                .map_err(|_| io::Error::other("the track buffer is poisoned"))?;
-            if timed_out.timed_out() {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "the track stopped arriving",
-                ));
-            }
-            state = held;
+            state = self.wait(state)?;
         }
+    }
+}
+
+impl<B: Body> Reader<B> {
+    /// A read from a scattered spool: how much of what has arrived at the cursor was copied
+    /// out, or `None` to wait for it. A byte the download will not reach soon on its own moves
+    /// the download there. The caller moves the cursor.
+    fn scattered(&self, state: &mut Buffered<B>, out: &mut [u8]) -> io::Result<Option<usize>> {
+        let Buffered {
+            spool,
+            body,
+            total,
+            run,
+            failed,
+            complete,
+            ..
+        } = state;
+        let start = self.place(self.at) as usize;
+        if total.is_some_and(|total| start as u64 >= total) {
+            return Ok(Some(0));
+        }
+        let reach = spool.reach(start);
+        if reach > start {
+            // A read never crosses a splice, as in the in-order case.
+            let wanted = match self.at < self.head as u64 {
+                true => out.len().min(self.head - self.at as usize),
+                false => out.len(),
+            };
+            let end = start + wanted.min(reach - start);
+            body.ready(spool, start..end)?;
+            spool.read_at(start, &mut out[..end - start])?;
+            return Ok(Some(end - start));
+        }
+        if let Some(failed) = failed {
+            return Err(io::Error::other(failed.clone()));
+        }
+        if *complete {
+            return Ok(Some(0));
+        }
+        if let Some(run) = run.as_mut()
+            && run.misses(start, spool)
+            && run.want != Some(start)
+        {
+            run.want = Some(start);
+            self.shared.jump.notify_one();
+        }
+        Ok(None)
+    }
+
+    /// Waits for the spool to change, for as long as a read is patient.
+    fn wait<'a>(
+        &self,
+        state: MutexGuard<'a, Buffered<B>>,
+    ) -> io::Result<MutexGuard<'a, Buffered<B>>> {
+        let (held, timed_out) = self
+            .shared
+            .filled
+            .wait_timeout(state, PATIENCE)
+            .map_err(|_| io::Error::other("the track buffer is poisoned"))?;
+        if timed_out.timed_out() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the track stopped arriving",
+            ));
+        }
+        Ok(held)
     }
 }
 
@@ -702,8 +1144,10 @@ mod tests {
                 complete: false,
                 failed: None,
                 body,
+                run: None,
             }),
             filled: Condvar::new(),
+            jump: Arc::new(Notify::new()),
         });
         let (_, arrived) = watch::channel(0usize);
         Stream { shared, arrived }
@@ -827,5 +1271,159 @@ mod tests {
         assert_eq!(out, vec![0, 1, 2, 7, 8, 9]);
         // And it reports its own length, not the file's.
         assert_eq!(reader.seek(SeekFrom::End(0)).unwrap(), 6);
+    }
+
+    const MIB: usize = 1024 * 1024;
+
+    /// A file served from memory 64 KiB at a time, which logs every restart and, when gated,
+    /// hands out one chunk per permit.
+    struct Fake {
+        data: Arc<Vec<u8>>,
+        at: u64,
+        log: Arc<Mutex<Vec<u64>>>,
+        gate: Option<Arc<tokio::sync::Semaphore>>,
+    }
+
+    impl Source for Fake {
+        async fn chunk(&mut self) -> Result<Option<Bytes>> {
+            let start = self.at as usize;
+            if start >= self.data.len() {
+                return Ok(None);
+            }
+            if let Some(gate) = &self.gate {
+                gate.acquire().await?.forget();
+            }
+            let end = (start + 64 * 1024).min(self.data.len());
+            self.at = end as u64;
+            Ok(Some(Bytes::copy_from_slice(&self.data[start..end])))
+        }
+    }
+
+    impl Ranged for Fake {
+        fn resumed(&self, at: u64) -> Self {
+            self.log.lock().unwrap().push(at);
+            Self {
+                data: self.data.clone(),
+                at,
+                log: self.log.clone(),
+                gate: None,
+            }
+        }
+    }
+
+    /// A file of `len` bytes that differ from their neighbours, and a source over it that lets
+    /// through only the first `permits` chunks until its gate is opened further.
+    fn fake(len: usize, permits: usize) -> (Fake, Arc<Vec<u8>>, Arc<tokio::sync::Semaphore>) {
+        let data: Arc<Vec<u8>> = Arc::new((0..len).map(|i| (i % 251) as u8).collect());
+        let gate = Arc::new(tokio::sync::Semaphore::new(permits));
+        let source = Fake {
+            data: data.clone(),
+            at: 0,
+            log: Arc::default(),
+            gate: Some(gate.clone()),
+        };
+        (source, data, gate)
+    }
+
+    fn read_at<B: Body>(stream: &Stream<B>, at: usize, len: usize) -> Vec<u8> {
+        let mut reader = stream.reader();
+        reader.seek(SeekFrom::Start(at as u64)).unwrap();
+        let mut out = vec![0; len];
+        reader.read_exact(&mut out).unwrap();
+        out
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_read_far_ahead_restarts_the_download_there() {
+        let (source, data, _gate) = fake(16 * MIB, 16);
+        let log = source.log.clone();
+        let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
+        stream.wait_for(MIB).await.unwrap();
+
+        let out = read_at(&stream, 12 * MIB, 64 * 1024);
+        assert_eq!(out, data[12 * MIB..12 * MIB + 64 * 1024]);
+        assert_eq!(*log.lock().unwrap(), vec![12 * MIB as u64]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_read_just_ahead_waits_instead_of_restarting() {
+        let (source, data, gate) = fake(16 * MIB, 16);
+        let log = source.log.clone();
+        let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
+        stream.wait_for(MIB).await.unwrap();
+
+        let reading = std::thread::spawn({
+            let stream = stream.clone();
+            move || read_at(&stream, MIB + 512 * 1024, 64 * 1024)
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        gate.add_permits(1024);
+        let out = reading.join().unwrap();
+        assert_eq!(out, data[MIB + 512 * 1024..MIB + 576 * 1024]);
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bytes_before_a_jump_stay_readable() {
+        let (source, data, _gate) = fake(16 * MIB, 16);
+        let log = source.log.clone();
+        let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
+        stream.wait_for(MIB).await.unwrap();
+        read_at(&stream, 12 * MIB, 64 * 1024);
+
+        assert_eq!(read_at(&stream, 0, MIB), data[..MIB]);
+        assert_eq!(*log.lock().unwrap(), vec![12 * MIB as u64]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_read_into_an_earlier_hole_restarts_there() {
+        let (source, data, _gate) = fake(16 * MIB, 16);
+        let log = source.log.clone();
+        let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
+        stream.wait_for(MIB).await.unwrap();
+        read_at(&stream, 12 * MIB, 64 * 1024);
+
+        assert_eq!(
+            read_at(&stream, 6 * MIB, 64 * 1024),
+            data[6 * MIB..6 * MIB + 64 * 1024]
+        );
+        assert_eq!(*log.lock().unwrap(), vec![12 * MIB as u64, 6 * MIB as u64]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_holes_fill_once_the_end_is_reached() {
+        let (source, data, gate) = fake(16 * MIB, 16);
+        let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
+        stream.wait_for(MIB).await.unwrap();
+        read_at(&stream, 12 * MIB, 64 * 1024);
+        gate.add_permits(4096);
+
+        tokio::time::timeout(Duration::from_secs(10), stream.finished())
+            .await
+            .expect("the download finishes");
+        assert!(stream.done());
+        assert_eq!(stream.failed(), None);
+        let mut out = Vec::new();
+        stream.reader().read_to_end(&mut out).unwrap();
+        assert!(out == *data, "every byte is in place");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_ceiling_counts_per_run() {
+        // Half a mebibyte in, so 3 MiB is more than a leap ahead.
+        let (source, _data, gate) = fake(6 * MIB, 8);
+        let log = source.log.clone();
+        let mut stream = Stream::ranged(source, Some(6 * MIB as u64), 4 * MIB);
+        stream.wait_for(MIB / 2).await.unwrap();
+        read_at(&stream, 3 * MIB, 64 * 1024);
+        gate.add_permits(4096);
+
+        tokio::time::timeout(Duration::from_secs(10), stream.finished())
+            .await
+            .expect("the download finishes");
+        assert_eq!(stream.failed(), None);
+        // The jump's run reaches the end, and the hole the first run left behind is fetched
+        // by a fresh source rather than by the one the jump stopped.
+        assert_eq!(*log.lock().unwrap(), vec![3 * MIB as u64, MIB as u64 / 2]);
     }
 }

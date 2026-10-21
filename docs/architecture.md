@@ -65,6 +65,20 @@ sonora → views → state → music
   happens to the bytes, which is nothing at all for Subsonic, a Blowfish stripe for Deezer and a
   CENC index for Apple Music. Subsonic, Deezer and Apple each had their own copy of both, 85% the
   same code; do not start a fourth.
+- **A ranged download goes where the reader is.** `Stream::pulling_ranged` takes a
+  `stream::Ranged` source, one that can start over from any byte, and applies only when the length
+  is known and the spool can be scattered; otherwise it fills in order like `pulling`. A read more
+  than `LEAP` (2 MiB) past the frontier, or into a hole behind it, moves the download there with a
+  fresh source; within `LEAP` the running one gets there sooner. The one pump task is the only
+  writer and drops the source it moves away from. `CEILING` counts per run, not per file, and the
+  stream is finished only once every byte has arrived, so the holes a jump skipped are fetched
+  after the run reaches the end. YouTube uses it so a seek into a long set plays at once.
+- **Two YouTube providers share one sign-in and one playback.** `music::youtube::Site` names a
+  provider (display name, slug, hosts, sign-in url, guest name) and supplies its `MusicApi`;
+  cookie sign-in, rotation, PO tokens and `playback::Factory` are shared code. `youtube::MUSIC` is
+  YouTube Music and `youtube_video::VIDEO` plain youtube.com. Each keeps its credentials in its own
+  slug's folder (`youtube`, `youtube-video`) and plays under its own slug, so their jam feeds and
+  engine threads stay apart.
 - `widevine` is a leaf that knows nothing about music: the process-wide CDM behind one lock, the
   `pssh` box, the fetch from Google, and enough ISO-BMFF to find every encrypted sample and
   fragment. Its `cdm` feature compiles the C++ host in `crates/widevine/shim/` with `cc`: one

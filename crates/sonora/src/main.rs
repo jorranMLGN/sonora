@@ -105,6 +105,7 @@ fn main() {
             Arc::new(music::soundcloud::SoundCloudProvider::new()),
             Arc::new(music::apple::AppleProvider::new()),
             Arc::new(music::youtube::YouTubeProvider::new()),
+            Arc::new(music::youtube_video::provider()),
             Arc::new(music::subsonic::SubsonicProvider::new()),
             Arc::new(music::deezer::DeezerProvider::new()),
         ];

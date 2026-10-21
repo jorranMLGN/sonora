@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
-use music::{Album, ArtistRef, MusicApi, Playlist, Track};
+use music::{Album, ArtistRef, MusicApi, Playlist, SavedArtist, Track};
 use ui::Sort;
 
 use crate::{Io, Library, Network, Session, SessionEvent, Shelf, join};
@@ -117,13 +117,14 @@ impl Lens {
     }
 }
 
-/// Which of a provider's three search calls a lens needs. Artists come from tracks and
-/// albums, since no provider is asked for artists directly.
+/// Which of a provider's search calls a lens needs. Artists are also derived from tracks and
+/// albums, so a provider without a direct artist search still lists them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Parts {
     songs: bool,
     albums: bool,
     playlists: bool,
+    artists: bool,
 }
 
 impl Parts {
@@ -133,6 +134,7 @@ impl Parts {
                 songs: true,
                 albums: true,
                 playlists: true,
+                artists: true,
             },
             Some(Kind::Song) => Self {
                 songs: true,
@@ -141,6 +143,7 @@ impl Parts {
             Some(Kind::Artist) => Self {
                 songs: true,
                 albums: true,
+                artists: true,
                 ..Self::default()
             },
             Some(Kind::Album) => Self {
@@ -158,6 +161,7 @@ impl Parts {
         (self.songs || !other.songs)
             && (self.albums || !other.albums)
             && (self.playlists || !other.playlists)
+            && (self.artists || !other.artists)
     }
 }
 
@@ -242,11 +246,15 @@ struct Catalog {
     tracks: Vec<Track>,
     albums: Vec<Album>,
     playlists: Vec<Playlist>,
+    artists: Vec<SavedArtist>,
 }
 
 impl Catalog {
     fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.albums.is_empty() && self.playlists.is_empty()
+        self.tracks.is_empty()
+            && self.albums.is_empty()
+            && self.playlists.is_empty()
+            && self.artists.is_empty()
     }
 }
 
@@ -471,21 +479,27 @@ impl Search {
                         io.spawn(async move { client.search_albums(&asked).await })
                     });
                     let playlists = parts.playlists.then(|| {
+                        let client = client.clone();
                         let asked = query.clone();
                         io.spawn(async move { client.search_playlists(&asked).await })
                     });
-                    (slug, name, songs, albums, playlists)
+                    let artists = parts.artists.then(|| {
+                        let asked = query.clone();
+                        io.spawn(async move { client.search_artists(&asked).await })
+                    });
+                    (slug, name, songs, albums, playlists, artists)
                 })
                 .collect();
 
             let mut answered = Vec::new();
-            for (slug, name, songs, albums, playlists) in sent {
+            for (slug, name, songs, albums, playlists, artists) in sent {
                 answered.push((
                     slug,
                     name,
                     awaited(songs).await,
                     awaited(albums).await,
                     awaited(playlists).await,
+                    awaited(artists).await,
                 ));
             }
 
@@ -502,7 +516,7 @@ impl Search {
                 let mut held: Vec<(&'static str, Catalog)> = std::mem::take(&mut this.catalogs);
                 this.catalogs = answered
                     .into_iter()
-                    .map(|(slug, name, songs, albums, playlists)| {
+                    .map(|(slug, name, songs, albums, playlists, artists)| {
                         let kept = held
                             .iter()
                             .position(|(known, _)| *known == slug)
@@ -512,6 +526,7 @@ impl Search {
                             tracks: salvaged(songs, name, kept.tracks, &mut trouble),
                             albums: salvaged(albums, name, kept.albums, &mut trouble),
                             playlists: salvaged(playlists, name, kept.playlists, &mut trouble),
+                            artists: salvaged(artists, name, kept.artists, &mut trouble),
                         };
                         (slug, catalog)
                     })
@@ -707,6 +722,7 @@ fn rank(
         library,
         &catalog.tracks,
         albums,
+        &catalog.artists,
         portraits,
         &query,
         limit,
@@ -876,20 +892,22 @@ fn artists(
     library: &[Track],
     catalog: &[Track],
     albums: &[Album],
+    found: &[SavedArtist],
     portraits: &HashMap<String, String>,
     query: &Query,
     limit: usize,
 ) -> Vec<Scored> {
     let mut tallies: Vec<(u32, u32, ArtistHit)> = Vec::new();
 
-    let mut record = |artist: &ArtistRef, score, popularity, mine| {
+    let mut record = |artist: &ArtistRef, own: Option<&String>, score, popularity, mine| {
         let name = &artist.name;
         let id = artist.id.clone();
-        let cover = id
-            .as_ref()
-            .and_then(|id| portraits.get(id))
-            .filter(|url| !url.is_empty())
-            .cloned();
+        let cover = own.filter(|url| !url.is_empty()).cloned().or_else(|| {
+            id.as_ref()
+                .and_then(|id| portraits.get(id))
+                .filter(|url| !url.is_empty())
+                .cloned()
+        });
         match tallies
             .iter_mut()
             .find(|(_, _, current)| match (&current.id, &id) {
@@ -922,7 +940,7 @@ fn artists(
                 continue;
             };
             let mine = usize::from(rank.is_none());
-            record(artist, score, track.popularity, mine);
+            record(artist, None, score, track.popularity, mine);
         }
     }
     for album in albums {
@@ -930,8 +948,18 @@ fn artists(
             let Some(score) = favored(named(&artist.name, query), None) else {
                 continue;
             };
-            record(artist, score, 0, 0);
+            record(artist, None, score, 0, 0);
         }
+    }
+    for artist in found {
+        let Some(score) = favored(named(&artist.name, query), None) else {
+            continue;
+        };
+        let named = ArtistRef {
+            name: artist.name.clone(),
+            id: Some(artist.id.clone()),
+        };
+        record(&named, artist.cover.as_ref(), score, 0, 0);
     }
 
     capped(
@@ -1146,6 +1174,7 @@ mod tests {
                 songs: true,
                 albums: true,
                 playlists: false,
+                artists: true,
             }
         );
     }
@@ -1571,5 +1600,48 @@ mod tests {
             .with_source("youtube", false)
             .forget("youtube");
         assert!(lens.hidden.is_empty());
+    }
+
+    fn boiler_room() -> music::SavedArtist {
+        music::SavedArtist {
+            id: "youtube-video:UCx".to_owned(),
+            name: "Boiler Room".to_owned(),
+            cover: Some("c".to_owned()),
+            added_at: None,
+        }
+    }
+
+    fn artist_hits(tracks: &[Track], found: &[music::SavedArtist]) -> Vec<ArtistHit> {
+        super::artists(
+            &[],
+            tracks,
+            &[],
+            found,
+            &HashMap::new(),
+            &Query::new("boiler"),
+            LIMIT,
+        )
+        .into_iter()
+        .filter_map(|scored| match scored.hit {
+            Hit::Artist(artist) => Some(artist),
+            _ => None,
+        })
+        .collect()
+    }
+
+    #[test]
+    fn a_searched_artist_appears_without_any_of_its_tracks() {
+        let hits = artist_hits(&[], &[boiler_room()]);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id.as_deref(), Some("youtube-video:UCx"));
+        assert_eq!(hits[0].cover.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn a_searched_artist_merges_with_the_same_artist_from_tracks() {
+        let mut song = track("Set", "Boiler Room", "Live");
+        song.artist_refs[0].id = Some("youtube-video:UCx".to_owned());
+        let hits = artist_hits(&[song], &[boiler_room()]);
+        assert_eq!(hits.len(), 1);
     }
 }
