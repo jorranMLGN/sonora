@@ -183,6 +183,16 @@ impl Video {
         self.loaded.is_some() || self.loading.is_some() || known == Some(true)
     }
 
+    /// Whether the provider has said the current track has no video. Unlike `!has_video()`, a
+    /// track not yet asked about reads `false`, so a window waiting on the answer stays.
+    pub fn lacks_video(&self) -> bool {
+        self.track
+            .as_ref()
+            .and_then(|id| self.known.get(id))
+            .copied()
+            == Some(false)
+    }
+
     pub fn place(&self) -> Place {
         self.place
     }

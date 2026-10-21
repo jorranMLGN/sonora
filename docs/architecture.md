@@ -127,6 +127,16 @@ sonora → views → state → music
   playing track, and `views::shared::canvas::CanvasArt` draws it in fullscreen and above the
   queue. No release artefact, package or Flatpak carries the binary, and `about.toml` never gains
   an entry for it. `music::video` is the only door `state` and `views` use.
+  `video::Movie` is the player for a whole video (YouTube, music videos): it decodes H.264 on a
+  thread of its own against a `Clock` the audio position drives, so a seek moves the picture too
+  and the sound never waits on it. `state::Video` follows the playing track and owns the movie;
+  the video plays in one `Place` at a time (`Slot` in the sidebar, `Fullscreen`, `Pip`) and
+  fetches at 480p for `Slot` and `Pip`, 1080p for `Fullscreen`, all capped by the "maximum video
+  quality" setting. With `Place::None` it keeps the movie for a 5 s grace and then stops the
+  download. A PiP window opens only when the user asks. `crates/sonora/src/pip.rs` owns that
+  always-on-top, resizable window (it remembers its size and opens in the `pip_corner` setting)
+  and closes it when the place moves on, the setting goes off or the track has no video;
+  `crates/views/src/shells/pip.rs` draws it.
 - `ui` depends only on `gpui`, `serde` and `i18n`, plus the per-platform crates `ui::motion` needs
   to read the system reduce-motion preference (`objc2-app-kit`, `windows-sys`, `ashpd`). It must
   never know about `music`, `state`, or playback.

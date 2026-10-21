@@ -20,11 +20,15 @@ struct Pip(Option<WindowHandle<PipView>>);
 impl Global for Pip {}
 
 /// Reopens an open PiP when its corner changes, and closes it once the video's place is no
-/// longer `Place::Pip`.
+/// longer `Place::Pip`, the video setting is off, or the track is known to have no video.
 pub fn watch(cx: &mut App) {
     let settings = Sonora::global(cx).settings.clone();
     let mut placed = settings.read(cx).pip_corner();
     cx.observe(&settings, move |settings, cx| {
+        if is_open(cx) && !settings.read(cx).video() {
+            close(cx);
+            return;
+        }
         let chosen = settings.read(cx).pip_corner();
         if chosen == placed {
             return;
@@ -36,7 +40,9 @@ pub fn watch(cx: &mut App) {
 
     let video = Sonora::global(cx).video.clone();
     cx.observe(&video, |video, cx| {
-        if is_open(cx) && video.read(cx).place() != Place::Pip {
+        let on = Sonora::global(cx).settings.read(cx).video();
+        let video = video.read(cx);
+        if is_open(cx) && should_close(video.place(), on, video.lacks_video()) {
             close(cx);
         }
     })
@@ -139,6 +145,12 @@ pub fn open(cx: &mut App) {
     }
 }
 
+/// Whether an open window has lost its reason: the video moved elsewhere, the setting went
+/// off, or the provider said the track has no video.
+fn should_close(place: Place, video_on: bool, lacks_video: bool) -> bool {
+    place != Place::Pip || !video_on || lacks_video
+}
+
 /// Moves a video still placed in the PiP back to the slot. A place something else has taken
 /// since, such as fullscreen, stays.
 fn hand_back(cx: &mut App) {
@@ -168,9 +180,17 @@ fn bounds(
 #[cfg(test)]
 mod tests {
     use gpui::{Bounds, point, px, size};
-    use state::MiniCorner;
+    use state::{MiniCorner, Place};
 
-    use super::bounds;
+    use super::{bounds, should_close};
+
+    #[test]
+    fn pip_closes_when_it_has_nothing_to_show() {
+        assert!(!should_close(Place::Pip, true, false));
+        assert!(should_close(Place::Fullscreen, true, false));
+        assert!(should_close(Place::Pip, false, false));
+        assert!(should_close(Place::Pip, true, true));
+    }
 
     #[test]
     fn pip_placement_uses_the_stored_size() {

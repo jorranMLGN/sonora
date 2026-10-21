@@ -23,9 +23,9 @@ use music::{AccountChoice, SignIn, SignInPrompt, WritingSystem};
 use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
     AppSettings, CdmState, Codec, CodecState, DiscordName, Drm, Failure,
-    FullscreenControlsAutohide, Io, Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling,
-    Session, SessionState, Sleep, Sonora, SpectrumPlace, SpectrumProfile, SpectrumSettings,
-    WaveformPlace,
+    FullscreenControlsAutohide, Io, MiniCorner, Playback, SYSTEM_FONT, Scan, ScrobbleState,
+    Scrobbling, Session, SessionState, Sleep, Sonora, SpectrumPlace, SpectrumProfile,
+    SpectrumSettings, VIDEO_HEIGHTS, WaveformPlace,
 };
 use ui::{ActiveTheme as _, Deck, LEADING, Scrollbar, Scroller, eyebrow, snapped};
 use ui::{
@@ -170,6 +170,9 @@ enum Slot {
     Widevine,
     Canvas,
     CanvasCodec,
+    Video,
+    VideoQuality,
+    PipCorner,
     Waveform,
     WaveformStyle,
     WaveformDensity,
@@ -637,8 +640,20 @@ impl SettingsView {
                 Slot::FullscreenControlsAutohide,
                 Slot::OsFullscreen,
                 Slot::Canvas,
+                Slot::Video,
             ])
-            .chain(self.codec.read(cx).supported().then_some(Slot::CanvasCodec))
+            .chain(
+                self.settings
+                    .read(cx)
+                    .video()
+                    .then_some([Slot::VideoQuality, Slot::PipCorner])
+                    .into_iter()
+                    .flatten(),
+            )
+            .chain(
+                (self.codec.read(cx).supported() || self.settings.read(cx).video())
+                    .then_some(Slot::CanvasCodec),
+            )
             .chain([Slot::Title("settings-group-spectrum-app")])
             .chain(self.spectrum_slots(SpectrumPlace::App, cx))
             .chain([Slot::Title("settings-group-spectrum-mini")])
@@ -746,6 +761,12 @@ impl SettingsView {
             Slot::Adaptive => (t!("settings-adaptive"), t!("settings-adaptive-detail")),
             Slot::Ambient => (t!("settings-ambient"), t!("settings-ambient-detail")),
             Slot::Canvas => (t!("settings-canvas"), t!("settings-canvas-detail")),
+            Slot::Video => (t!("settings-video"), t!("settings-video-detail")),
+            Slot::VideoQuality => (
+                t!("settings-video-quality"),
+                t!("settings-video-quality-detail"),
+            ),
+            Slot::PipCorner => (t!("settings-pip-corner"), t!("settings-pip-corner-detail")),
             Slot::Waveform => (t!("settings-waveform"), t!("settings-waveform-detail")),
             Slot::WaveformStyle => (
                 t!("settings-waveform-style"),
@@ -1035,6 +1056,9 @@ impl SettingsView {
             Slot::Adaptive => self.adaptive_row(cx).element,
             Slot::Ambient => self.ambient_row(cx).element,
             Slot::Canvas => self.canvas_row(cx).element,
+            Slot::Video => self.video_row(cx).element,
+            Slot::VideoQuality => self.video_quality_row(cx).element,
+            Slot::PipCorner => self.pip_corner_row(cx).element,
             Slot::Waveform => self.waveform_row(cx).element,
             Slot::WaveformStyle => self.waveform_style_row(cx).element,
             Slot::WaveformDensity => self.waveform_density_row(cx).element,
@@ -2053,6 +2077,83 @@ impl SettingsView {
                         .update(cx, |settings, cx| settings.set_canvas(!on, cx));
                 }))
                 .into_any_element(),
+        )
+    }
+
+    fn video_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let on = self.settings.read(cx).video();
+
+        self.row(
+            t!("settings-video"),
+            t!("settings-video-detail"),
+            muted,
+            small,
+            Switch::new("video", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings
+                        .update(cx, |settings, cx| settings.set_video(!on, cx));
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// The tallest video stream to fetch; the sidebar and the floating window ask for less.
+    fn video_quality_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let chosen = self.settings.read(cx).video_max_height();
+
+        self.row(
+            t!("settings-video-quality"),
+            t!("settings-video-quality-detail"),
+            muted,
+            small,
+            Picker::new("video-quality", &self.popovers, format!("{chosen}p"))
+                .width(Picker::NARROW)
+                .items(VIDEO_HEIGHTS.map(|height| {
+                    MenuItem::new(format!("video-quality-{height}"), format!("{height}p"))
+                        .selected(height == chosen)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings.update(cx, |settings, cx| {
+                                settings.set_video_max_height(height, cx)
+                            });
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn pip_corner_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let chosen = self.settings.read(cx).pip_corner();
+
+        self.row(
+            t!("settings-pip-corner"),
+            t!("settings-pip-corner-detail"),
+            muted,
+            small,
+            Picker::new(
+                "pip-corner",
+                &self.popovers,
+                i18n::lookup(chosen.key(), None),
+            )
+            .width(Picker::NARROW)
+            .items(MiniCorner::ALL.map(|corner| {
+                MenuItem::new(corner.key(), i18n::lookup(corner.key(), None))
+                    .selected(corner == chosen)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings
+                            .update(cx, |settings, cx| settings.set_pip_corner(corner, cx));
+                    }))
+            }))
+            .into_any_element(),
         )
     }
 
