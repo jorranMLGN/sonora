@@ -22,12 +22,15 @@ const SETTLE: Duration = Duration::from_millis(200);
 /// How long a change of size after a snap counts as the window manager answering it, and is not
 /// snapped again.
 const ECHO: Duration = Duration::from_millis(400);
-/// How many `SETTLE`s a snap waits for a new movie's first frame before taking `WIDE`.
+/// How many `SETTLE`s a snap waits for a new movie's first frame before taking `WIDE_SHAPE`.
 const TRIES: u32 = 10;
-/// The video's shape before its first frame says otherwise.
-const WIDE: f32 = 16. / 9.;
+/// The video's shape before its first frame says otherwise, as a width and height.
+const WIDE_SHAPE: (u32, u32) = (16, 9);
 /// How far the window may be from the video's shape and still count as snapped.
 const SNUG: Pixels = px(1.);
+
+/// Told the video's shape, as a width and height, whenever the window takes a new one.
+type OnShape = Box<dyn Fn(&mut Window, u32, u32)>;
 
 /// Which side of the window a snap keeps: the one the last resize moved most.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +55,9 @@ pub struct PipView {
     /// When this view last resized the window itself.
     snapped: Option<Instant>,
     snap: Option<Task<()>>,
+    /// The shape last handed to `on_shape`, so it hears of each change once.
+    shape: Option<(u32, u32)>,
+    on_shape: Option<OnShape>,
     _bounds: Subscription,
     _video: Subscription,
 }
@@ -89,8 +95,39 @@ impl PipView {
             base: window.viewport_size(),
             snapped: None,
             snap: None,
+            shape: None,
+            on_shape: None,
             _bounds: bounds,
             _video: video,
+        }
+    }
+
+    /// Calls `f` with the video's shape when the window opens and whenever it changes, so the
+    /// window manager can hold that shape during a resize; the snap stays the fallback.
+    pub fn on_shape(mut self, f: impl Fn(&mut Window, u32, u32) + 'static) -> Self {
+        self.on_shape = Some(Box::new(f));
+        self
+    }
+
+    /// Hands the current video's shape to `on_shape`, `WIDE_SHAPE` while it has no frame yet, unless
+    /// that shape was handed over already.
+    pub fn lock_shape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let video = Sonora::global(cx).video.read(cx);
+        let shape = match video.movie().and_then(|movie| movie.frame()) {
+            Some(frame) if frame.width > 0 && frame.height > 0 => (frame.width, frame.height),
+            _ => WIDE_SHAPE,
+        };
+        self.handover(shape, window);
+    }
+
+    /// Passes `shape` to `on_shape` if it differs from the last one passed.
+    fn handover(&mut self, shape: (u32, u32), window: &mut Window) {
+        if self.shape == Some(shape) {
+            return;
+        }
+        self.shape = Some(shape);
+        if let Some(on_shape) = &self.on_shape {
+            on_shape(window, shape.0, shape.1);
         }
     }
 
@@ -128,20 +165,20 @@ impl PipView {
 
     /// Resizes the window so its content has the video's shape, keeping the side the user
     /// moved most. Answers `true` while a movie has no frame to take the shape from, unless
-    /// this is the `last` try, which takes `WIDE`.
+    /// this is the `last` try, which takes `WIDE_SHAPE`.
     fn fit(&mut self, last: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if window.is_maximized() || window.is_fullscreen() {
             return false;
         }
         let video = Sonora::global(cx).video.read(cx);
         let frame = video.movie().map(|movie| movie.frame());
-        let aspect = match frame {
-            Some(Some(frame)) if frame.width > 0 && frame.height > 0 => {
-                frame.width as f32 / frame.height as f32
-            }
+        let shape = match frame {
+            Some(Some(frame)) if frame.width > 0 && frame.height > 0 => (frame.width, frame.height),
             Some(None) if !last => return true,
-            _ => WIDE,
+            _ => WIDE_SHAPE,
         };
+        self.handover(shape, window);
+        let aspect = shape.0 as f32 / shape.1 as f32;
         let now = window.viewport_size();
         let target = snapped(
             now,

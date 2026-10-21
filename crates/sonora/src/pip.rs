@@ -114,7 +114,10 @@ pub fn open(cx: &mut App) {
         },
         |window, cx| {
             window.set_rem_size(cx.theme().font_size);
-            cx.new(|cx| PipView::new(PIP_MIN, screen.size, window, cx))
+            cx.new(|cx| {
+                PipView::new(PIP_MIN, screen.size, window, cx)
+                    .on_shape(|window, width, height| crate::aspect::lock(window, width, height))
+            })
         },
     );
 
@@ -122,7 +125,10 @@ pub fn open(cx: &mut App) {
         Ok(handle) => {
             // after the window is mapped, as for the mini player
             handle
-                .update(cx, |_, window, _| crate::above::raise(window))
+                .update(cx, |view, window, cx| {
+                    crate::above::raise(window);
+                    view.lock_shape(window, cx);
+                })
                 .ok();
             cx.set_global(Pip(Some(handle)));
             video.update(cx, |video, cx| video.set_place(Place::Pip, cx));
