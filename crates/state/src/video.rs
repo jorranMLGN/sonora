@@ -11,7 +11,7 @@ use gpui::{Context, Entity, Task};
 use music::video::{Clock, Movie};
 
 use crate::{
-    AppSettings, Codec, CodecState, Io, Playback, PlaybackState, Session, SessionEvent, join,
+    AppSettings, Codec, Io, Playback, PlaybackState, Session, SessionEvent, join,
     playback::PlaybackEvent,
 };
 
@@ -123,13 +123,18 @@ pub struct Video {
     /// a new movie's first frame from the last one of the movie before it.
     generation: u64,
     task: Option<Task<()>>,
-    /// Asks whether the current track has a video while no decoder is loaded, which is what
-    /// raises the decoder prompt. Only metadata: nothing is downloaded.
+    /// Asks whether the current track has a video whenever no load will answer that: no place
+    /// shows the video, or no decoder is loaded (which is what raises the decoder prompt). Only
+    /// metadata: nothing is downloaded.
     probe: Option<Task<()>>,
     /// The track whose probe failed. It is not asked again until the track, the video setting
     /// or the decoder's state changes, since `Playback` notifies twice a second.
     probe_failed: Option<String>,
     grace: Option<Task<()>>,
+    /// Whether the track before this one was offered a video. Keeps the player bar's video
+    /// buttons up while the new track is still being asked about, so a run of videos does not
+    /// blink between tracks.
+    carried: bool,
 }
 
 impl Video {
@@ -177,6 +182,7 @@ impl Video {
             probe: None,
             probe_failed: None,
             grace: None,
+            carried: false,
         }
     }
 
@@ -204,8 +210,8 @@ impl Video {
 
     /// Whether the current track has a video: one is playing, one is catching up at another
     /// height, or the provider said so. A load still in flight does not count, since the track
-    /// may turn out to have none, and a track never asked about (the setting off, or no place
-    /// yet) reads `false`.
+    /// may turn out to have none, and a track not yet answered (the setting off, or the probe
+    /// still out) reads `false`.
     pub fn has_video(&self) -> bool {
         has(self.loaded.is_some(), self.pending.is_some(), self.known())
     }
@@ -220,6 +226,18 @@ impl Video {
     /// for it before the provider has answered.
     pub fn may_have_video(&self) -> bool {
         may_have(self.track.is_some(), self.known())
+    }
+
+    /// Whether the player bar offers the video toggle and the PiP for the current track: it has
+    /// a video, or it is still being asked about and the track before it had one. A track not
+    /// yet answered after one without a video is not offered, so it never flashes.
+    pub fn offers_video(&self) -> bool {
+        offers(
+            self.track.is_some(),
+            self.has_video(),
+            self.known(),
+            self.carried,
+        )
     }
 
     /// What the provider said about the current track's video, if it was asked.
@@ -301,6 +319,7 @@ impl Video {
             .track()
             .and_then(|track| track.id.clone());
         if next(self.track.as_deref(), track.as_deref()) == Change::Drop {
+            self.carried = self.offers_video();
             self.track = track;
             self.task = None;
             self.probe = None;
@@ -319,8 +338,9 @@ impl Video {
 
     /// Brings the movie in line with the setting, the place and the decoder: stops it when the
     /// setting is off, and loads one when a place wants a height nothing is playing or loading
-    /// at. With no place it changes nothing; the grace timer decides. Without a decoder it only
-    /// asks whether the track has a video, and only while the decoder could still be offered.
+    /// at. With no place it changes nothing but asks, from metadata alone, whether the track has
+    /// a video, so the player bar knows whether to offer one; the grace timer decides the rest.
+    /// Without a decoder it only asks.
     fn reconcile(&mut self, cx: &mut Context<Self>) {
         let settings = self.settings.read(cx);
         let on = settings.video();
@@ -338,7 +358,11 @@ impl Video {
         let loaded = self.loaded.as_ref().map(|loaded| loaded.height);
         // a reload catching up counts as in flight
         let pending = self.pending.as_ref().map(|pending| pending.loaded.height);
-        let height = match plan(loaded, self.loading.or(pending), height(self.place, cap)) {
+        let Some(wanted_height) = height(self.place, cap) else {
+            self.probe(id, cx);
+            return;
+        };
+        let height = match plan(loaded, self.loading.or(pending), Some(wanted_height)) {
             Plan::Keep => return,
             Plan::Cancel => {
                 self.pending = None;
@@ -358,18 +382,22 @@ impl Video {
         }
     }
 
-    /// No decoder: raises the prompt for a track known to have a video, and otherwise asks the
-    /// provider, from metadata alone. Asks nothing once the decoder was declined, failed or
-    /// cannot exist here, since no answer could change anything.
+    /// No decoder while a place shows the video: raises the prompt for a track known to have
+    /// one, and otherwise asks the provider.
     fn ask(&mut self, id: String, known: Option<bool>, cx: &mut Context<Self>) {
-        let codec = self.codec.read(cx);
-        let missing = codec.state() == CodecState::Missing && codec.supported();
-        if missing && known == Some(true) {
-            self.codec.update(cx, |codec, cx| codec.want(cx));
-            return;
+        match known {
+            Some(true) => self.codec.update(cx, |codec, cx| codec.want(cx)),
+            _ => self.probe(id, cx),
         }
+    }
+
+    /// Asks the provider, from metadata alone, whether `id` has a video, unless that is known,
+    /// already being asked, about to be answered by a load in flight, or failed for this track.
+    /// A yes raises the decoder prompt only while a place shows the video, as a load would.
+    fn probe(&mut self, id: String, cx: &mut Context<Self>) {
+        let known = self.known.get(&id).copied();
         let failed = self.probe_failed.as_deref() == Some(id.as_str());
-        if !should_probe(missing, known, self.probe.is_some(), failed) {
+        if !should_probe(known, self.probe.is_some(), self.loading.is_some(), failed) {
             return;
         }
         let session = self.session.read(cx);
@@ -389,7 +417,8 @@ impl Video {
                     Ok(has) => {
                         this.known.insert(id.clone(), has);
                         cx.notify();
-                        if has && this.track.as_deref() == Some(id.as_str()) {
+                        let current = this.track.as_deref() == Some(id.as_str());
+                        if has && current && this.place != Place::None {
                             this.codec.update(cx, |codec, cx| codec.want(cx));
                         }
                     }
@@ -695,6 +724,12 @@ fn has(loaded: bool, pending: bool, known: Option<bool>) -> bool {
     loaded || pending || known == Some(true)
 }
 
+/// Whether the player bar offers the video for the current `track`: it `has` one, or the
+/// provider has not answered yet (`known`) and the track before had one (`carried`).
+fn offers(track: bool, has: bool, known: Option<bool>, carried: bool) -> bool {
+    track && (has || (known.is_none() && carried))
+}
+
 /// Whether a place may be offered for the video: a track is playing and the provider has not
 /// said it has none.
 fn may_have(track: bool, known: Option<bool>) -> bool {
@@ -740,11 +775,11 @@ fn swap_now(pts: Option<Duration>, now: Option<Duration>, waited: Duration) -> b
     }
 }
 
-/// Whether to ask the provider if the track has a video: only while a decoder could still be
-/// offered (`missing`), for a track not yet answered, with no probe in flight, and not again
-/// after one failed for this track.
-fn should_probe(missing: bool, known: Option<bool>, probing: bool, failed: bool) -> bool {
-    missing && known.is_none() && !probing && !failed
+/// Whether to ask the provider if the track has a video: for a track not yet answered, with no
+/// probe in flight, no load in flight (`loading`, whose answer counts too), and not again after
+/// one failed for this track.
+fn should_probe(known: Option<bool>, probing: bool, loading: bool, failed: bool) -> bool {
+    known.is_none() && !probing && !loading && !failed
 }
 
 /// What the playing track changing from `current` to `playing` does to the movie.
@@ -858,12 +893,33 @@ mod tests {
 
     #[test]
     fn a_failed_probe_is_not_repeated() {
-        assert!(should_probe(true, None, false, false));
-        assert!(!should_probe(true, None, false, true));
-        assert!(!should_probe(true, None, true, false));
-        assert!(!should_probe(true, Some(true), false, false));
-        assert!(!should_probe(true, Some(false), false, false));
-        assert!(!should_probe(false, None, false, false));
+        assert!(should_probe(None, false, false, false));
+        assert!(!should_probe(None, false, false, true));
+        assert!(!should_probe(None, true, false, false));
+        assert!(!should_probe(Some(true), false, false, false));
+        assert!(!should_probe(Some(false), false, false, false));
+    }
+
+    #[test]
+    fn a_load_in_flight_answers_in_place_of_a_probe() {
+        assert!(!should_probe(None, false, true, false));
+    }
+
+    #[test]
+    fn the_player_bar_offers_video_once_the_provider_said_so() {
+        // a track not yet answered is not offered on its own, so a track without one never flashes
+        assert!(!offers(true, false, None, false));
+        assert!(offers(true, true, Some(true), false));
+        assert!(!offers(true, false, Some(false), false));
+        assert!(!offers(false, false, None, true));
+    }
+
+    #[test]
+    fn a_video_carries_over_until_the_next_track_answers() {
+        // after a track with a video the offer stays up while the next one is still asked about
+        assert!(offers(true, false, None, true));
+        assert!(!offers(true, false, Some(false), true));
+        assert!(offers(true, true, Some(true), true));
     }
 
     #[test]

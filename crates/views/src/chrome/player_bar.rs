@@ -248,17 +248,17 @@ impl PlayerBar {
         Button::new("toggle-mini")
             .ghost()
             .small()
-            .icon("icons/picture-in-picture.svg")
+            .icon("icons/app-window.svg")
             .tooltip_above("player-mini")
             .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleMiniPlayer), cx))
     }
 
-    /// Turns the music video on or off. Shown while the playing track has a video, and always
-    /// while video is off, since the track's video is not looked up then and this is the way
-    /// back on.
+    /// Turns the music video on or off. Shown while `Video::offers_video` (the track has a
+    /// video, or is still being asked about right after one that had), and always while video
+    /// is off, since the track's video is not looked up then and this is the way back on.
     fn video_button(&self, cx: &Context<Self>) -> Option<Button> {
         let on = self.settings.read(cx).video();
-        if on && !Sonora::global(cx).video.read(cx).has_video() {
+        if on && !Sonora::global(cx).video.read(cx).offers_video() {
             return None;
         }
         let (icon, tooltip) = match on {
@@ -276,11 +276,12 @@ impl PlayerBar {
     }
 
     /// Floats the music video in the picture-in-picture window, or brings it back. The way to
-    /// it while the sidebar is closed, so it shows whenever video is on and the playing track is
-    /// not known to have none.
+    /// it while the sidebar is closed, so it shows whenever video is on and `Video::offers_video`
+    /// holds, and while the window is open, so it can always be closed from here.
     fn pip_button(&self, cx: &Context<Self>) -> Option<Button> {
         let video = Sonora::global(cx).video.read(cx);
-        if !self.settings.read(cx).video() || !video.may_have_video() {
+        let shown = video.offers_video() || video.place() == Place::Pip;
+        if !self.settings.read(cx).video() || !shown {
             return None;
         }
         Some(

@@ -209,7 +209,8 @@ pub trait MusicApi: Send + Sync {
     }
 
     /// Whether this track has a video, learned from metadata alone, so nothing is downloaded.
-    /// Asked when no decoder is loaded yet, to decide whether to offer one.
+    /// Asked whenever no load will answer it (no place shows the video, or no decoder is
+    /// loaded yet), to decide whether to offer the video and the decoder.
     async fn has_video(&self, _track_id: &str) -> Result<bool> {
         Ok(false)
     }
