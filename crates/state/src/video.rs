@@ -108,6 +108,9 @@ pub struct Video {
     /// Asks whether the current track has a video while no decoder is loaded, which is what
     /// raises the decoder prompt. Only metadata: nothing is downloaded.
     probe: Option<Task<()>>,
+    /// The track whose probe failed. It is not asked again until the track, the video setting
+    /// or the decoder's state changes, since `Playback` notifies twice a second.
+    probe_failed: Option<String>,
     grace: Option<Task<()>>,
 }
 
@@ -153,6 +156,7 @@ impl Video {
             generation: 0,
             task: None,
             probe: None,
+            probe_failed: None,
             grace: None,
         }
     }
@@ -235,6 +239,7 @@ impl Video {
             self.track = track;
             self.task = None;
             self.probe = None;
+            self.probe_failed = None;
             self.loading = None;
             self.failed = None;
             if self.loaded.take().is_some() {
@@ -256,6 +261,7 @@ impl Video {
         let cap = settings.video_max_height();
         if !on {
             self.probe = None;
+            self.probe_failed = None;
             self.stop(cx);
             return;
         }
@@ -285,14 +291,13 @@ impl Video {
     /// cannot exist here, since no answer could change anything.
     fn ask(&mut self, id: String, known: Option<bool>, cx: &mut Context<Self>) {
         let codec = self.codec.read(cx);
-        if codec.state() != CodecState::Missing || !codec.supported() {
-            return;
-        }
-        if known == Some(true) {
+        let missing = codec.state() == CodecState::Missing && codec.supported();
+        if missing && known == Some(true) {
             self.codec.update(cx, |codec, cx| codec.want(cx));
             return;
         }
-        if self.probe.is_some() {
+        let failed = self.probe_failed.as_deref() == Some(id.as_str());
+        if !should_probe(missing, known, self.probe.is_some(), failed) {
             return;
         }
         let session = self.session.read(cx);
@@ -316,7 +321,10 @@ impl Video {
                             this.codec.update(cx, |codec, cx| codec.want(cx));
                         }
                     }
-                    Err(error) => log::warn!("video: cannot ask whether {id} has one: {error:#}"),
+                    Err(error) => {
+                        log::warn!("video: cannot ask whether {id} has one: {error:#}");
+                        this.probe_failed = Some(id.clone());
+                    }
                 }
             })
             .ok();
@@ -325,7 +333,9 @@ impl Video {
 
     /// The decoder arrived: try the current track again, a failed one included, since a new
     /// decoder is the one thing that could have changed its outcome.
+    /// Any change of the decoder's state also lets a failed probe be asked again.
     fn retry(&mut self, cx: &mut Context<Self>) {
+        self.probe_failed = None;
         if self.codec.update(cx, |codec, _| codec.ready()) {
             self.failed = None;
             self.reconcile(cx);
@@ -527,6 +537,13 @@ fn plan(loaded: Option<u32>, loading: Option<u32>, wanted: Option<u32>) -> Plan 
     }
 }
 
+/// Whether to ask the provider if the track has a video: only while a decoder could still be
+/// offered (`missing`), for a track not yet answered, with no probe in flight, and not again
+/// after one failed for this track.
+fn should_probe(missing: bool, known: Option<bool>, probing: bool, failed: bool) -> bool {
+    missing && known.is_none() && !probing && !failed
+}
+
 /// What the playing track changing from `current` to `playing` does to the movie.
 fn next(current: Option<&str>, playing: Option<&str>) -> Change {
     match current == playing {
@@ -596,6 +613,16 @@ mod tests {
         assert_eq!(plan(None, Some(1080), Some(480)), Plan::Load(480));
         assert_eq!(plan(Some(480), Some(1080), None), Plan::Keep);
         assert_eq!(plan(None, None, Some(480)), Plan::Load(480));
+    }
+
+    #[test]
+    fn a_failed_probe_is_not_repeated() {
+        assert!(should_probe(true, None, false, false));
+        assert!(!should_probe(true, None, false, true));
+        assert!(!should_probe(true, None, true, false));
+        assert!(!should_probe(true, Some(true), false, false));
+        assert!(!should_probe(true, Some(false), false, false));
+        assert!(!should_probe(false, None, false, false));
     }
 
     #[test]
