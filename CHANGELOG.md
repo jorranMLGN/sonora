@@ -88,6 +88,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Show all on an artist page now lists every song, not just ten: the whole catalogue on
+  Spotify, Apple Music, SoundCloud, YouTube Music and YouTube.
 - The tray icon on GNOME shows the Sonora logo instead of three dots.
 - Listening to a jam on an iPhone no longer depends on the ringer switch being off silent.
 - A device listening to a jam no longer falls silent after the host switches to another provider.

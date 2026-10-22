@@ -23,8 +23,9 @@ use std::sync::Arc;
 
 use crate::tag;
 use crate::{
-    Album, AlbumDetail, Artist, ArtistRef, Contributor, Credit, Genre, GenreDetail, GenreItem,
-    GenreSection, HomeFeed, Playlist, PlaylistDetail, SavedArtist, Track, UserDetail, UserProfile,
+    Album, AlbumDetail, Artist, ArtistCatalogue, ArtistRef, Contributor, Credit, Genre,
+    GenreDetail, GenreItem, GenreSection, HomeFeed, Playlist, PlaylistDetail, SavedArtist, Track,
+    UserDetail, UserProfile,
 };
 
 pub(crate) fn track(slug: &str, value: &mut Track) {
@@ -84,6 +85,15 @@ pub(crate) fn artist(slug: &str, value: &mut Artist) {
         track(slug, entry);
     }
     for entry in &mut value.albums {
+        album(slug, entry);
+    }
+}
+
+pub(crate) fn artist_catalogue(slug: &str, value: &mut ArtistCatalogue) {
+    for entry in &mut value.top_tracks {
+        track(slug, entry);
+    }
+    for entry in value.albums.iter_mut().chain(&mut value.appears_on) {
         album(slug, entry);
     }
 }
@@ -187,7 +197,7 @@ pub(crate) mod bare {
         value.id = tag::untag(&value.id).to_owned();
     }
 
-    fn track(value: &mut Track) {
+    pub(crate) fn track(value: &mut Track) {
         if let Some(id) = value.id.as_mut() {
             *id = tag::untag(id).to_owned();
         }

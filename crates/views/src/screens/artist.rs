@@ -36,7 +36,6 @@ use crate::shared::trouble;
 const SECTION: &str = "artist";
 const RELEASE_ROWS: usize = 2;
 const LISTED: usize = 5;
-const LISTED_MAX: usize = 10;
 
 struct ArtistTracks {
     detail: Entity<ArtistDetail>,
@@ -799,10 +798,7 @@ impl ArtistView {
                 .small()
                 .ghost()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.shown.set(match expanded {
-                        true => LISTED,
-                        false => LISTED_MAX,
-                    });
+                    this.shown.set(listed_rows(!expanded));
                     this.rebuild(cx);
                     cx.notify();
                 }))
@@ -1068,5 +1064,31 @@ fn chevron(expanded: bool) -> &'static str {
     match expanded {
         true => "icons/chevron-up.svg",
         false => "icons/chevron-down.svg",
+    }
+}
+
+/// How many popular tracks the list shows: the first few while it is collapsed, and every track
+/// the artist page holds, its whole catalogue once that arrives, while it is expanded.
+fn listed_rows(expanded: bool) -> usize {
+    match expanded {
+        true => usize::MAX,
+        false => LISTED,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LISTED, listed_rows};
+
+    #[test]
+    fn a_collapsed_list_shows_the_first_few_tracks() {
+        assert_eq!(listed_rows(false), LISTED);
+    }
+
+    #[test]
+    fn an_expanded_list_shows_the_whole_catalogue() {
+        let catalogue = 500;
+        assert!(listed_rows(true) >= catalogue);
+        assert!(listed_rows(true) > LISTED);
     }
 }
