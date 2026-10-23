@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use ytmusic::YtMusic;
 use ytmusic::nav::Nav as _;
@@ -15,6 +16,8 @@ use crate::{
 };
 
 const PORTRAIT_LIMIT: usize = 24;
+/// How many duration requests `hydrate_durations` keeps in flight at once.
+const DURATION_CONCURRENCY: usize = 8;
 const EPISODES: &str = "SE";
 /// The prefix of a browse id that opens a playlist.
 const PLAYLIST_BROWSE: &str = "VL";
@@ -41,6 +44,7 @@ impl YouTubeClient {
     }
 
     async fn hydrate_durations(&self, tracks: &mut [ytmusic::Track]) {
+        let limit = Arc::new(Semaphore::new(DURATION_CONCURRENCY));
         let mut tasks = JoinSet::new();
         for (index, track) in tracks.iter().enumerate() {
             if track.duration.is_some() {
@@ -50,7 +54,11 @@ impl YouTubeClient {
                 continue;
             };
             let api = self.api.clone();
-            tasks.spawn(async move { (index, api.track_duration(&video_id).await) });
+            let limit = limit.clone();
+            tasks.spawn(async move {
+                let _permit = limit.acquire_owned().await.ok();
+                (index, api.track_duration(&video_id).await)
+            });
         }
         while let Some(result) = tasks.join_next().await {
             if let Ok((index, Some(duration))) = result {

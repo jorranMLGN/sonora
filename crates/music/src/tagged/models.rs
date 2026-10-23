@@ -17,7 +17,8 @@
 //! walker.
 //!
 //! `bare` is the other direction, for the one method that takes models rather
-//! than ids as arguments. It reaches only what a `GenreSection` nests.
+//! than ids as arguments. It reaches what a `GenreSection` nests and what `artist_catalogue`
+//! returns.
 
 use std::sync::Arc;
 

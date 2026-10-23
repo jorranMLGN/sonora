@@ -36,6 +36,9 @@ use crate::shared::trouble;
 const SECTION: &str = "artist";
 const RELEASE_ROWS: usize = 2;
 const LISTED: usize = 5;
+/// How many of the popular tracks the hero plays and the grid shows: the popular top, not the
+/// whole catalogue the list holds.
+const HERO_TRACKS: usize = 10;
 
 struct ArtistTracks {
     detail: Entity<ArtistDetail>,
@@ -299,7 +302,7 @@ impl ArtistView {
                 HeroPlayButton::new(
                     "play-artist",
                     t!("artist-play"),
-                    self.popular.as_ref().clone(),
+                    popular_top(&self.popular),
                     self.playback.clone(),
                 )
                 .from(self.playing_from(cx)),
@@ -307,7 +310,7 @@ impl ArtistView {
             .child(
                 HeroPlayButton::shuffle(
                     "shuffle-artist",
-                    self.popular.as_ref().clone(),
+                    popular_top(&self.popular),
                     self.playback.clone(),
                 )
                 .from(self.playing_from(cx)),
@@ -828,7 +831,7 @@ impl ArtistView {
     }
 
     fn popular(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tracks = self.popular.clone();
+        let tracks = Rc::new(popular_top(&self.popular));
         let from = self.playing_from(cx);
         let pages = Shape::new(self.width, tracks.len()).pages;
         let queued = tracks.clone();
@@ -978,7 +981,7 @@ impl Render for ArtistView {
             self.scrollbar
                 .update(cx, |bar, cx| bar.set_max_offset(None, cx));
         }
-        let columns = Shape::new(self.width, self.popular.len()).columns;
+        let columns = Shape::new(self.width, self.popular.len().min(HERO_TRACKS)).columns;
         if self.popular_columns != columns {
             self.popular_columns = columns;
             self.popular_page = 0;
@@ -1076,9 +1079,24 @@ fn listed_rows(expanded: bool) -> usize {
     }
 }
 
+/// The popular top of an artist's tracks: the first `HERO_TRACKS` of them, for the hero's Play
+/// and Shuffle and for the grid.
+fn popular_top<T: Clone>(tracks: &[T]) -> Vec<T> {
+    tracks.iter().take(HERO_TRACKS).cloned().collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LISTED, listed_rows};
+    use super::{HERO_TRACKS, LISTED, listed_rows, popular_top};
+
+    #[test]
+    fn the_popular_top_is_the_first_tracks_of_a_whole_catalogue() {
+        let catalogue: Vec<usize> = (0..500).collect();
+        let top = popular_top(&catalogue);
+        assert_eq!(top.len(), HERO_TRACKS);
+        assert_eq!(top[0], 0);
+        assert_eq!(popular_top(&catalogue[..3]).len(), 3);
+    }
 
     #[test]
     fn a_collapsed_list_shows_the_first_few_tracks() {

@@ -20,6 +20,8 @@ use crate::soundcloud::wire::{self, Page, User};
 
 /// How many `GET /users/{id}` requests `images` keeps in flight at once.
 const IMAGE_CONCURRENCY: usize = 8;
+/// The most pages `every_page` reads, so a listing that never ends cannot loop forever.
+const MAX_PAGES: usize = 20;
 
 /// How many tracks one page of an artist's uploads asks for.
 const UPLOADS_PAGE: usize = 200;
@@ -133,7 +135,10 @@ where
 {
     let mut items = Vec::new();
     let mut next = Some(first);
-    while let Some(path) = next.take() {
+    for _ in 0..MAX_PAGES {
+        let Some(path) = next.take() else {
+            break;
+        };
         let page = match fetch(path).await {
             Ok(page) => page,
             Err(error) if !items.is_empty() => {
@@ -254,6 +259,18 @@ mod tests {
 
         assert_eq!(items, [1, 2, 3, 1, 2]);
         assert_eq!(asked.borrow().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn every_page_stops_after_max_pages_of_a_listing_that_never_ends() {
+        let next = Some("https://api-v2.soundcloud.com/users/7/tracks?limit=2");
+        let pages = [("/users/7/tracks?limit=2", page(&[1], next))];
+        let asked = RefCell::new(Vec::new());
+
+        let items = walk(&pages, usize::MAX, &asked).await.unwrap();
+
+        assert_eq!(asked.borrow().len(), MAX_PAGES);
+        assert_eq!(items.len(), MAX_PAGES);
     }
 
     #[tokio::test]
