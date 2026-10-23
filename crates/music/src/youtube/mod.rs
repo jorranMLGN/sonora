@@ -4,6 +4,7 @@ mod browser;
 mod client;
 mod genres;
 mod lyrics;
+pub(crate) mod pages;
 pub(crate) mod playback;
 mod radio;
 mod segments;

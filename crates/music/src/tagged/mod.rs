@@ -18,9 +18,9 @@ use async_trait::async_trait;
 
 use crate::tag;
 use crate::{
-    Album, AlbumDetail, Artist, ArtistProfile, Genre, GenreDetail, GenreSection, HomeFeed,
-    MediaKind, MusicApi, Playlist, PlaylistDetail, SavedArtist, Track, TrackTags, UserDetail,
-    UserProfile,
+    Album, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Genre, GenreDetail, GenreSection,
+    HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, SavedArtist, Track, TrackTags,
+    UserDetail, UserProfile,
 };
 
 /// A `MusicApi` that speaks tagged ids to the app and bare ids to the
@@ -63,6 +63,19 @@ impl MusicApi for Tagged {
     async fn artist(&self, artist_id: &str) -> Result<Artist> {
         let mut value = self.inner.artist(tag::untag(artist_id)).await?;
         models::artist(self.slug, &mut value);
+        Ok(value)
+    }
+
+    async fn artist_catalogue(&self, artist_id: &str, known: &[Track]) -> Result<ArtistCatalogue> {
+        let mut bare = known.to_vec();
+        for value in &mut bare {
+            models::bare::track(value);
+        }
+        let mut value = self
+            .inner
+            .artist_catalogue(tag::untag(artist_id), &bare)
+            .await?;
+        models::artist_catalogue(self.slug, &mut value);
         Ok(value)
     }
 
@@ -327,5 +340,175 @@ impl MusicApi for Tagged {
         let mut value = self.inner.genre(tag::untag(genre_id)).await?;
         models::genre_detail(self.slug, &mut value);
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A provider that answers only `artist_catalogue`, and remembers what it was asked.
+    #[derive(Default)]
+    struct Catalogued {
+        asked: Mutex<Option<(String, Vec<String>)>>,
+    }
+
+    fn track(id: &str) -> Track {
+        Track {
+            id: Some(id.to_owned()),
+            name: id.to_owned(),
+            playable: true,
+            artists: String::new(),
+            artist_refs: Vec::new(),
+            album: String::new(),
+            album_id: None,
+            cover: None,
+            duration: Duration::from_secs(1),
+            added_at: None,
+            added_by: None,
+            playcount: None,
+            popularity: 0,
+            explicit: false,
+            track_number: 1,
+            disc_number: 1,
+            tags: Vec::new(),
+            languages: Vec::new(),
+            credits: Vec::new(),
+        }
+    }
+
+    #[async_trait]
+    impl MusicApi for Catalogued {
+        fn share_url(&self, _kind: MediaKind, _id: &str) -> Option<String> {
+            None
+        }
+
+        async fn profile(&self) -> Result<UserProfile> {
+            unimplemented!()
+        }
+        async fn artist(&self, _: &str) -> Result<Artist> {
+            unimplemented!()
+        }
+        async fn artist_profile(&self, _: &str) -> Result<ArtistProfile> {
+            unimplemented!()
+        }
+        async fn artist_images(&self, _: Vec<String>) -> Result<HashMap<String, String>> {
+            unimplemented!()
+        }
+        async fn saved_tracks(&self) -> Result<Vec<Track>> {
+            unimplemented!()
+        }
+        async fn set_track_saved(&self, _: &str, _: bool) -> Result<()> {
+            unimplemented!()
+        }
+        async fn track(&self, _: &str) -> Result<Track> {
+            unimplemented!()
+        }
+        async fn track_playcount(&self, _: &str) -> Result<Option<u64>> {
+            unimplemented!()
+        }
+        async fn playlists(&self) -> Result<Vec<Playlist>> {
+            unimplemented!()
+        }
+        async fn create_playlist(&self, _: &str) -> Result<String> {
+            unimplemented!()
+        }
+        async fn rename_playlist(&self, _: &str, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete_playlist(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn remove_playlist_from_library(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn add_playlist_to_library(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn set_playlist_public(&self, _: &str, _: bool) -> Result<()> {
+            unimplemented!()
+        }
+        async fn add_track_to_playlist(&self, _: &str, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn remove_track_from_playlist(&self, _: &str, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+        async fn saved_albums(&self) -> Result<Vec<Album>> {
+            unimplemented!()
+        }
+        async fn set_album_saved(&self, _: &str, _: bool) -> Result<()> {
+            unimplemented!()
+        }
+        async fn saved_artists(&self) -> Result<Vec<SavedArtist>> {
+            unimplemented!()
+        }
+        async fn set_artist_saved(&self, _: &str, _: bool) -> Result<()> {
+            unimplemented!()
+        }
+        async fn album(&self, _: &str) -> Result<AlbumDetail> {
+            unimplemented!()
+        }
+        async fn album_tracks(&self, _: &str) -> Result<Vec<Track>> {
+            unimplemented!()
+        }
+        async fn playlist(&self, _: &str) -> Result<PlaylistDetail> {
+            unimplemented!()
+        }
+        async fn playlist_tracks(&self, _: &str) -> Result<Vec<Track>> {
+            unimplemented!()
+        }
+        async fn playlist_covers(&self, _: &str, _: usize) -> Result<Vec<String>> {
+            unimplemented!()
+        }
+        async fn track_radio(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(Vec<Track>, Option<String>)> {
+            unimplemented!()
+        }
+        async fn search(&self, _: &str) -> Result<Vec<Track>> {
+            unimplemented!()
+        }
+
+        async fn artist_catalogue(
+            &self,
+            artist_id: &str,
+            known: &[Track],
+        ) -> Result<ArtistCatalogue> {
+            let known = known.iter().filter_map(|track| track.id.clone()).collect();
+            *self.asked.lock().unwrap() = Some((artist_id.to_owned(), known));
+            Ok(ArtistCatalogue {
+                top_tracks: vec![track("song")],
+                ..Default::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn artist_catalogue_reaches_the_provider_with_bare_ids_and_comes_back_tagged() {
+        let inner = Arc::new(Catalogued::default());
+        let tagged = new("soundcloud", inner.clone());
+
+        let catalogue = tagged
+            .artist_catalogue(
+                &tag::tag("soundcloud", "artist"),
+                &[track(&tag::tag("soundcloud", "known"))],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            inner.asked.lock().unwrap().clone(),
+            Some(("artist".to_owned(), vec!["known".to_owned()]))
+        );
+        assert_eq!(
+            catalogue.top_tracks[0].id,
+            Some(tag::tag("soundcloud", "song"))
+        );
     }
 }

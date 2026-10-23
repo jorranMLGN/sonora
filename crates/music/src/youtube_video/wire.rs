@@ -43,9 +43,13 @@ pub fn track(source: Video) -> Option<Track> {
 
 /// The videos that are tracks, numbered from one in the order they came.
 pub fn tracks(videos: Vec<Video>) -> Vec<Track> {
-    videos
+    numbered(videos.into_iter().filter_map(track).collect())
+}
+
+/// `tracks` numbered from one in their order, for a list put together from several pages.
+pub fn numbered(tracks: Vec<Track>) -> Vec<Track> {
+    tracks
         .into_iter()
-        .filter_map(track)
         .enumerate()
         .map(|(index, track)| Track {
             track_number: index as u32 + 1,
