@@ -9437,6 +9437,7 @@ dependencies = [
 name = "views"
 version = "0.42.2"
 dependencies = [
+ "etagere",
  "gpui",
  "i18n",
  "icons",
