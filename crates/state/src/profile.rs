@@ -22,6 +22,7 @@ pub struct Profile {
 impl Profile {
     pub fn new(session: Entity<Session>, io: Io, cx: &mut Context<Self>) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedIn(slug) => {
                 if let Some(id) = this.shown(slug) {
                     this.clear();
@@ -121,6 +122,16 @@ impl Profile {
             })
             .ok();
         }));
+    }
+
+    /// Drops the profile and fetches it again, so the page shows its loading state until the
+    /// new one lands.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.id.clone() else {
+            return;
+        };
+        self.clear();
+        self.open(&id, cx);
     }
 
     fn adopt_mosaics(&mut self) -> Vec<(String, u32)> {

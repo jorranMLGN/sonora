@@ -4,20 +4,19 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 #[cfg(all(test, feature = "spotify", feature = "youtube"))]
 use super::auth::ClientId;
 use super::http::Http;
 use super::stream;
 use super::wire::{self, Transcoding};
-use crate::audio::{Chain, Output, RAMP, SmoothGain, Trimmed, Volume};
-use crate::cast::CastSink;
-use crate::spectrum::Spectrum;
-use crate::trim;
-use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player};
+use rodio::Source as _;
 
-const POLL: Duration = Duration::from_millis(20);
+use crate::audio::Trimmed;
+use crate::cast::CastSink;
+use crate::engine::{self, Fetch};
+use crate::trim;
+use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
 
 /// Ranks a transcoding preset; higher is better. Unknown presets rank above
 /// nothing but below anything named, so a preset SoundCloud adds later is
@@ -56,21 +55,7 @@ pub fn pick(transcodings: &[Transcoding]) -> Option<&Transcoding> {
         })
 }
 
-enum Command {
-    Load {
-        id: String,
-        at: Option<Duration>,
-        paused: bool,
-    },
-    Preload {
-        id: String,
-    },
-    Play,
-    Pause,
-    Seek(Duration),
-    Gain(f32),
-}
-
+/// Starts the shared engine over SoundCloud's tracks.
 pub struct Factory {
     http: Arc<Http>,
 }
@@ -87,509 +72,66 @@ impl PlaybackFactory for Factory {
         config: PlaybackConfig,
         cast: Option<CastSink>,
     ) -> (Box<dyn Player>, Box<dyn PlaybackEvents>) {
-        let (commands, command_rx) = unbounded_channel();
-        let (events, event_rx) = unbounded_channel();
-        let http = self.http.clone();
-        let spectrum = Spectrum::new();
-        let engine_spectrum = spectrum.clone();
-        let spawned = std::thread::Builder::new()
-            .name("sc-playback".to_string())
-            .spawn(move || run(http, config, command_rx, events, engine_spectrum, cast));
-        if let Err(error) = spawned {
-            log::error!("playback: cannot spawn engine thread: {error}");
-        }
-        (
-            Box::new(Engine { commands, spectrum }),
-            Box::new(Events(event_rx)),
-        )
+        let fetch = SoundCloud {
+            http: self.http.clone(),
+        };
+        engine::start(fetch, config, "soundcloud", cast)
     }
 }
 
-struct Engine {
-    commands: UnboundedSender<Command>,
-    spectrum: Spectrum,
+/// The engine's fetch for SoundCloud. A track arrives whole, an HLS one assembled from its
+/// segments, and decodes from memory, so a seek is the decoder's own.
+struct SoundCloud {
+    http: Arc<Http>,
 }
 
-impl Player for Engine {
-    fn load(&self, track_id: &str, at: Duration, _seamless: bool) -> Result<()> {
-        self.commands
-            .send(Command::Load {
-                id: track_id.to_string(),
-                at: (!at.is_zero()).then_some(at),
-                paused: false,
-            })
-            .context("cannot reach playback engine")
-    }
-
-    fn load_paused_at(&self, track_id: &str, at: Duration) -> Result<()> {
-        self.commands
-            .send(Command::Load {
-                id: track_id.to_string(),
-                at: Some(at),
-                paused: true,
-            })
-            .context("cannot reach playback engine")
-    }
-
-    fn preload(&self, track_id: &str, _segue: bool) -> Result<()> {
-        self.commands
-            .send(Command::Preload {
-                id: track_id.to_string(),
-            })
-            .context("cannot reach playback engine")
-    }
-
-    fn play(&self) {
-        self.commands.send(Command::Play).ok();
-    }
-
-    fn pause(&self) {
-        self.commands.send(Command::Pause).ok();
-    }
-
-    fn seek(&self, position: Duration) {
-        self.commands.send(Command::Seek(position)).ok();
-    }
-
-    fn set_gain(&self, gain: f32) {
-        self.commands.send(Command::Gain(gain)).ok();
-    }
-
-    fn spectrum(&self) -> Option<Spectrum> {
-        Some(self.spectrum.clone())
-    }
-}
-
-pub struct Events(UnboundedReceiver<PlaybackEvent>);
-
-#[async_trait]
-impl PlaybackEvents for Events {
-    async fn next(&mut self) -> Option<PlaybackEvent> {
-        self.0.recv().await
-    }
-}
-
+/// A downloaded track and the length SoundCloud gave for it.
 #[derive(Clone)]
-struct Loaded {
+pub struct Loaded {
     data: Arc<Vec<u8>>,
     duration: Option<Duration>,
 }
 
-struct Slot {
-    id: String,
-    length: Option<Duration>,
-    envelope: Volume,
-    gain: f32,
-}
+#[async_trait]
+impl Fetch for SoundCloud {
+    type Loaded = Loaded;
+    type Source = Trimmed<rodio::Decoder<Cursor<Bytes>>>;
 
-impl Slot {
-    fn mute(&self) {
-        self.envelope.set(0.0);
+    fn name(&self) -> &'static str {
+        "soundcloud"
     }
 
-    fn unmute(&self) {
-        self.envelope.set(self.gain);
+    async fn load(&self, id: &str) -> Result<Loaded> {
+        fetch(&self.http, id).await
     }
-}
 
-enum Kind {
-    Play,
-    Ahead,
-}
+    fn length(&self, loaded: &Loaded) -> Option<Duration> {
+        loaded.duration
+    }
 
-struct Fetched {
-    epoch: u64,
-    id: String,
-    kind: Kind,
-    result: Result<Loaded>,
-}
-
-fn run(
-    http: Arc<Http>,
-    config: PlaybackConfig,
-    commands: UnboundedReceiver<Command>,
-    events: UnboundedSender<PlaybackEvent>,
-    spectrum: Spectrum,
-    cast: Option<CastSink>,
-) {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            log::error!("playback: cannot build engine runtime: {error}");
-            return;
+    /// The v2 api carries no per-track loudness, so a SoundCloud track has no gain of its own.
+    fn open(&self, id: &str, loaded: &Loaded, at: Duration) -> Option<Self::Source> {
+        let source = decode(loaded.data.clone())
+            .inspect_err(|error| log::warn!("playback: cannot decode {id}: {error:#}"))
+            .ok()?;
+        let edit = trim::from_mp4(&loaded.data);
+        let mut source = Trimmed::new(
+            source,
+            edit.map(|edit| edit.skip).unwrap_or_default(),
+            edit.and_then(|edit| edit.take),
+        );
+        if !at.is_zero()
+            && let Err(error) = source.try_seek(at)
+        {
+            log::warn!("playback: cannot start {id} at {}s: {error}", at.as_secs());
         }
-    };
-    runtime.block_on(engine_loop(http, config, commands, events, spectrum, cast));
-}
-
-async fn engine_loop(
-    http: Arc<Http>,
-    config: PlaybackConfig,
-    mut commands: UnboundedReceiver<Command>,
-    events: UnboundedSender<PlaybackEvent>,
-    spectrum: Spectrum,
-    cast: Option<CastSink>,
-) {
-    let chain = Chain {
-        volume: Volume::new(config.gain),
-        equalizer: config.equalizer.clone(),
-        spectrum,
-        slug: "soundcloud",
-        cast,
-    };
-    let output = match Output::open(chain) {
-        Ok(output) => output,
-        Err(error) => {
-            log::error!("playback: cannot open audio output: {error:#}");
-            return;
-        }
-    };
-    let sink = output.sink().clone();
-    sink.pause();
-
-    let (fetched, mut arrivals) = unbounded_channel::<Fetched>();
-    let mut ticker = tokio::time::interval(POLL);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let report_every = (config.position_interval.as_millis() / POLL.as_millis()).max(1) as u32;
-    let mut ticks = 0u32;
-    let mut output_ticks = 0u32;
-
-    let mut playing = false;
-    let mut autostart = true;
-    let mut hold: Option<Duration> = None;
-    let mut epoch = 0u64;
-    let mut pending: Option<u64> = None;
-    let mut inflight: Option<tokio::task::AbortHandle> = None;
-    let mut current: Option<Slot> = None;
-    let mut queued: Option<Slot> = None;
-    let mut ahead: Option<(String, Loaded)> = None;
-    let mut prev_len = 0usize;
-
-    loop {
-        tokio::select! {
-            command = commands.recv() => {
-                let Some(command) = command else { break };
-                match command {
-                    Command::Load { id, at, paused } => {
-                        if !paused && current.as_ref().is_some_and(|slot| slot.id == id) {
-                            playing = true;
-                            autostart = true;
-                            if let Some(slot) = &current {
-                                slot.unmute();
-                                if let Some(length) = slot.length {
-                                    events.send(PlaybackEvent::Length { id: current.as_ref().map(|slot| slot.id.clone()), duration: length }).ok();
-                                }
-                            }
-                            sink.play();
-                            events.send(PlaybackEvent::Playing { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
-                            continue;
-                        }
-                        epoch += 1;
-                        if let Some(handle) = inflight.take() {
-                            handle.abort();
-                        }
-                        let cached = ahead
-                            .take_if(|(cached, _)| *cached == id)
-                            .map(|(_, loaded)| loaded);
-                        pending = None;
-                        if cached.is_none() {
-                            ahead = None;
-                            pending = Some(epoch);
-                            inflight =
-                                Some(spawn(&http, id.clone(), epoch, Kind::Play, &fetched));
-                        }
-                        events.send(PlaybackEvent::Loading { id: current.as_ref().map(|slot| slot.id.clone()), at: at.unwrap_or_default() }).ok();
-                        if output.failed() || output.changed() {
-                            events.send(PlaybackEvent::OutputChanged).ok();
-                            return;
-                        }
-                        silence(&sink, current.as_ref()).await;
-                        current = None;
-                        queued = None;
-                        playing = false;
-                        autostart = !paused;
-                        hold = at;
-                        prev_len = 0;
-                        let Some(loaded) = cached else { continue };
-                        match begin(&sink, &id, &loaded, autostart, hold.take()) {
-                            Ok(slot) => {
-                                announce(&events, &slot, autostart, at.unwrap_or_default());
-                                prev_len = sink.len();
-                                current = Some(slot);
-                                playing = autostart;
-                            }
-                            Err(error) => {
-                                log::warn!("playback: cannot decode {id}: {error:#}");
-                                events.send(PlaybackEvent::Unavailable { id: current.as_ref().map(|slot| slot.id.clone()) }).ok();
-                            }
-                        }
-                    }
-                    Command::Preload { id } => {
-                        let known = current.as_ref().is_some_and(|slot| slot.id == id)
-                            || queued.as_ref().is_some_and(|slot| slot.id == id)
-                            || ahead.as_ref().is_some_and(|(cached, _)| *cached == id);
-                        if known || current.is_none() {
-                            continue;
-                        }
-                        spawn(&http, id, epoch, Kind::Ahead, &fetched);
-                    }
-                    Command::Play => {
-                        autostart = true;
-                        if output.failed() || output.changed() {
-                            events.send(PlaybackEvent::OutputChanged).ok();
-                            return;
-                        }
-                        if let Some(slot) = &current {
-                            sink.play();
-                            slot.unmute();
-                            playing = true;
-                            events.send(PlaybackEvent::Playing { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
-                        }
-                    }
-                    Command::Pause => {
-                        autostart = false;
-                        playing = false;
-                        let position = sink.get_pos();
-                        if let Some(slot) = &current {
-                            slot.mute();
-                            await_drain(&sink).await;
-                            sink.pause();
-                        }
-                        events.send(PlaybackEvent::Paused { id: current.as_ref().map(|slot| slot.id.clone()), at: position }).ok();
-                    }
-                    Command::Seek(position) => match &current {
-                        None if hold.is_some() => hold = Some(position),
-                        None => {}
-                        Some(slot) => {
-                            slot.mute();
-                            await_drain(&sink).await;
-                            if let Err(error) = sink.try_seek(position) {
-                                log::warn!("playback: cannot seek: {error}");
-                            }
-                            if playing {
-                                slot.unmute();
-                            }
-                            events.send(PlaybackEvent::Position { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
-                        }
-                    },
-                    Command::Gain(level) => output.set_volume(level),
-                }
-            }
-            arrival = arrivals.recv() => {
-                let Some(Fetched { epoch: at, id, kind, result }) = arrival else { break };
-                if at != epoch {
-                    continue;
-                }
-                match kind {
-                    Kind::Play => {
-                        if pending != Some(at) {
-                            continue;
-                        }
-                        pending = None;
-                        inflight = None;
-                        let at = hold.take();
-                        match result
-                            .and_then(|loaded| begin(&sink, &id, &loaded, autostart, at))
-                        {
-                            Ok(slot) => {
-                                announce(&events, &slot, autostart, at.unwrap_or_default());
-                                prev_len = sink.len();
-                                current = Some(slot);
-                                playing = autostart;
-                            }
-                            Err(error) => {
-                                log::warn!("playback: cannot load {id}: {error:#}");
-                                events.send(PlaybackEvent::Unavailable { id: current.as_ref().map(|slot| slot.id.clone()) }).ok();
-                            }
-                        }
-                    }
-                    Kind::Ahead => {
-                        let Ok(loaded) = result else {
-                            continue;
-                        };
-                        if current.is_some() && queued.is_none() {
-                            match append(&sink, &id, &loaded, false) {
-                                Ok(slot) => {
-                                    log::debug!("playback: {id} is queued for a gapless segue");
-                                    queued = Some(slot);
-                                    prev_len = sink.len();
-                                }
-                                Err(error) => {
-                                    log::warn!("playback: cannot decode preload {id}: {error:#}")
-                                }
-                            }
-                        }
-                        ahead = Some((id, loaded));
-                    }
-                }
-            }
-            _ = ticker.tick() => {
-                output_ticks += 1;
-                if playing && (output.failed() || output_ticks >= report_every && output.changed()) {
-                    events.send(PlaybackEvent::OutputChanged).ok();
-                    return;
-                }
-                if output_ticks >= report_every {
-                    output_ticks = 0;
-                }
-                let len = sink.len();
-                ticks += 1;
-                if current.is_some() && playing && len < prev_len {
-                    ticks = 0;
-                    events.send(PlaybackEvent::Ended { id: current.as_ref().map(|slot| slot.id.clone()) }).ok();
-                    current = queued.take();
-                    ahead = None;
-                    playing = current.is_some();
-                    match &current {
-                        Some(slot) => {
-                            if let Some(length) = slot.length {
-                                events.send(PlaybackEvent::Length { id: current.as_ref().map(|slot| slot.id.clone()), duration: length }).ok();
-                            }
-                            events.send(PlaybackEvent::Position { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
-                        }
-                        None => log::debug!("playback: track ended with nothing queued ahead"),
-                    }
-                } else if playing && ticks >= report_every {
-                    ticks = 0;
-                    events.send(PlaybackEvent::Position { id: current.as_ref().map(|slot| slot.id.clone()), at: sink.get_pos() }).ok();
-                }
-                prev_len = len;
-            }
-        }
+        Some(source)
     }
-}
 
-fn spawn(
-    http: &Arc<Http>,
-    id: String,
-    epoch: u64,
-    kind: Kind,
-    fetched: &UnboundedSender<Fetched>,
-) -> tokio::task::AbortHandle {
-    let http = http.clone();
-    let fetched = fetched.clone();
-    tokio::spawn(async move {
-        let result = fetch(&http, &id).await;
-        fetched
-            .send(Fetched {
-                epoch,
-                id,
-                kind,
-                result,
-            })
-            .ok();
-    })
-    .abort_handle()
-}
-
-async fn silence(sink: &rodio::Player, slot: Option<&Slot>) {
-    let Some(slot) = slot else {
-        sink.clear();
-        return;
-    };
-    slot.mute();
-    await_drain(sink).await;
-    sink.clear();
-}
-
-async fn await_drain(sink: &rodio::Player) {
-    if sink.is_paused() {
-        return;
+    /// SoundCloud draws its own waveform for every track, so nothing is measured here.
+    fn measurable(&self) -> bool {
+        false
     }
-    tokio::time::sleep(RAMP).await;
-}
-
-fn begin(
-    sink: &rodio::Player,
-    id: &str,
-    loaded: &Loaded,
-    start: bool,
-    at: Option<Duration>,
-) -> Result<Slot> {
-    // rodio's clear sets the pending skip count rather than adding to it, so clearing a sink
-    // `silence` has just cleared would cancel that skip and leave the old, muted track playing
-    // ahead of this one
-    if sink.len() > 0 {
-        sink.clear();
-    }
-    let slot = append(sink, id, loaded, true)?;
-    if let Some(at) = at
-        && let Err(error) = sink.try_seek(at)
-    {
-        log::warn!("playback: cannot start {id} at {}s: {error}", at.as_secs());
-    }
-    match start {
-        true => sink.play(),
-        false => sink.pause(),
-    }
-    Ok(slot)
-}
-
-fn append(sink: &rodio::Player, id: &str, loaded: &Loaded, fade: bool) -> Result<Slot> {
-    // Unlike youtube::playback's `normalisation`, which attenuates by a
-    // per-track `format.loudness_db`, the v2 api carries no per-track
-    // loudness anywhere in its responses. There is nothing to compute a
-    // per-track gain from, so this always plays at unity gain; only the
-    // global `PlaybackConfig.gain`, applied once in `Output::open`, affects
-    // volume here.
-    let gain = 1.0;
-    let envelope = Volume::new(gain);
-    let initial = match fade {
-        true => 0.0,
-        false => gain,
-    };
-    let source = decode(loaded.data.clone())?;
-    let edit = trim::from_mp4(&loaded.data);
-    match edit {
-        Some(edit) => log::debug!(
-            "playback: {id} trims {:?} of priming, plays {:?}",
-            edit.skip,
-            edit.take
-        ),
-        None => log::debug!("playback: {id} carries no edit list"),
-    }
-    let source = Trimmed::new(
-        source,
-        edit.map(|edit| edit.skip).unwrap_or_default(),
-        edit.and_then(|edit| edit.take),
-    );
-    sink.append(SmoothGain::new(source, envelope.clone(), initial, RAMP));
-    Ok(Slot {
-        id: id.to_string(),
-        length: loaded.duration,
-        envelope,
-        gain,
-    })
-}
-
-fn announce(
-    events: &UnboundedSender<PlaybackEvent>,
-    slot: &Slot,
-    playing: bool,
-    position: Duration,
-) {
-    if let Some(length) = slot.length {
-        events
-            .send(PlaybackEvent::Length {
-                id: Some(slot.id.clone()),
-                duration: length,
-            })
-            .ok();
-    }
-    let event = match playing {
-        true => PlaybackEvent::Playing {
-            id: Some(slot.id.clone()),
-            at: position,
-        },
-        false => PlaybackEvent::Paused {
-            id: Some(slot.id.clone()),
-            at: position,
-        },
-    };
-    events.send(event).ok();
 }
 
 /// Resolves a track id to its bytes: fetch the track for its transcodings,
@@ -674,7 +216,7 @@ async fn fetch(http: &Http, id: &str) -> Result<Loaded> {
     })
 }
 
-fn decode(data: Arc<Vec<u8>>) -> Result<impl rodio::Source + Send + 'static> {
+fn decode(data: Arc<Vec<u8>>) -> Result<rodio::Decoder<Cursor<Bytes>>> {
     let length = data.len() as u64;
     rodio::Decoder::builder()
         .with_data(Cursor::new(Bytes(data)))
@@ -684,7 +226,8 @@ fn decode(data: Arc<Vec<u8>>) -> Result<impl rodio::Source + Send + 'static> {
         .context("cannot decode audio")
 }
 
-struct Bytes(Arc<Vec<u8>>);
+/// A downloaded track as the decoder reads it.
+pub struct Bytes(Arc<Vec<u8>>);
 
 impl AsRef<[u8]> for Bytes {
     fn as_ref(&self) -> &[u8] {

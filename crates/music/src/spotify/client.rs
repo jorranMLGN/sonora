@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use crate::connect::Connect;
 use crate::{MediaKind, MusicApi, escape};
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
@@ -7,6 +9,7 @@ use librespot_core::Session;
 use librespot_protocol::playlist4_external::SelectedListContent as RootList;
 use protobuf::Message as _;
 
+use crate::spotify::connect::Connection;
 use crate::spotify::{
     albums, artists, canvas, collection, collection2, pathfinder, playlists, profiles, radio,
     search, wire,
@@ -21,30 +24,17 @@ const MADE_FOR_YOU: &str = "0JQ5DAt0tbjZptfcdMSKl3";
 
 pub struct LibrespotClient {
     session: Session,
+    connect: Arc<Connection>,
 }
 
 impl LibrespotClient {
     pub fn new(session: Session) -> Self {
-        Self { session }
+        let connect = Arc::new(Connection::new(session.clone()));
+        Self { session, connect }
     }
 
     pub fn session(&self) -> &Session {
         &self.session
-    }
-
-    /// The account's own display name, or `None` when the lookup fails. Signing in calls this,
-    /// so a profile Spotify will not hand over must not take the session down with it.
-    async fn display_name(&self, username: &str) -> Option<String> {
-        let body = self
-            .session
-            .spclient()
-            .get_user_profile(&escape::component(username), None, None)
-            .await
-            .inspect_err(|error| log::debug!("profiles: cannot read {username}: {error}"))
-            .ok()?;
-
-        let profile: wire::Named = serde_json::from_slice(&body).ok()?;
-        profile.label().map(str::to_owned)
     }
 }
 
@@ -52,6 +42,10 @@ impl LibrespotClient {
 impl MusicApi for LibrespotClient {
     fn alive(&self) -> bool {
         !self.session.is_invalid()
+    }
+
+    fn connect(&self) -> Option<Arc<dyn Connect>> {
+        Some(self.connect.clone())
     }
 
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
@@ -68,16 +62,7 @@ impl MusicApi for LibrespotClient {
     }
 
     async fn profile(&self) -> Result<UserProfile> {
-        let username = self.session.username();
-        let display_name = self
-            .display_name(&username)
-            .await
-            .unwrap_or_else(|| username.clone());
-        Ok(UserProfile {
-            display_name,
-            id: username,
-            avatar: None,
-        })
+        Ok(profiles::own(&self.session).await)
     }
 
     async fn user(&self, user_id: &str) -> Result<UserDetail> {

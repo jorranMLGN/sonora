@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use music::{Equalizer, Measuring, PlaybackConfig, PlaybackEvent, Player, tag};
+use music::equalizer::{Curve, EqualizerWriter};
+use music::{
+    Analyzer, Measuring, Meter, PlaybackConfig, PlaybackEvent, Player, Quality, Transcode, tag,
+};
 use tokio::sync::mpsc;
 
 use crate::core::{Events, Sessions};
@@ -462,6 +465,7 @@ impl Deck {
             return;
         }
         match event {
+            PlaybackEvent::Signal { .. } => {}
             PlaybackEvent::Loading { .. } => {
                 self.status = Status::Loading;
                 self.publish();
@@ -666,9 +670,14 @@ fn config() -> PlaybackConfig {
         gapless: false,
         position_interval: TICK,
         gain: 1.0,
-        equalizer: Equalizer::default(),
+        equalizer: EqualizerWriter::new(false, Curve::bands(&[0.; 10])).reader(),
         // The app draws no waveform, so a finished track is never decoded a second time.
         measuring: Measuring::new(false),
+        transcode: Transcode::default(),
+        quality: Quality::default(),
+        meter: Meter::default(),
+        analyzer: Analyzer::default(),
+        vault: None,
     }
 }
 

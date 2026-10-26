@@ -47,6 +47,7 @@ impl Waveforms {
         cx.observe(&settings, |this, _, cx| this.follow(cx))
             .detach();
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedOut(slug) => this.forget(slug, cx),
             SessionEvent::SignedIn(_)
             | SessionEvent::Reconnected(_)

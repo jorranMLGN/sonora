@@ -13,9 +13,10 @@ use async_trait::async_trait;
 use rodio::Source as _;
 
 use super::{tags, wire};
+use crate::aac::Aac;
 use crate::cast::CastSink;
 use crate::engine::{self, Fetch, Loudness};
-use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
+use crate::{Encoding, PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
 
 /// A file that opened and decodes, how long the decoder says it is, and the ReplayGain its tags
 /// carry.
@@ -23,6 +24,7 @@ use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
 pub struct Loaded {
     length: Option<Duration>,
     loudness: Option<Loudness>,
+    encoding: Option<Encoding>,
 }
 
 #[derive(Default)]
@@ -49,14 +51,18 @@ impl Fetch for Local {
         "local"
     }
 
-    /// Opens the file off the engine's runtime to check it decodes, and reads its length and
-    /// ReplayGain while it is there.
+    /// Opens the file off the engine's runtime to check it decodes, and reads its length, its
+    /// ReplayGain and its encoding while it is there.
     async fn load(&self, id: &str) -> Result<Loaded> {
         let id = id.to_owned();
         tokio::task::spawn_blocking(move || {
             let length = decode(&id)?.total_duration();
-            let loudness = wire::path_from_track_id(&id).and_then(tags::loudness);
-            Ok(Loaded { length, loudness })
+            let tagged = wire::path_from_track_id(&id).and_then(tags::tagged);
+            Ok(Loaded {
+                length,
+                loudness: tagged.as_ref().and_then(tags::loudness),
+                encoding: tagged.as_ref().and_then(tags::encoding),
+            })
         })
         .await
         .context("cannot probe the local file")?
@@ -68,6 +74,10 @@ impl Fetch for Local {
 
     fn loudness(&self, loaded: &Loaded) -> Option<Loudness> {
         loaded.loudness
+    }
+
+    fn encoding(&self, loaded: &Loaded) -> Option<Encoding> {
+        loaded.encoding
     }
 
     fn open(&self, id: &str, _loaded: &Loaded, at: Duration) -> Option<Self::Source> {
@@ -127,6 +137,7 @@ fn decode(id: &str) -> Result<rodio::Decoder<BufReader<Audio>>> {
     let reader = BufReader::new(Audio { file, skip });
 
     let mut builder = rodio::Decoder::builder()
+        .with_symphonia_decoder::<Aac>()
         .with_data(reader)
         .with_seekable(true)
         .with_gapless(gapless);

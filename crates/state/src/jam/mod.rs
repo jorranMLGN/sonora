@@ -652,7 +652,7 @@ impl Jam {
             let title = track.name.clone();
             let queued = this
                 .update(cx, |_, cx| {
-                    queue.update(cx, |queue, cx| queue.append(track, cx))
+                    queue.update(cx, |queue, cx| queue.append_all([track], None, cx))
                 })
                 .is_ok();
             reply

@@ -6,16 +6,16 @@ use std::time::Duration;
 use anyhow::Error;
 use gpui::{App, Context, Entity, EventEmitter, Task};
 use i18n::t;
+use music::link::Linked;
 use music::{
-    Capabilities, MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession, Shape,
-    SignIn, SignInFailure, SignInProblem, SignInPrompt, UserProfile,
+    Capabilities, Catalog, MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession,
+    Shape, SignIn, SignInFailure, SignInProblem, SignInPrompt, UserProfile,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::Shelf;
 use crate::catalog::CatalogSource;
 use crate::settings::AppSettings;
-use crate::{Io, Network, Outcome, Toasts, join};
+use crate::{Io, Network, Outcome, Scan, Shelf, Toast, Toasts, join};
 
 const HEARTBEAT: Duration = Duration::from_secs(30);
 /// How often the sign-in window is asked whether the user is through.
@@ -78,6 +78,9 @@ pub enum SessionEvent {
     SignedIn(&'static str),
     SignedOut(&'static str),
     Reconnected(&'static str),
+    /// Offline mode let go of every live account. What was loaded stays, but nothing reaches the
+    /// network until the accounts sign in again.
+    WentOffline,
     LocalChanged,
 }
 
@@ -120,6 +123,9 @@ pub struct Session {
     error: Option<(usize, Failure)>,
     settings: Entity<AppSettings>,
     connected: HashMap<&'static str, Connected>,
+    /// The engines that play the downloads of a stored account while it is not reached, built
+    /// from its stored sign-in alone. A provider that connects leaves this.
+    offline: HashMap<&'static str, Arc<dyn PlaybackFactory>>,
     io: Io,
     tasks: HashMap<&'static str, Task<()>>,
     prompt_task: Option<Task<()>>,
@@ -134,6 +140,9 @@ pub struct Session {
     local_task: Option<Task<()>>,
     /// Whether a local scan is under way, so the UI can show its progress.
     scanning: bool,
+    /// Whether the scan under way is one the user started, so its end is reported. An automatic
+    /// rescan that cancels it takes the report over.
+    scan_asked: bool,
     watch: Option<Task<()>>,
     reconnect: HashMap<&'static str, Task<()>>,
     reconnecting: HashSet<&'static str>,
@@ -165,6 +174,7 @@ impl Session {
             error: None,
             settings,
             connected: HashMap::new(),
+            offline: HashMap::new(),
             io,
             tasks: HashMap::new(),
             prompt_task: None,
@@ -176,6 +186,7 @@ impl Session {
             local_playback,
             local_task: None,
             scanning: false,
+            scan_asked: false,
             watch: None,
             reconnect: HashMap::new(),
             reconnecting: HashSet::new(),
@@ -191,6 +202,16 @@ impl Session {
 
     pub fn client_for_slug(&self, slug: &str) -> Option<Arc<dyn MusicApi>> {
         self.connected.get(slug).map(|entry| entry.client.clone())
+    }
+
+    /// The first connected provider, in provider order, that has a device network, with its
+    /// slug.
+    pub fn connect_client(&self) -> Option<(&'static str, Arc<dyn MusicApi>)> {
+        self.providers.iter().find_map(|provider| {
+            let slug = provider.slug();
+            let client = self.connected.get(slug)?.client.clone();
+            client.connect().is_some().then_some((slug, client))
+        })
     }
 
     pub fn client(&self) -> Option<Arc<dyn MusicApi>> {
@@ -209,7 +230,10 @@ impl Session {
         {
             return Some(playback);
         }
-        self.connected.get(slug).map(|entry| entry.playback.clone())
+        self.connected
+            .get(slug)
+            .map(|entry| entry.playback.clone())
+            .or_else(|| self.offline.get(slug).cloned())
     }
 
     pub fn local_client(&self) -> Option<Arc<dyn MusicApi>> {
@@ -235,11 +259,11 @@ impl Session {
         }
     }
 
-    /// What a shelf's library is made of. The local shelf is always a catalog.
+    /// What a shelf's library is made of. The local shelf is always a fixed catalog.
     pub fn shape_of(&self, shelf: Shelf) -> Shape {
         match shelf {
-            Shelf::Local => Shape::Catalog,
-            Shelf::Of(slug) if slug == music::tag::LOCAL => Shape::Catalog,
+            Shelf::Local => Shape::Catalog(Catalog::Fixed),
+            Shelf::Of(slug) if slug == music::tag::LOCAL => Shape::Catalog(Catalog::Fixed),
             Shelf::Streaming => self.shape(),
             Shelf::Of(slug) => self.shape_for(slug),
         }
@@ -310,6 +334,15 @@ impl Session {
         self.providers
             .iter()
             .any(|provider| provider.protected() && provider.stored())
+    }
+
+    /// Whether a browser window matters right now: the current provider signs in through one,
+    /// or no account is stored yet and the sign-in screen offers every provider.
+    pub fn wants_browser(&self) -> bool {
+        match self.active {
+            Some(index) => self.providers[index].web_sign_in().is_some(),
+            None => !self.providers.iter().any(|provider| provider.stored()),
+        }
     }
 
     pub fn forget(&mut self, slug: &str, cx: &mut Context<Self>) {
@@ -406,6 +439,22 @@ impl Session {
         self.providers.get(self.active?)?.reach()
     }
 
+    /// What `link` points at, with the slug of the provider whose link it is. Every provider is
+    /// asked, not only the current one.
+    pub fn read_link(&self, link: &str) -> Option<(&'static str, Linked)> {
+        self.providers
+            .iter()
+            .find_map(|provider| Some((provider.slug(), provider.link(link)?)))
+    }
+
+    /// The name of the provider `slug` and whether it has an account stored.
+    pub fn account(&self, slug: &str) -> Option<(&'static str, bool)> {
+        self.providers
+            .iter()
+            .find(|provider| provider.slug() == slug)
+            .map(|provider| (provider.name(), provider.stored()))
+    }
+
     pub fn local_slug(&self) -> &'static str {
         self.local_provider.slug()
     }
@@ -426,6 +475,16 @@ impl Session {
             .iter()
             .position(|provider| provider.slug() == slug)
             .unwrap_or(usize::MAX)
+    }
+
+    /// The provider an id belongs to, whichever shelf it sits on.
+    pub fn provider_of_id(&self, id: &str) -> Option<&dyn MusicProvider> {
+        match music::is_local_id(id) {
+            true => Some(self.local_provider.as_ref()),
+            false => self
+                .provider_for(self.slug_for(id)?)
+                .map(|provider| provider.as_ref()),
+        }
     }
 
     pub fn authenticated_for(&self, slug: &str) -> bool {
@@ -482,6 +541,9 @@ impl Session {
         )
     }
 
+    /// Opens every stored sign-in: the active provider's in the foreground and the others beside
+    /// it. In offline mode no account is reached: each stored one carries on offline, playing its
+    /// downloads, until going online tries them again.
     pub fn restore(&mut self, cx: &mut Context<Self>) {
         if self.is_pending() {
             return;
@@ -496,6 +558,10 @@ impl Session {
             cx.notify();
             return;
         };
+        if self.settings.read(cx).offline_mode() && self.stored_active() {
+            log::info!("session: offline mode is on, carrying on offline");
+            return self.carry_on_offline(offline_mode(), cx);
+        }
         let others: Vec<usize> = (0..self.providers.len())
             .filter(|index| *index != active && self.providers[*index].stored())
             .collect();
@@ -770,6 +836,33 @@ impl Session {
             .is_some_and(|index| self.providers[index].stored())
     }
 
+    /// Lets go of every live account with a stored sign-in when offline mode turns on, leaving
+    /// the session where a launch in offline mode would put it. A sign-in in progress and a
+    /// guest session, which has nothing stored, are left alone.
+    pub fn go_offline(&mut self, cx: &mut Context<Self>) {
+        let live = matches!(self.state, SessionState::SignedIn | SessionState::Restoring);
+        if !live || !self.stored_active() {
+            return;
+        }
+        log::info!("session: offline mode is on, letting go of the accounts");
+        let stored: Vec<&'static str> = self
+            .providers
+            .iter()
+            .filter(|provider| provider.stored())
+            .map(|provider| provider.slug())
+            .collect();
+        for slug in &stored {
+            self.tasks.remove(slug);
+            self.reconnect.remove(slug);
+            self.reconnecting.remove(slug);
+            self.attempt.remove(slug);
+            self.connected.remove(slug);
+        }
+        self.watch = None;
+        self.carry_on_offline(offline_mode(), cx);
+        cx.emit(SessionEvent::WentOffline);
+    }
+
     /// Tries the stored account again once the network is back, for a run that started without
     /// one. Anything but a run held up by the network is left alone.
     pub fn restore_if_offline(&mut self, cx: &mut Context<Self>) {
@@ -809,6 +902,7 @@ impl Session {
     fn connect(&mut self, slug: &'static str, mut session: ProviderSession) {
         session.profile.id = music::tag::tag(slug, &session.profile.id);
         let client = music::tagged::new(slug, session.api);
+        self.offline.remove(slug);
         self.connected.insert(
             slug,
             Connected {
@@ -835,7 +929,8 @@ impl Session {
         }
         self.active = Some(index);
         self.awaiting = None;
-        self.error = None;
+        // A provider that failed on the way here keeps its error until it signs in again.
+        self.error = self.error.take().filter(|(failed, _)| *failed != index);
         self.settings.update(cx, |settings, cx| {
             settings.set_provider(slug, cx);
         });
@@ -958,6 +1053,25 @@ impl Session {
         cx.emit(SessionEvent::Reconnected(slug));
     }
 
+    /// Keeps the stored account without reaching it, so the app runs on what the library kept
+    /// and on the downloads, which still play through an engine built from the stored sign-in
+    /// alone.
+    fn carry_on_offline(&mut self, failure: Failure, cx: &mut Context<Self>) {
+        // A provider may need the runtime to build its offline engine.
+        let _runtime = self.io.handle().enter();
+        for provider in &self.providers {
+            let slug = provider.slug();
+            if !provider.stored() || self.connected.contains_key(slug) {
+                continue;
+            }
+            if let Some(playback) = provider.offline_playback() {
+                self.offline.insert(slug, playback);
+            }
+        }
+        self.state = SessionState::Offline(failure);
+        cx.notify();
+    }
+
     fn failed(&mut self, error: &Error, cx: &mut Context<Self>) {
         let failure = Failure::new(error);
         Network::failed(&format!("{error:#}"), cx);
@@ -979,9 +1093,7 @@ impl Session {
         }
         if restoring && failure.offline() && self.stored_active() {
             log::warn!("session: the account could not be reached, carrying on offline");
-            self.state = SessionState::Offline(failure);
-            cx.notify();
-            return;
+            return self.carry_on_offline(failure, cx);
         }
         if let Some(slug) = self.provider_slug() {
             self.connected.remove(slug);
@@ -1022,17 +1134,58 @@ impl Session {
         if folders.len() == self.local_folders.len() {
             return;
         }
-        self.set_local_folders(folders, cx);
+        self.set_local_folders(folders, true, cx);
     }
 
+    /// Drops a folder from the local library and offers to put it back.
     pub fn remove_local_folder(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let Some(at) = self
+            .local_folders
+            .iter()
+            .position(|existing| existing == path)
+        else {
+            return;
+        };
         let mut folders = self.local_folders.clone();
-        let before = folders.len();
-        folders.retain(|existing| existing != path);
-        if folders.len() == before {
+        let removed = folders.remove(at);
+        self.set_local_folders(folders, true, cx);
+
+        let session = cx.entity().downgrade();
+        let toast = Toast::new(Outcome::Plain, "toast-folder-removed")
+            .name(folder_name(&removed))
+            .undo(move |cx| {
+                let removed = removed.clone();
+                session
+                    .update(cx, |session, cx| {
+                        session.restore_local_folder(removed, at, cx)
+                    })
+                    .ok();
+            });
+        Toasts::post(toast, cx);
+    }
+
+    /// Puts a folder the user just removed back where it was in the list. A folder gone from
+    /// disk is reported instead, and one that overlaps a folder added since is left alone.
+    fn restore_local_folder(&mut self, path: PathBuf, at: usize, cx: &mut Context<Self>) {
+        if !path.is_dir() {
+            Toasts::about(
+                Outcome::Warning,
+                "toast-folder-missing",
+                folder_name(&path),
+                cx,
+            );
             return;
         }
-        self.set_local_folders(folders, cx);
+        if self
+            .local_folders
+            .iter()
+            .any(|existing| overlaps(existing, &path))
+        {
+            return;
+        }
+        let mut folders = self.local_folders.clone();
+        folders.insert(at.min(folders.len()), path);
+        self.set_local_folders(folders, true, cx);
     }
 
     /// Rescans every configured local folder without changing the list, e.g. after files
@@ -1043,17 +1196,20 @@ impl Session {
         if thorough {
             self.local_provider.forget_scan();
         }
-        self.set_local_folders(self.local_folders.clone(), cx);
+        self.set_local_folders(self.local_folders.clone(), thorough, cx);
     }
 
     /// Points the local library at `folders` and scans them. A scan already under way is
     /// cancelled first: its folders may be the ones just removed, and two scans would only
-    /// fight over the same disk.
-    fn set_local_folders(&mut self, folders: Vec<PathBuf>, cx: &mut Context<Self>) {
+    /// fight over the same disk. An `asked` scan is one the user started, and its end or
+    /// failure is reported in a toast.
+    fn set_local_folders(&mut self, folders: Vec<PathBuf>, asked: bool, cx: &mut Context<Self>) {
         music::progress::cancel();
         let slug = self.local_provider.slug();
+        self.scan_asked |= asked;
         if folders.is_empty() {
             self.scanning = false;
+            self.scan_asked = false;
             self.local_provider.sign_out();
             self.local_folders = Vec::new();
             self.settings.update(cx, |settings, cx| {
@@ -1070,28 +1226,51 @@ impl Session {
         let provider = self.local_provider.clone();
         let chosen = folders.clone();
         let io = self.io.clone();
+        let counting = self.scan_asked;
         self.scanning = true;
         cx.notify();
         self.local_task = Some(cx.spawn(async move |this, cx| {
             let prompt: PromptSink = Arc::new(|_| {});
             let (_tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            let signed_in = join(
-                io.spawn(async move { provider.sign_in(SignIn::Path(folders), prompt, rx).await }),
-            )
+            let signed_in = join(io.spawn(async move {
+                let session = provider.sign_in(SignIn::Path(folders), prompt, rx).await?;
+                let songs = match counting {
+                    true => session
+                        .api
+                        .all_tracks()
+                        .await
+                        .map_or(0, |tracks| tracks.len()),
+                    false => 0,
+                };
+                anyhow::Ok((session, songs))
+            }))
             .await;
 
             this.update(cx, |this, cx| {
                 this.scanning = false;
+                let asked = std::mem::take(&mut this.scan_asked);
                 match signed_in {
-                    Ok(session) => {
+                    Ok((session, songs)) => {
                         this.local_folders = chosen.clone();
                         this.settings
                             .update(cx, |settings, cx| settings.set_local_folders(chosen, cx));
                         this.local_signed_in(session, cx);
                         cx.emit(SessionEvent::LocalChanged);
+                        if asked {
+                            Scan::global(cx).update(cx, |scan, cx| scan.finished(songs, cx));
+                        }
                     }
                     Err(error) => {
                         log::warn!("session: cannot update local music folders: {error:#}");
+                        if asked {
+                            Toasts::with_detail(
+                                Outcome::Failed,
+                                "toast-scan-failed",
+                                None,
+                                format!("{error:#}"),
+                                cx,
+                            );
+                        }
                         cx.notify();
                     }
                 }
@@ -1111,6 +1290,22 @@ impl Session {
         cx.notify();
         cx.emit(SessionEvent::SignedIn(slug));
     }
+}
+
+/// The failure a session kept offline on purpose reports, which reads as a lost network.
+fn offline_mode() -> Failure {
+    Failure {
+        problem: Some(SignInProblem::Network),
+        summary: "offline mode is on".to_owned(),
+        detail: None,
+    }
+}
+
+/// The folder's own name for a toast, or the whole path when it has none, such as `/`.
+fn folder_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Whether `a` and `b` are the same directory, or one contains the other — either way, scanning

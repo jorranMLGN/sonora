@@ -16,7 +16,17 @@
 
 pub const LOCAL: &str = "local";
 
-pub const SLUGS: [&str; 5] = ["spotify", "youtube", "youtube-video", "soundcloud", "local"];
+pub const SLUGS: [&str; 9] = [
+    "spotify",
+    "youtube",
+    "youtube-video",
+    "soundcloud",
+    "apple",
+    "deezer",
+    "subsonic",
+    "tidal",
+    "local",
+];
 
 const LOCAL_HEADS: [&str; 4] = ["local", "local-album", "local-artist", "local-playlist"];
 

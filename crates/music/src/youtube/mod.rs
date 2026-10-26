@@ -3,6 +3,7 @@ mod auth;
 mod browser;
 mod client;
 mod genres;
+mod links;
 mod lyrics;
 pub(crate) mod pages;
 pub(crate) mod playback;
@@ -26,8 +27,8 @@ use crate::youtube::playback::Factory;
 use crate::youtube::site::MUSIC;
 
 use crate::{
-    Capabilities, InputSource, MusicProvider, PromptSink, ProviderSession, Shape, SignIn,
-    SignInPrompt, UserProfile, WebSignIn, credentials,
+    Capabilities, InputSource, MusicProvider, PlaybackFactory, PromptSink, ProviderSession, Shape,
+    SignIn, SignInPrompt, UserProfile, WebSignIn, credentials,
 };
 pub use client::YouTubeClient;
 pub use lyrics::YouTubeLyrics;
@@ -55,14 +56,34 @@ enum Saved {
     Guest,
 }
 
+/// How long a track waits on a minting page that is already attested. Minting there takes
+/// milliseconds and the rest is the app's polling, so a track usually starts on a real token.
+const WARM_WAIT: Duration = Duration::from_secs(2);
+/// How often a track waiting on a warm page looks for its token.
+const WARM_POLL: Duration = Duration::from_millis(50);
+
 /// Asks the app for the proof-of-origin token the client needs. Every answer comes out of
-/// `music::potoken`, so the client never waits on the browser window that fills it.
+/// `music::potoken`. The client waits up to [`WARM_WAIT`] when the app has an attested page open,
+/// and never on a page that still has to load.
 struct Minter;
 
 #[async_trait]
 impl ytmusic::Minter for Minter {
     async fn mint(&self, binding: &str) -> Option<String> {
-        crate::potoken::token(binding)
+        if let Some(token) = crate::potoken::token(binding) {
+            return Some(token);
+        }
+        if !crate::potoken::warm() {
+            return None;
+        }
+        let deadline = std::time::Instant::now() + WARM_WAIT;
+        while std::time::Instant::now() < deadline {
+            tokio::time::sleep(WARM_POLL).await;
+            if let Some(token) = crate::potoken::minted(binding) {
+                return Some(token);
+            }
+        }
+        None
     }
 }
 
@@ -78,22 +99,27 @@ pub struct YouTubeProvider {
 
 impl YouTubeProvider {
     pub fn new() -> Self {
-        Self::for_site(&MUSIC, credentials::dir(MUSIC.slug))
+        Self::for_site(
+            &MUSIC,
+            credentials::dir(MUSIC.slug),
+            credentials::root().join(MUSIC.slug),
+        )
     }
 
     /// A provider that keeps its credentials, cookies and player caches in `cache`, for a
     /// platform whose cache directory is handed in rather than found, such as an iOS app's
     /// sandbox.
     pub fn at(cache: PathBuf) -> Self {
-        Self::for_site(&MUSIC, cache)
+        Self::for_site(&MUSIC, cache.clone(), cache)
     }
 
-    /// A provider for `site` that keeps its credentials, cookies and player caches in `cache`.
-    pub(crate) fn for_site(site: &'static Site, cache: PathBuf) -> Self {
+    /// A provider for `site` that keeps its sign-in and cookies in `account` and its player
+    /// caches in `cache`, which may be emptied at any time.
+    pub(crate) fn for_site(site: &'static Site, account: PathBuf, cache: PathBuf) -> Self {
         Self {
             site,
-            credentials: cache.join(credentials::FILE),
-            cookies: cache.join("cookies.json"),
+            credentials: account.join(credentials::FILE),
+            cookies: account.join("cookies.json"),
             resolved: cache.join("resolved.json"),
             player: cache.join("player.json"),
         }
@@ -150,6 +176,7 @@ impl YouTubeProvider {
             authenticated: true,
             capabilities: Capabilities {
                 playcounts: false,
+                qualities: playback::QUALITIES,
                 ..Capabilities::ALL
             },
             expired: false,
@@ -175,6 +202,7 @@ impl YouTubeProvider {
             authenticated: false,
             capabilities: Capabilities {
                 playcounts: false,
+                qualities: playback::QUALITIES,
                 ..Capabilities::ALL
             },
             expired: false,
@@ -382,6 +410,10 @@ impl MusicProvider for YouTubeProvider {
         self.site.slug
     }
 
+    fn link(&self, link: &str) -> Option<crate::link::Linked> {
+        links::read(link)
+    }
+
     fn reach(&self) -> Option<String> {
         Some(self.site.reach.to_owned())
     }
@@ -406,6 +438,18 @@ impl MusicProvider for YouTubeProvider {
 
     fn stored_guest(&self) -> bool {
         matches!(self.saved(), Some(Saved::Guest))
+    }
+
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        let api = match self.saved()? {
+            Saved::Cookies {
+                cookies,
+                authuser,
+                page_id,
+            } => self.cookie_client(&cookies, authuser, page_id.as_deref()),
+            Saved::Guest => self.guest_client(),
+        };
+        Some(Arc::new(Factory::new(api, self.site.slug)))
     }
 
     async fn restore(&self) -> Result<Option<ProviderSession>> {
@@ -501,8 +545,8 @@ mod tests {
     #[test]
     fn each_site_keeps_its_own_credentials() {
         let tmp = tempfile::tempdir().unwrap();
-        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"));
-        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"));
+        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"), tmp.path().join("a"));
+        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"), tmp.path().join("b"));
         std::fs::create_dir_all(tmp.path().join("a")).unwrap();
         std::fs::create_dir_all(tmp.path().join("b")).unwrap();
 
@@ -519,8 +563,8 @@ mod tests {
     #[test]
     fn each_site_plays_under_its_own_slug() {
         let tmp = tempfile::tempdir().unwrap();
-        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"));
-        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"));
+        let music = YouTubeProvider::for_site(&MUSIC, tmp.path().join("a"), tmp.path().join("a"));
+        let video = YouTubeProvider::for_site(&VIDEO, tmp.path().join("b"), tmp.path().join("b"));
 
         assert_eq!(music.factory(music.guest_client()).slug(), "youtube");
         assert_eq!(video.factory(video.guest_client()).slug(), "youtube-video");

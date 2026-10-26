@@ -31,6 +31,7 @@ impl Cover {
         cx.observe(&playback, |this, _, cx| this.follow(cx))
             .detach();
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedOut(slug) => this.forget(slug, cx),
             SessionEvent::SignedIn(_)
             | SessionEvent::Reconnected(_)
@@ -82,8 +83,8 @@ impl Cover {
         let album = self
             .playback
             .read(cx)
-            .track()
-            .and_then(|track| track.album_id.clone());
+            .shown_track(cx)
+            .and_then(|track| track.album_id);
         if album == self.album {
             return;
         }

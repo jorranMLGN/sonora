@@ -2,35 +2,28 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use ui::{
-    ActiveTheme as _, Button, Card, Deck, DraggedPin, Edge, MenuItem, Panel, Picker, Pin,
-    Pinnable as _, Popup, SNUG, Scroller, Shield, Side, Spot, Tabs, Text, Vacancy, drop_gap,
-    drop_marker,
+    ActiveTheme as _, Card, Deck, DraggedPin, Edge, MenuItem, Panel, Picker, Pin, Pinnable as _,
+    Popup, SNUG, Scroller, Shield, Side, Spot, Tabs, Text, Vacancy, drop_gap, drop_marker,
 };
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, DragMoveEvent, ElementId, Entity, Hsla, MouseButton, MouseDownEvent,
-    Pixels, Point, Render, ScrollHandle, SharedString, svg,
+    AnyElement, App, Context, DragMoveEvent, ElementId, Entity, MouseButton, MouseDownEvent,
+    Pixels, Point, Render, ScrollHandle, svg,
 };
 use gpui::{Window, div, px};
 use router::{
-    Destination, LOCAL, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsTab, navigate,
+    Destination, LOCAL, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsPage, navigate,
+    open_settings,
 };
 use state::{AppSettings, Library, Origin, PinSort, Pins, Playback, Session, Shelf, Sonora};
 
 use crate::shared::menus::{ItemMenu, item_menu};
+use crate::shared::nav::nav_row;
 use crate::shared::{nav_label, provider_logo};
 
 /// The one drag list the pinned section keeps, so a pin dropped anywhere in it lands in order.
 const PINS: &str = "sidebar-pins";
-
-const SETTINGS_TABS: [(&str, SettingsTab); 5] = [
-    ("settings-tab-general", SettingsTab::General),
-    ("settings-tab-appearance", SettingsTab::Appearance),
-    ("settings-tab-playback", SettingsTab::Playback),
-    ("settings-tab-privacy", SettingsTab::Privacy),
-    ("settings-tab-about", SettingsTab::About),
-];
 
 const MIN_WIDTH: Pixels = px(160.);
 const MAX_WIDTH: Pixels = px(400.);
@@ -46,14 +39,12 @@ const ROW_GAP: Pixels = px(4.);
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Group {
     Provider(&'static str),
-    Settings,
 }
 
 impl Group {
     fn of(destination: &Destination) -> Option<Self> {
         match destination {
             Destination::Library(slug, _) => Some(Self::Provider(slug)),
-            Destination::Settings(_) => Some(Self::Settings),
             _ => None,
         }
     }
@@ -62,7 +53,6 @@ impl Group {
     fn id(self) -> &'static str {
         match self {
             Self::Provider(slug) => slug,
-            Self::Settings => "settings",
         }
     }
 }
@@ -94,7 +84,7 @@ fn nav(session: &Session) -> Vec<(Option<NavEntry>, &'static str, Destination)> 
         (
             None,
             "icons/settings.svg",
-            Destination::Settings(SettingsTab::General),
+            Destination::Settings(SettingsPage::General),
         ),
     ]);
     nav
@@ -139,10 +129,12 @@ impl SidebarLeft {
         cx.observe(&library, |_, _, cx| cx.notify()).detach();
         cx.observe(&pins, |_, _, cx| cx.notify()).detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
+        let chrome = super::Chrome::entity(cx);
+        cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| ui::Scrollbar::inset().watching(me));
         let scrollbar = cx.new(|_| ui::Scrollbar::new(ScrollHandle::new()).watching(me));
-        let width = px(settings.read(cx).sidebar_width()).clamp(MIN_WIDTH, MAX_WIDTH);
+        let width = sidebar_width(settings.read(cx));
         let open = settings.read(cx).sidebar_open();
         let pinned_open = settings.read(cx).sidebar_pinned_open();
         let trail = router::trail(cx);
@@ -579,7 +571,10 @@ impl SidebarLeft {
                 })),
             None => row
                 .when(active, |button| button.bg(accent))
-                .on_click(move |_, _, cx| navigate(destination.clone(), cx)),
+                .on_click(move |_, _, cx| match destination.in_settings() {
+                    true => open_settings(cx),
+                    false => navigate(destination.clone(), cx),
+                }),
         }
         .into_any_element()
     }
@@ -610,11 +605,6 @@ impl SidebarLeft {
                     Destination::Library(slug, tab_id),
                 )
             })),
-            Group::Settings => Tabs::new().items(
-                SETTINGS_TABS
-                    .into_iter()
-                    .map(|(name, tab_id)| tab(name.into(), name, Destination::Settings(tab_id))),
-            ),
         }
         .into_any_element()
     }
@@ -650,6 +640,7 @@ impl Render for SidebarLeft {
             .limits(MIN_WIDTH, MAX_WIDTH)
             .reach(self.ceiling(window, cx))
             .clears_scrollbar()
+            .grip_above(super::Chrome::bottom(cx))
             .on_resize(cx.listener(|this, width: &Pixels, _, cx| {
                 this.width = *width;
                 this.persist(cx);
@@ -689,6 +680,7 @@ impl Render for SidebarLeft {
                     .min_h_0()
                     .child(
                         Scroller::new("sidebar-left-rows", &self.scrollbar)
+                            .bottom_inset(super::Chrome::bottom(cx))
                             .size_full()
                             .child(
                                 div()
@@ -703,7 +695,15 @@ impl Render for SidebarLeft {
                                     .children(rows),
                             ),
                     )
-                    .children(ui::return_top("sidebar-return-top", &self.scrollbar, cx)),
+                    .children(
+                        ui::return_top("sidebar-return-top", &self.scrollbar, cx).map(|perch| {
+                            match super::Chrome::bottom(cx) > Pixels::ZERO {
+                                true => perch
+                                    .bottom(super::Chrome::bottom(cx) + theme.metrics.pad * 1.5),
+                                false => perch,
+                            }
+                        }),
+                    ),
             )
             .children(self.menu(cx));
 
@@ -731,6 +731,11 @@ impl Render for SidebarLeft {
                 .into_any_element(),
         }
     }
+}
+
+/// How wide the left sidebar stands from its saved width, which the settings rail matches.
+pub(crate) fn sidebar_width(settings: &AppSettings) -> Pixels {
+    px(settings.sidebar_width()).clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
 /// The kind of an entry, behind a dimmed pin when it is one of the pinned ones.
@@ -801,20 +806,9 @@ fn chevron(open: bool) -> &'static str {
     }
 }
 
-fn nav_row(id: impl Into<ElementId>, label: SharedString, tint: Hsla, accent: Hsla) -> Button {
-    Button::new(id)
-        .ghost()
-        .label(label)
-        .tint(tint)
-        .gap_2p5()
-        .justify_start()
-        .hover(move |style| style.bg(accent))
-        .active(move |style| style.bg(accent))
-}
-
 #[cfg(test)]
 mod tests {
-    use router::{Destination, LibraryTab, SettingsTab};
+    use router::{Destination, LibraryTab, SettingsPage};
 
     use super::{Group, expanded};
 
@@ -828,10 +822,7 @@ mod tests {
             expanded(&Destination::Library(router::LOCAL, LibraryTab::Albums)),
             Some(Group::Provider(router::LOCAL))
         ));
-        assert!(matches!(
-            expanded(&Destination::Settings(SettingsTab::General)),
-            Some(Group::Settings)
-        ));
+        assert!(expanded(&Destination::Settings(SettingsPage::General)).is_none());
     }
 
     #[test]

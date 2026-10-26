@@ -102,6 +102,7 @@ impl Discover {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedIn(_) => this.signed_in(cx),
             SessionEvent::SignedOut(slug) => this.signed_out(slug, cx),
             SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
@@ -323,7 +324,7 @@ impl Discover {
         }
         let mut artists: Vec<_> = slugs
             .iter()
-            .filter(|slug| library.shape(Shelf::Of(slug)) != Shape::Catalog)
+            .filter(|slug| !matches!(library.shape(Shelf::Of(slug)), Shape::Catalog(_)))
             .filter_map(|slug| Some((session.client_for_slug(slug)?, *slug)))
             .flat_map(|(client, slug)| {
                 library
@@ -646,7 +647,7 @@ fn day_of(date: &str) -> Option<i64> {
 /// A cached list, or none when it is missing or unreadable.
 fn stored<T: for<'de> Deserialize<'de>>(cache: &Cache, key: &str) -> Option<Stored<T>> {
     let text = cache
-        .read(key)
+        .read(key, str::to_owned)
         .inspect_err(|error| log::warn!("discover: cannot read {key}: {error:#}"))
         .ok()??;
     serde_json::from_str(&text)

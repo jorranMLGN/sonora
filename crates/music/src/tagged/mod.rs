@@ -8,19 +8,23 @@
 //! error, with nothing to point at. Every method is forwarded explicitly for
 //! that reason; none may fall through to a default.
 
+mod connect;
 mod models;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::connect::Connect;
 use crate::tag;
 use crate::{
-    Album, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Genre, GenreDetail, GenreSection,
-    HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, SavedArtist, Track, TrackTags,
-    UserDetail, UserProfile,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Feed, Genre,
+    GenreDetail, GenreSection, HomeFeed, MediaKind, MusicApi, Page, Pages, PinOutcome, PinTarget,
+    PinTargetKind, Playlist, PlaylistDetail, Report, SavedArtist, Track, TrackTags, UserDetail,
+    UserProfile,
 };
 
 /// A `MusicApi` that speaks tagged ids to the app and bare ids to the
@@ -32,10 +36,20 @@ use crate::{
 pub struct Tagged {
     slug: &'static str,
     inner: Arc<dyn MusicApi>,
+    /// The provider's device network and its tagged wrapping, so asking again for the same
+    /// network answers the same wrapping, as a caller comparing the two expects.
+    connect: Mutex<Option<Wrapped>>,
 }
 
+/// A provider's device network and the tagged wrapping made for it.
+type Wrapped = (Arc<dyn Connect>, Arc<dyn Connect>);
+
 pub fn new(slug: &'static str, inner: Arc<dyn MusicApi>) -> Arc<dyn MusicApi> {
-    Arc::new(Tagged { slug, inner })
+    Arc::new(Tagged {
+        slug,
+        inner,
+        connect: Mutex::new(None),
+    })
 }
 
 #[async_trait]
@@ -341,6 +355,207 @@ impl MusicApi for Tagged {
         models::genre_detail(self.slug, &mut value);
         Ok(value)
     }
+
+    fn connect(&self) -> Option<Arc<dyn Connect>> {
+        let inner = self.inner.connect()?;
+        let mut held = self.connect.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((known, wrapped)) = held.as_ref()
+            && Arc::ptr_eq(known, &inner)
+        {
+            return Some(wrapped.clone());
+        }
+        let wrapped: Arc<dyn Connect> = Arc::new(connect::TaggedConnect {
+            slug: self.slug,
+            inner: inner.clone(),
+        });
+        *held = Some((inner, wrapped.clone()));
+        Some(wrapped)
+    }
+
+    async fn saved_tracks_paged(&self) -> Result<Pages<Track>> {
+        Ok(retag(
+            self.slug,
+            self.inner.saved_tracks_paged().await?,
+            models::track,
+        ))
+    }
+
+    async fn all_tracks_paged(&self) -> Result<Pages<Track>> {
+        Ok(retag(
+            self.slug,
+            self.inner.all_tracks_paged().await?,
+            models::track,
+        ))
+    }
+
+    async fn delete_track_file(&self, track_id: &str) -> Result<()> {
+        self.inner.delete_track_file(tag::untag(track_id)).await
+    }
+
+    async fn report(&self, track_id: &str, report: Report, position: Duration) -> Result<()> {
+        self.inner
+            .report(tag::untag(track_id), report, position)
+            .await
+    }
+
+    async fn played(&self, track_id: &str, at: SystemTime) -> Result<()> {
+        self.inner.played(tag::untag(track_id), at).await
+    }
+
+    async fn report_play(&self, track_id: &str) -> Result<()> {
+        self.inner.report_play(tag::untag(track_id)).await
+    }
+
+    async fn recently_played(&self) -> Result<Vec<Track>> {
+        let mut values = self.inner.recently_played().await?;
+        for value in &mut values {
+            models::track(self.slug, value);
+        }
+        Ok(values)
+    }
+
+    /// Pins are named by the provider's own uris, which carry no tag.
+    async fn set_pinned(&self, uri: &str, pinned: bool) -> Result<PinOutcome> {
+        self.inner.set_pinned(uri, pinned).await
+    }
+
+    async fn pin_targets(&self) -> Result<Option<Vec<PinTarget>>> {
+        self.inner.pin_targets().await
+    }
+
+    fn pin_uri(&self, kind: PinTargetKind, id: &str) -> Option<String> {
+        self.inner.pin_uri(kind, tag::untag(id))
+    }
+
+    async fn set_in_library(&self, kind: MediaKind, id: &str, present: bool) -> Result<()> {
+        self.inner
+            .set_in_library(kind, tag::untag(id), present)
+            .await
+    }
+
+    async fn add_tracks_to_playlist(&self, playlist_id: &str, track_ids: &[String]) -> Result<()> {
+        let bare: Vec<String> = track_ids
+            .iter()
+            .map(|id| tag::untag(id).to_owned())
+            .collect();
+        self.inner
+            .add_tracks_to_playlist(tag::untag(playlist_id), &bare)
+            .await
+    }
+
+    async fn all_albums(&self) -> Result<Vec<Album>> {
+        let mut values = self.inner.all_albums().await?;
+        for value in &mut values {
+            models::album(self.slug, value);
+        }
+        Ok(values)
+    }
+
+    async fn saved_albums_paged(&self) -> Result<Pages<Album>> {
+        Ok(retag(
+            self.slug,
+            self.inner.saved_albums_paged().await?,
+            models::album,
+        ))
+    }
+
+    async fn all_albums_paged(&self) -> Result<Pages<Album>> {
+        Ok(retag(
+            self.slug,
+            self.inner.all_albums_paged().await?,
+            models::album,
+        ))
+    }
+
+    async fn all_artists(&self) -> Result<Vec<SavedArtist>> {
+        let mut values = self.inner.all_artists().await?;
+        for value in &mut values {
+            models::saved_artist(self.slug, value);
+        }
+        Ok(values)
+    }
+
+    async fn saved_artists_paged(&self) -> Result<Pages<SavedArtist>> {
+        let pages = self.inner.saved_artists_paged().await?;
+        Ok(retag(self.slug, pages, models::saved_artist))
+    }
+
+    async fn all_artists_paged(&self) -> Result<Pages<SavedArtist>> {
+        let pages = self.inner.all_artists_paged().await?;
+        Ok(retag(self.slug, pages, models::saved_artist))
+    }
+
+    async fn album_catalogue(
+        &self,
+        album_id: &str,
+        artist_id: Option<&str>,
+    ) -> Result<AlbumCatalogue> {
+        let mut value = self
+            .inner
+            .album_catalogue(tag::untag(album_id), artist_id.map(tag::untag))
+            .await?;
+        for album in &mut value.also_like {
+            models::album(self.slug, album);
+        }
+        for artist in &mut value.similar {
+            models::saved_artist(self.slug, artist);
+        }
+        Ok(value)
+    }
+
+    /// A continuation token is the provider's own and is passed on as it came.
+    async fn playlist_continuation(
+        &self,
+        continuation: &str,
+    ) -> Result<(Vec<Track>, Option<String>)> {
+        let (mut values, next) = self.inner.playlist_continuation(continuation).await?;
+        for value in &mut values {
+            models::track(self.slug, value);
+        }
+        Ok((values, next))
+    }
+
+    async fn home_paged(&self) -> Result<Feed> {
+        let mut bare = self.inner.home_paged().await?;
+        let (sender, feed) = tokio::sync::mpsc::channel(1);
+        let slug = self.slug;
+        tokio::spawn(async move {
+            while let Some(lot) = bare.recv().await {
+                let lot = lot.map(|mut lot| {
+                    models::home_feed(slug, &mut lot);
+                    lot
+                });
+                if sender.send(lot).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(feed)
+    }
+}
+
+/// `pages` with `walk` run over every item, page by page as they arrive. Dropping the answer
+/// drops `pages`, which stops the provider fetching.
+fn retag<T: Send + 'static>(
+    slug: &'static str,
+    mut pages: Pages<T>,
+    walk: fn(&str, &mut T),
+) -> Pages<T> {
+    let (sender, tagged) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        while let Some(page) = pages.recv().await {
+            let page = page.map(|Page { total, mut items }| {
+                for item in &mut items {
+                    walk(slug, item);
+                }
+                Page { total, items }
+            });
+            if sender.send(page).await.is_err() {
+                return;
+            }
+        }
+    });
+    tagged
 }
 
 #[cfg(test)]

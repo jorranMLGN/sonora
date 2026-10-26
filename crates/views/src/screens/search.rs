@@ -735,6 +735,7 @@ impl SearchView {
                 t!("trouble-not-loaded"),
                 reason.as_deref(),
                 move |_, _, cx| retry(cx),
+                cx,
             )
             .flex_1()
             .min_h_0()
@@ -787,6 +788,7 @@ impl SearchView {
             .child(div().px(gutter).child(eyebrow(t!("search-browse"), cx)))
             .child(
                 Scroller::new("search-browse", &self.browsing)
+                    .bottom_inset(crate::chrome::Chrome::bottom(cx))
                     .px(gutter)
                     .pb(pad)
                     .child(plates),
@@ -1142,6 +1144,7 @@ impl SearchView {
             .min_h_0()
             .child(
                 Scroller::new(id.clone(), bar)
+                    .bottom_inset(crate::chrome::Chrome::bottom(cx))
                     .px(gutter)
                     .pb(theme.metrics.inset)
                     .child(div().flex().flex_col().gap_1().children(lead).child(deck)),

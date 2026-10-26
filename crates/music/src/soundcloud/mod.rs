@@ -43,13 +43,15 @@ pub struct SoundCloudProvider {
 }
 
 impl SoundCloudProvider {
+    /// Keeps the token with the other sign-ins and the client id, which can be read again, in
+    /// the cache.
     pub fn new() -> Self {
-        Self::at(
-            dirs::cache_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("sonora")
-                .join("soundcloud"),
-        )
+        Self {
+            client_id: crate::credentials::root()
+                .join("soundcloud")
+                .join("client_id.txt"),
+            token: crate::credentials::dir("soundcloud").join("token.txt"),
+        }
     }
 
     /// A provider that keeps its client id and token in `cache`, for a platform whose cache
@@ -83,10 +85,8 @@ impl SoundCloudProvider {
     }
 
     fn store_token(&self, token: &str) -> Result<()> {
-        if let Some(parent) = self.token.parent() {
-            std::fs::create_dir_all(parent).context("cannot create soundcloud cache dir")?;
-        }
-        std::fs::write(&self.token, token).context("cannot store the soundcloud token")
+        crate::credentials::write(&self.token, token.as_bytes())
+            .context("cannot store the soundcloud token")
     }
 
     /// `Http` itself refreshes `client_id` once and retries once on an

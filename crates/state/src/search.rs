@@ -304,6 +304,7 @@ impl Search {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => {
                 if let SessionEvent::SignedOut(slug) = event {
                     this.lens = std::mem::take(&mut this.lens).forget(slug);

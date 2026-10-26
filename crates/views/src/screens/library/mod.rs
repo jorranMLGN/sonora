@@ -19,8 +19,8 @@ use i18n::t;
 use music::{Shape, Track};
 use router::{Destination, LibraryTab, navigate};
 use state::{
-    Addition, AppSettings, Library, LibraryPart, LibraryState, Origin, Playback, Scan, Shelf,
-    Sonora,
+    Addition, AppSettings, DownloadsChanged, Library, LibraryPart, LibraryState, Network, Origin,
+    Playback, Scan, Shelf, Sonora,
 };
 use ui::{
     ActiveTheme as _, Button, Card, Deck, FilterChange, LEADING, Mode, Pinnable, Popovers, Popup,
@@ -127,9 +127,9 @@ impl Section {
             (false, Shape::Saved, Section::Songs) => "library-no-songs",
             (false, Shape::Saved, Section::Albums) => "library-no-albums",
             (false, Shape::Saved, Section::Artists) => "library-no-artists",
-            (false, Shape::Catalog, Section::Songs) => "library-no-catalog-songs",
-            (false, Shape::Catalog, Section::Albums) => "library-no-catalog-albums",
-            (false, Shape::Catalog, Section::Artists) => "library-no-catalog-artists",
+            (false, Shape::Catalog(_), Section::Songs) => "library-no-catalog-songs",
+            (false, Shape::Catalog(_), Section::Albums) => "library-no-catalog-albums",
+            (false, Shape::Catalog(_), Section::Artists) => "library-no-catalog-artists",
             (false, _, Section::Playlists) => "library-no-playlists",
         }
     }
@@ -137,7 +137,7 @@ impl Section {
     fn glyph(self, shape: Shape) -> &'static str {
         match (self, shape) {
             (Section::Songs, Shape::Saved) => "icons/heart.svg",
-            (Section::Songs, Shape::Catalog) => "icons/music.svg",
+            (Section::Songs, Shape::Catalog(_)) => "icons/music.svg",
             (Section::Albums, _) => "icons/disc-3.svg",
             (Section::Playlists, _) => "icons/list-music.svg",
             (Section::Artists, _) => "icons/user-round.svg",
@@ -176,8 +176,9 @@ impl Tracks for ShelfTracks {
     }
 }
 
+/// Whether a section is still waiting for rows.
 fn loading(library: &Entity<Library>, shelf: Shelf, section: Section, cx: &App) -> bool {
-    library.read(cx).loading(shelf, section.part())
+    library.read(cx).waiting(shelf, section.part(), cx)
 }
 
 pub struct LibraryView {
@@ -237,6 +238,7 @@ impl LibraryView {
 
         let songs = cx.new(|cx| {
             let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(id));
+            crate::shared::tracks::follow_downloads(cx);
             let from = origin(shelf, slug);
             let source = TrackSource::new(
                 LIBRARY_COLUMNS,
@@ -251,6 +253,7 @@ impl LibraryView {
             .from(move |_| Some(from.clone()))
             .with_liked(library.clone())
             .starrable(shelf)
+            .shelved(shelf)
             .table(cx.weak_entity());
             let mut delegate =
                 TableDelegate::new(source, width, cx).with_sort(TrackField::AddedAt, RECENT, cx);
@@ -303,6 +306,27 @@ impl LibraryView {
         cx.observe(&library, |this, _, cx| {
             this.rebuild(cx);
             this.restore(cx);
+            cx.notify();
+        })
+        .detach();
+        // The Downloaded filter follows downloads as they land, and not each redraw of their
+        // progress, which would drop the open menu and the selection every time.
+        let downloads = Sonora::global(cx).downloads.clone();
+        cx.subscribe(&downloads, |this, _, _: &DownloadsChanged, cx| {
+            let kept = Network::downloads_only(this.shelf, cx);
+            for table in this.tables() {
+                if kept || table.narrowed(cx) {
+                    table.rebuild(cx);
+                }
+            }
+            this.cards_dirty = true;
+            cx.notify();
+        })
+        .detach();
+
+        // Offline mode keeps the shelf to its downloads, so turning it on or off filters again.
+        cx.observe(&Network::global(cx), |this, _, cx| {
+            this.rebuild(cx);
             cx.notify();
         })
         .detach();
@@ -522,12 +546,24 @@ impl LibraryView {
         if loading(&self.library, self.shelf, self.section, cx) {
             return None;
         }
+        // Offline mode lists only what was downloaded, and with nothing there it says why.
+        if Network::downloads_only(self.shelf, cx) {
+            let table = self.table(self.section);
+            return match (table.row_count(cx), table.filtering(cx)) {
+                (0, false) => Some(trouble::offline()),
+                (0, true) => Some(Vacancy::new(t!("library-no-matches"))),
+                _ => None,
+            };
+        }
+        if loading(&self.library, self.shelf, self.section, cx) {
+            return None;
+        }
         let table = self.table(self.section);
         let library = self.library.read(cx);
         match library.state(self.shelf) {
             LibraryState::Loading => return None,
             LibraryState::Failed(reason) => {
-                return Some(self.lost("library-lost", t!("library-not-loaded"), reason));
+                return Some(self.lost("library-lost", t!("library-not-loaded"), reason, cx));
             }
             _ if table.row_count(cx) > 0 => return None,
             _ => {}
@@ -538,9 +574,12 @@ impl LibraryView {
 
         Some(match (table.filtering(cx), problem) {
             (true, _) => Vacancy::new(t!("library-no-matches")),
-            (false, Some(reason)) => {
-                self.lost("library-part-lost", t!("library-part-not-loaded"), reason)
-            }
+            (false, Some(reason)) => self.lost(
+                "library-part-lost",
+                t!("library-part-not-loaded"),
+                reason,
+                cx,
+            ),
             (false, None) => {
                 Vacancy::new(i18n::lookup(self.section.vacancy(self.shelf, shape), None))
                     .icon(self.section.glyph(shape))
@@ -549,13 +588,19 @@ impl LibraryView {
     }
 
     /// The state a shelf that did not load shows, with a button that loads it again.
-    fn lost(&self, id: &'static str, label: SharedString, reason: &str) -> Vacancy {
+    fn lost(&self, id: &'static str, label: SharedString, reason: &str, cx: &App) -> Vacancy {
         let library = self.library.clone();
         let shelf = self.shelf;
 
-        trouble::lost(id, label, Some(reason), move |_, _, cx| {
-            library.update(cx, |library, cx| library.refresh(shelf, cx));
-        })
+        trouble::lost(
+            id,
+            label,
+            Some(reason),
+            move |_, _, cx| {
+                library.update(cx, |library, cx| library.refresh(shelf, cx));
+            },
+            cx,
+        )
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -609,8 +654,8 @@ impl LibraryView {
             strip = strip.text(runtime(duration));
         }
         let (title, icon, eyebrow) = match (self.shape(cx), self.shelf.local()) {
-            (Shape::Catalog, true) => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-local")),
-            (Shape::Catalog, false) => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-library")),
+            (Shape::Catalog(_), true) => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-local")),
+            (Shape::Catalog(_), false) => (t!("nav-songs"), "icons/disc-3.svg", t!("nav-library")),
             (Shape::Saved, _) => (
                 t!("library-liked-songs"),
                 "icons/heart-filled.svg",
@@ -778,9 +823,7 @@ impl LibraryView {
             Kind::Playlists(ids.len()),
             move |cx| {
                 library.update(cx, |library, cx| {
-                    for id in ids {
-                        library.remove_playlist_from_library(id, cx);
-                    }
+                    library.remove_playlists_from_library(ids, cx)
                 });
                 table.update(cx, |table, cx| {
                     table.delegate_mut().clear_selection();
@@ -808,6 +851,47 @@ impl LibraryView {
         for table in self.tables() {
             table.rebuild(cx);
         }
+    }
+
+    /// Whether the shown section is still loading its first rows, the one time the page draws
+    /// skeletons in place of its cards.
+    fn waiting(&self, cx: &App) -> bool {
+        loading(&self.library, self.shelf, self.section, cx)
+            && self.table(self.section).row_count(cx) == 0
+    }
+
+    /// Skeleton cards laid out like the deck that will replace them, enough rows to fill the
+    /// window. Artists get round ones, like their cards.
+    fn pending_cards(&self, window: &Window, cx: &App) -> AnyElement {
+        let inset = cx.theme().metrics.inset;
+        let room = cells::content_width(window, page::reserved(inset), cx);
+        let layout = CardGrid::layout(room);
+        let gap = deck_gap(window);
+        let tile = Card::tile_height(layout.card, window, cx);
+        let rows = (window.viewport_size().height / (tile + gap))
+            .ceil()
+            .max(1.) as usize;
+        let circle = self.section == Section::Artists;
+
+        Scroller::new("library-cards", &self.card_scrollbar)
+            .bottom_inset(crate::chrome::Chrome::bottom(cx))
+            .py(inset)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(inset)
+                    .gap(gap)
+                    .children((0..rows).map(|row| {
+                        CardGrid::new(room).children((0..layout.columns).map(move |column| {
+                            Card::skeleton(("library-pending", row * layout.columns + column))
+                                .tile(layout.card)
+                                .when(circle, Card::circle)
+                                .into_any_element()
+                        }))
+                    })),
+            )
+            .into_any_element()
     }
 
     fn cards(&mut self, window: &Window, cx: &App) -> AnyElement {
@@ -873,6 +957,7 @@ impl LibraryView {
         let view = self.me.clone();
 
         Scroller::new("library-cards", &self.card_scrollbar)
+            .bottom_inset(crate::chrome::Chrome::bottom(cx))
             .py(inset)
             .child(
                 Deck::new("library-deck")
@@ -1090,6 +1175,7 @@ impl Render for LibraryView {
                 .into_any_element(),
             (section, Mode::List) if section.listing() => {
                 Scroller::new("library-page", &self.scrollbar)
+                    .bottom_inset(crate::chrome::Chrome::bottom(cx))
                     .pt(inset)
                     .pb(inset)
                     .child(div().px(inset).child(self.header(cx)))
@@ -1098,10 +1184,12 @@ impl Render for LibraryView {
                     .into_any_element()
             }
             (_, Mode::List) => Scroller::new("library-page", &self.scrollbar)
+                .bottom_inset(crate::chrome::Chrome::bottom(cx))
                 .pb(inset)
                 .child(self.table(self.section).element())
                 .when_some(note, |this, note| this.child(note))
                 .into_any_element(),
+            (_, Mode::Grid) if note.is_none() && self.waiting(cx) => self.pending_cards(window, cx),
             (_, Mode::Grid) => match note {
                 Some(note) => note.size_full().into_any_element(),
                 None => self.cards(window, cx),

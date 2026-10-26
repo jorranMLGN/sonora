@@ -89,6 +89,7 @@ impl Usage {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, session, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedIn(slug) => {
                 if session.read(cx).provider_slug() == Some(*slug) {
                     this.connected(cx);

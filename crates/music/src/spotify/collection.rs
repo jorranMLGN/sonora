@@ -12,6 +12,7 @@ use librespot_protocol::metadata::{
 };
 use protobuf::{EnumOrUnknown, Message as _};
 
+use crate::spotify::pace::paced;
 use crate::spotify::{collection2, wire};
 use crate::{ArtistRef, Credit, Track};
 
@@ -102,7 +103,7 @@ pub(crate) async fn batched(
                 .collect(),
             ..Default::default()
         };
-        let response = session.spclient().get_extended_metadata(request).await?;
+        let response = paced(|| session.spclient().get_extended_metadata(request.clone())).await?;
         take(
             response
                 .extended_metadata
@@ -193,9 +194,8 @@ pub(crate) fn artists_from(artists: &[ArtistMessage]) -> (String, Vec<ArtistRef>
 
 pub(crate) fn base62(gid: &[u8]) -> Option<String> {
     librespot_core::SpotifyId::from_raw(gid)
-        .ok()?
-        .to_base62()
         .ok()
+        .map(|id| id.to_base62())
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {

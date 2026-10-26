@@ -75,6 +75,7 @@ impl Home {
         let picks_seed = fastrand::u64(..);
 
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedIn(_) | SessionEvent::SignedOut(_) => this.reload(cx),
             SessionEvent::Reconnected(_) | SessionEvent::LocalChanged => {}
         })
@@ -173,6 +174,15 @@ impl Home {
         self.clear();
         self.feed(cx);
         cx.notify();
+    }
+
+    /// Fetches the feed again from the provider and refreshes the library shelf it mixes Quick
+    /// picks from. The page shows its loading shelves until the new feed lands.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let shelf = self.shelf(cx);
+        self.library
+            .update(cx, |library, cx| library.refresh(shelf, cx));
+        self.reload(cx);
     }
 
     pub fn feed(&mut self, cx: &mut Context<Self>) {
