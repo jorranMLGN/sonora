@@ -277,4 +277,22 @@ mod tests {
         assert!(!keep_frame(Source::Video, true, false, false));
         assert!(!keep_frame(Source::Canvas, true, false, true));
     }
+
+    /// `pull` frees each frame before the next is allocated, yet a frame stuck below a live
+    /// cover takes etagere's coalescing path, whose bucket counter is never reset and overflowed
+    /// a debug build after about 65,000 frames. Four hours at 30 fps must stay up.
+    #[test]
+    fn hours_of_video_frames_do_not_overflow_the_atlas() {
+        use etagere::{BucketedAtlasAllocator, size2};
+
+        let mut atlas = BucketedAtlasAllocator::new(size2(1024, 1024));
+        let mut frame = atlas.allocate(size2(960, 540)).expect("first frame fits");
+        let small = atlas.allocate(size2(64, 64)).expect("small cover fits");
+        let _cover = atlas.allocate(size2(200, 200)).expect("cover fits");
+        atlas.deallocate(small.id);
+        for _ in 0..4 * 3600 * 30 {
+            atlas.deallocate(frame.id);
+            frame = atlas.allocate(size2(960, 540)).expect("next frame fits");
+        }
+    }
 }
