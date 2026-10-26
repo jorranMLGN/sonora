@@ -556,7 +556,7 @@ impl DetailView {
         }
         let kind = detail.header()?.kind;
         let progress = downloads.read(cx).set(kind, &id);
-        if progress.is_none() && !sonora.session.read(cx).capabilities().downloads {
+        if progress.is_none() && !sonora.session.read(cx).capabilities_of_id(&id).downloads {
             return None;
         }
         let album = detail.album().cloned();

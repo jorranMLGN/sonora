@@ -359,10 +359,11 @@ impl ArtistView {
     fn favorite_button(&self, cx: &App) -> Option<Button> {
         let theme = *cx.theme();
         // A provider with no followed artists has nothing for this to toggle.
+        let id = self.detail.read(cx).id()?.to_owned();
         if !Sonora::global(cx)
             .session
             .read(cx)
-            .capabilities()
+            .capabilities_of_id(&id)
             .follow_artists
         {
             return None;

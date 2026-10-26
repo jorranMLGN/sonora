@@ -421,7 +421,7 @@ impl Pins {
     /// one rather than failing on a call it cannot make.
     fn remote(&self, pin: &Pin, cx: &App) -> Option<String> {
         let session = self.session.read(cx);
-        if !session.capabilities().pins || music::is_local_id(&pin.id) {
+        if !session.capabilities_of_id(&pin.id).pins || music::is_local_id(&pin.id) {
             return None;
         }
         let listed = self

@@ -517,6 +517,13 @@ impl Session {
             .map_or(Capabilities::NONE, |slug| self.capabilities_for(slug))
     }
 
+    /// What the provider of `id` can do, whichever provider is in use. Nothing for an id whose
+    /// provider is not signed in.
+    pub fn capabilities_of_id(&self, id: &str) -> Capabilities {
+        self.slug_for(id)
+            .map_or(Capabilities::NONE, |slug| self.capabilities_for(slug))
+    }
+
     /// The same, for one signed-in provider by slug.
     pub fn capabilities_for(&self, slug: &str) -> Capabilities {
         self.connected

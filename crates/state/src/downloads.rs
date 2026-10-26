@@ -169,8 +169,8 @@ struct Running {
     task: Task<()>,
 }
 
-/// The tracks, albums and playlists the listener downloaded from the active provider, and the
-/// line of tracks still to fetch.
+/// The tracks, albums and playlists the listener downloaded from every signed-in provider, and
+/// the line of tracks still to fetch. Each is filed under the provider its id names.
 ///
 /// What is downloaded is listed in `state.sqlite`, while the audio itself lives in the vault
 /// that [`Playback`] shares with its engines. A download goes through the same engine a play
@@ -180,8 +180,8 @@ pub struct Downloads {
     playback: Entity<Playback>,
     store: Store,
     io: Io,
-    /// The provider the lists below belong to.
-    provider: Option<&'static str>,
+    /// Whether the lists below have been read from disk, which a provider signing in starts.
+    listed: bool,
     tracks: HashMap<String, Entry>,
     sets: HashMap<(Collection, String), Set>,
     queue: VecDeque<String>,
@@ -232,30 +232,23 @@ impl Downloads {
         // The queue stops while the network is gone, and picks up again once it is back.
         cx.subscribe(network, |this, _, _: &Reconnected, cx| this.resume(cx))
             .detach();
-        cx.subscribe(&session, |this, session, event, cx| match event {
-            // Downloads follow the provider in use, as the library page they show on does.
+        cx.subscribe(&session, |this, _, event, cx| match event {
             SessionEvent::SignedIn(_) | SessionEvent::Reconnected(_) => {
-                let provider = session.read(cx).provider_slug();
-                this.adopt(provider, cx);
+                this.load(cx);
                 this.failed.clear();
                 this.requeue();
                 this.pump(cx);
             }
-            SessionEvent::SignedOut(slug) => {
-                if this.provider == Some(*slug) {
-                    this.clear(cx);
-                }
-            }
+            // Signing out of a provider stops its downloads; the lists stay for the next sign-in.
+            SessionEvent::SignedOut(slug) => this.let_go(slug, cx),
             SessionEvent::WentOffline => this.halt(cx),
             SessionEvent::LocalChanged => {}
         })
         .detach();
         // A run that starts offline never signs in, but its downloads are still listed.
         cx.observe(&session, |this, session, cx| {
-            let session = session.read(cx);
-            if this.provider.is_none() && matches!(session.state(), SessionState::Offline(_)) {
-                let provider = session.provider_slug();
-                this.adopt(provider, cx);
+            if !this.listed && matches!(session.read(cx).state(), SessionState::Offline(_)) {
+                this.load(cx);
             }
         })
         .detach();
@@ -266,7 +259,7 @@ impl Downloads {
             playback,
             store: Store { database },
             io,
-            provider: None,
+            listed: false,
             tracks: HashMap::new(),
             sets: HashMap::new(),
             queue: VecDeque::new(),
@@ -414,9 +407,9 @@ impl Downloads {
 
     /// Downloads tracks the listener picked one by one.
     pub fn download_tracks(&mut self, tracks: Vec<Track>, cx: &mut Context<Self>) {
-        let Some(provider) = self.provider else {
+        if !self.listed {
             return;
-        };
+        }
         let tracks: Vec<Track> = tracks.into_iter().filter(downloadable).collect();
         for track in &tracks {
             self.enlist(track, true);
@@ -431,7 +424,7 @@ impl Downloads {
         };
         let ids: Vec<String> = tracks.iter().filter_map(|track| track.id.clone()).collect();
         let stop = Stop::Tracks(ids.clone());
-        self.persist(provider, None, tracks);
+        self.persist(None, tracks);
         self.pump(cx);
         if let Some(about) = about {
             self.watch(ids, about, stop, None, cx);
@@ -523,9 +516,9 @@ impl Downloads {
     /// Removes the downloads of tracks, and takes them out of any downloaded album or playlist
     /// that held them. A set left with no tracks stops being downloaded.
     pub fn remove_tracks(&mut self, ids: &[String], cx: &mut Context<Self>) {
-        let Some(provider) = self.provider else {
+        if !self.listed {
             return;
-        };
+        }
         let gone: HashSet<&str> = ids.iter().map(String::as_str).collect();
         let mut kept = Vec::new();
         let mut emptied = Vec::new();
@@ -542,13 +535,13 @@ impl Downloads {
         for key in &emptied {
             self.sets.remove(key);
         }
-        self.drop_tracks(provider, ids, cx);
+        self.drop_tracks(ids, cx);
         self.write(move |store| {
             for (kind, id, set) in &kept {
-                store.keep_set(provider, *kind, id, set)?;
+                store.keep_set(*kind, id, set)?;
             }
             for (kind, id) in &emptied {
-                store.forget_set(provider, *kind, id)?;
+                store.forget_set(*kind, id)?;
             }
             Ok(())
         });
@@ -559,9 +552,9 @@ impl Downloads {
 
     /// Removes a downloaded album or playlist, and every track of it nothing else keeps.
     pub fn remove_set(&mut self, kind: Collection, id: &str, cx: &mut Context<Self>) {
-        let Some(provider) = self.provider else {
+        if !self.listed {
             return;
-        };
+        }
         let key = (kind, id.to_owned());
         let Some(set) = self.sets.remove(&key) else {
             return;
@@ -574,9 +567,9 @@ impl Downloads {
             .filter(|id| !held.contains(id))
             .filter(|id| !self.tracks.get(id).is_some_and(|entry| entry.single))
             .collect();
-        self.drop_tracks(provider, &gone, cx);
+        self.drop_tracks(&gone, cx);
         let id = id.to_owned();
-        self.write(move |store| store.forget_set(provider, kind, &id));
+        self.write(move |store| store.forget_set(kind, &id));
         self.report(cx);
         cx.emit(DownloadsChanged);
         cx.notify();
@@ -612,9 +605,9 @@ impl Downloads {
         toast: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        let Some(provider) = self.provider else {
+        if !self.listed {
             return;
-        };
+        }
         let tracks: Vec<Track> = set
             .tracks
             .iter()
@@ -628,7 +621,7 @@ impl Downloads {
         let about = About::of(&set.head);
         let stop = Stop::Set(kind, id.clone());
         self.sets.insert((kind, id.clone()), set.clone());
-        self.persist(provider, Some((kind, id, set)), tracks);
+        self.persist(Some((kind, id, set)), tracks);
         self.pump(cx);
         self.watch(ids, about, stop, toast, cx);
         cx.emit(DownloadsChanged);
@@ -661,12 +654,7 @@ impl Downloads {
     }
 
     /// Writes new entries and, for a whole album or playlist, the set itself.
-    fn persist(
-        &mut self,
-        provider: &'static str,
-        set: Option<(Collection, String, Set)>,
-        tracks: Vec<Track>,
-    ) {
+    fn persist(&mut self, set: Option<(Collection, String, Set)>, tracks: Vec<Track>) {
         let rows: Vec<(String, bool)> = tracks
             .into_iter()
             .filter_map(|track| {
@@ -677,31 +665,34 @@ impl Downloads {
             .collect();
         self.write(move |store| {
             if let Some((kind, id, set)) = &set {
-                store.keep_set(provider, *kind, id, set)?;
+                store.keep_set(*kind, id, set)?;
             }
-            store.enlist(provider, &rows)
+            store.enlist(&rows)
         });
     }
 
     /// Starts the next downloads in line, as many as may run at once, while there is an engine
     /// to fetch through and a network to fetch from.
     fn pump(&mut self, cx: &mut Context<Self>) {
-        if Network::lost(cx) || self.provider.is_none() {
+        if Network::lost(cx) || !self.listed {
             return;
         }
         if let Some(until) = self.resting.filter(|until| *until > Instant::now()) {
             return self.wake_at(until, cx);
         }
-        // A provider that refuses bursts gets its downloads one at a time.
-        let bursts = self.session.read(cx).capabilities().download_gap;
-        let at_once = match bursts.is_zero() {
-            true => AT_ONCE,
-            false => 1,
-        };
-        while self.running.len() < at_once {
-            let Some(id) = self.queue.pop_front() else {
+        loop {
+            let Some(id) = self.queue.front().cloned() else {
                 return;
             };
+            // A provider that refuses bursts gets its downloads one at a time.
+            let at_once = match self.gap_of(&id, cx).is_zero() {
+                true => AT_ONCE,
+                false => 1,
+            };
+            if self.running.len() >= at_once {
+                return;
+            }
+            self.queue.pop_front();
             if self.tracks.get(&id).is_none_or(|entry| entry.done) {
                 continue;
             }
@@ -781,19 +772,17 @@ impl Downloads {
             Ok(()) => {
                 self.refusals = 0;
                 self.ease(cx);
-                if let Some(entry) = self.tracks.get_mut(&id)
-                    && let Some(provider) = self.provider
-                {
+                if let Some(entry) = self.tracks.get_mut(&id) {
                     entry.done = true;
                     let done = id.clone();
-                    self.write(move |store| store.done(provider, &done));
+                    self.write(move |store| store.done(&done));
                     cx.emit(DownloadsChanged);
                 }
             }
             Err(error) if error.downcast_ref::<music::Throttled>().is_some() => {
                 self.refusals = self.refusals.saturating_add(1);
                 let wait = rest(self.refusals);
-                let bursts = self.session.read(cx).capabilities().download_gap;
+                let bursts = self.gap_of(&id, cx);
                 self.gap = (self.gap * 2).max(bursts).min(WIDEST_GAP);
                 self.streak = 0;
                 log::warn!(
@@ -836,7 +825,10 @@ impl Downloads {
             return;
         }
         self.streak = 0;
-        let bursts = self.session.read(cx).capabilities().download_gap;
+        let bursts = self
+            .queue
+            .front()
+            .map_or(Duration::ZERO, |id| self.gap_of(id, cx));
         self.gap /= 2;
         if self.gap < bursts / 4 {
             self.gap = Duration::ZERO;
@@ -955,7 +947,7 @@ impl Downloads {
     /// Takes tracks off the list and removes their audio. A download of one still under way is
     /// left to end, and its file is removed when it does. Its place in line goes to the next
     /// track at once.
-    fn drop_tracks(&mut self, provider: &'static str, ids: &[String], cx: &mut Context<Self>) {
+    fn drop_tracks(&mut self, ids: &[String], cx: &mut Context<Self>) {
         if ids.is_empty() {
             return;
         }
@@ -971,7 +963,7 @@ impl Downloads {
         }
         self.queue.retain(|id| !ids.contains(id));
         let ids = ids.to_vec();
-        self.write(move |store| store.forget(provider, &ids));
+        self.write(move |store| store.forget(&ids));
         self.pump(cx);
     }
 
@@ -1014,24 +1006,24 @@ impl Downloads {
             .collect();
     }
 
-    /// Reads the lists of `provider` from disk, unless they are the ones already up.
-    fn adopt(&mut self, provider: Option<&'static str>, cx: &mut Context<Self>) {
-        if self.provider == provider {
+    /// The pause between downloads the provider of `id` asks for once it refuses a burst.
+    fn gap_of(&self, id: &str, cx: &App) -> Duration {
+        music::tag::slug_of(id).map_or(Duration::ZERO, |slug| {
+            self.session.read(cx).capabilities_for(slug).download_gap
+        })
+    }
+
+    /// Reads every provider's lists from disk, once.
+    fn load(&mut self, cx: &mut Context<Self>) {
+        if self.listed {
             return;
         }
-        self.clear(cx);
-        let Some(provider) = provider else {
-            return;
-        };
-        self.provider = Some(provider);
+        self.listed = true;
         let store = self.store.clone();
-        let request = self.io.spawn_blocking(move || store.restore(provider));
+        let request = self.io.spawn_blocking(move || store.restore());
         self.restore = Some(cx.spawn(async move |this, cx| {
             let restored = join(request).await;
             this.update(cx, |this, cx| {
-                if this.provider != Some(provider) {
-                    return;
-                }
                 match restored {
                     Ok(Restored { tracks, sets }) => {
                         for (id, single, done) in tracks {
@@ -1054,25 +1046,14 @@ impl Downloads {
         }));
     }
 
-    fn clear(&mut self, cx: &mut Context<Self>) {
-        self.provider = None;
-        self.tracks.clear();
-        self.sets.clear();
-        self.queue.clear();
-        self.running.clear();
-        self.abandoned.clear();
-        self.ticker = None;
-        self.resting = None;
-        self.refusals = 0;
-        self.gap = Duration::ZERO;
-        self.streak = 0;
-        self.wake = None;
-        self.failed.clear();
-        self.stalled.clear();
-        self.close_fetching(cx);
-        self.restore = None;
+    /// Stops the downloads of `slug` under way and takes its tracks out of line. They stay on the
+    /// list, and go back in line once it signs in again.
+    fn let_go(&mut self, slug: &str, cx: &mut Context<Self>) {
+        let mine = |id: &String| music::tag::slug_of(id) == Some(slug);
+        self.queue.retain(|id| !mine(id));
+        self.running.retain(|id, _| !mine(id));
+        self.stalled.retain(|id| !mine(id));
         self.report(cx);
-        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
@@ -1133,13 +1114,16 @@ impl Store {
             .context("cannot open the downloads list")
     }
 
-    fn restore(&self, provider: &str) -> Result<Restored> {
-        let connection = self.open()?;
-        let mut statement = connection.prepare(
-            "SELECT track_id, single, done FROM downloads WHERE provider = ? ORDER BY added_at",
-        )?;
+    /// Every provider's downloads, in the order they were asked for. A row filed under a
+    /// provider other than the one its id names, as an older Sonora filed everything under the
+    /// provider in use, moves to its own first.
+    fn restore(&self) -> Result<Restored> {
+        let mut connection = self.open()?;
+        refile(&mut connection)?;
+        let mut statement =
+            connection.prepare("SELECT track_id, single, done FROM downloads ORDER BY added_at")?;
         let tracks = statement
-            .query_map(params![provider], |row| {
+            .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, bool>(1)?,
@@ -1148,11 +1132,10 @@ impl Store {
             })?
             .filter_map(Result::ok)
             .collect();
-        let mut statement = connection.prepare(
-            "SELECT kind, set_id, value FROM downloaded_sets WHERE provider = ? ORDER BY added_at",
-        )?;
+        let mut statement = connection
+            .prepare("SELECT kind, set_id, value FROM downloaded_sets ORDER BY added_at")?;
         let sets = statement
-            .query_map(params![provider], |row| {
+            .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -1173,7 +1156,7 @@ impl Store {
         Ok(Restored { tracks, sets })
     }
 
-    fn enlist(&self, provider: &str, rows: &[(String, bool)]) -> Result<()> {
+    fn enlist(&self, rows: &[(String, bool)]) -> Result<()> {
         let mut connection = self.open()?;
         let transaction = connection.transaction()?;
         let now = now();
@@ -1183,27 +1166,27 @@ impl Store {
                  VALUES (?1, ?2, ?3, 0, ?4)
                  ON CONFLICT (provider, track_id)
                  DO UPDATE SET single = single OR excluded.single",
-                params![provider, id, single, now],
+                params![provider_of(id), id, single, now],
             )?;
         }
         transaction.commit()?;
         Ok(())
     }
 
-    fn done(&self, provider: &str, id: &str) -> Result<()> {
+    fn done(&self, id: &str) -> Result<()> {
         self.open()?.execute(
             "UPDATE downloads SET done = 1 WHERE provider = ? AND track_id = ?",
-            params![provider, id],
+            params![provider_of(id), id],
         )?;
         Ok(())
     }
 
-    fn forget(&self, provider: &str, ids: &[String]) -> Result<()> {
+    fn forget(&self, ids: &[String]) -> Result<()> {
         let connection = self.open()?;
         for id in ids {
             connection.execute(
                 "DELETE FROM downloads WHERE provider = ? AND track_id = ?",
-                params![provider, id],
+                params![provider_of(id), id],
             )?;
         }
         Ok(())
@@ -1215,23 +1198,56 @@ impl Store {
         Ok(())
     }
 
-    fn keep_set(&self, provider: &str, kind: Collection, id: &str, set: &Set) -> Result<()> {
+    fn keep_set(&self, kind: Collection, id: &str, set: &Set) -> Result<()> {
         let value = serde_json::to_string(set)?;
         self.open()?.execute(
             "INSERT OR REPLACE INTO downloaded_sets (provider, kind, set_id, value, added_at)
              VALUES (?, ?, ?, ?, ?)",
-            params![provider, kind_name(kind), id, value, now()],
+            params![provider_of(id), kind_name(kind), id, value, now()],
         )?;
         Ok(())
     }
 
-    fn forget_set(&self, provider: &str, kind: Collection, id: &str) -> Result<()> {
+    fn forget_set(&self, kind: Collection, id: &str) -> Result<()> {
         self.open()?.execute(
             "DELETE FROM downloaded_sets WHERE provider = ? AND kind = ? AND set_id = ?",
-            params![provider, kind_name(kind), id],
+            params![provider_of(id), kind_name(kind), id],
         )?;
         Ok(())
     }
+}
+
+/// The provider a track, album or playlist id belongs to, which its downloads are filed under.
+fn provider_of(id: &str) -> &str {
+    music::tag::slug_of(id).unwrap_or_default()
+}
+
+/// Moves every row filed under a provider other than the one its id names to its own. A row
+/// its own provider already holds is dropped instead, since that one is the newer.
+fn refile(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    for (table, key) in [("downloads", "track_id"), ("downloaded_sets", "set_id")] {
+        let misfiled: Vec<(String, String)> = transaction
+            .prepare(&format!("SELECT provider, {key} FROM {table}"))?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(Result::ok)
+            .filter(|(provider, id): &(String, String)| provider != provider_of(id))
+            .collect();
+        for (provider, id) in misfiled {
+            transaction.execute(
+                &format!(
+                    "UPDATE OR IGNORE {table} SET provider = ? WHERE provider = ? AND {key} = ?"
+                ),
+                params![provider_of(&id), provider, id],
+            )?;
+            transaction.execute(
+                &format!("DELETE FROM {table} WHERE provider = ? AND {key} = ?"),
+                params![provider, id],
+            )?;
+        }
+    }
+    transaction.commit()?;
+    Ok(())
 }
 
 fn kind_name(kind: Collection) -> &'static str {
@@ -1284,4 +1300,74 @@ fn playlist_set(detail: PlaylistDetail) -> (String, Set) {
         tracks: detail.tracks,
     };
     (id, set)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let database = Database::at(dir.path().join("state.sqlite"));
+        (dir, Store { database })
+    }
+
+    fn provider_of(store: &Store, track: &str) -> Option<String> {
+        store
+            .open()
+            .unwrap()
+            .query_row(
+                "SELECT provider FROM downloads WHERE track_id = ?",
+                params![track],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+
+    #[test]
+    fn a_download_is_filed_under_the_provider_its_id_names() {
+        let (_dir, store) = store();
+        store
+            .enlist(&[
+                ("spotify:a".to_owned(), true),
+                ("soundcloud:b".to_owned(), false),
+            ])
+            .unwrap();
+        store.done("spotify:a").unwrap();
+
+        assert_eq!(provider_of(&store, "spotify:a").as_deref(), Some("spotify"));
+        assert_eq!(
+            provider_of(&store, "soundcloud:b").as_deref(),
+            Some("soundcloud")
+        );
+        let restored = store.restore().unwrap();
+        assert_eq!(
+            restored.tracks,
+            vec![
+                ("spotify:a".to_owned(), true, true),
+                ("soundcloud:b".to_owned(), false, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_download_filed_under_another_provider_moves_to_its_own() {
+        let (_dir, store) = store();
+        store
+            .open()
+            .unwrap()
+            .execute(
+                "INSERT INTO downloads (provider, track_id, single, done, added_at)
+                 VALUES ('youtube-video', 'spotify:a', 1, 1, 0)",
+                [],
+            )
+            .unwrap();
+
+        let restored = store.restore().unwrap();
+
+        assert_eq!(restored.tracks, vec![("spotify:a".to_owned(), true, true)]);
+        assert_eq!(provider_of(&store, "spotify:a").as_deref(), Some("spotify"));
+        store.forget(&["spotify:a".to_owned()]).unwrap();
+        assert!(store.restore().unwrap().tracks.is_empty());
+    }
 }

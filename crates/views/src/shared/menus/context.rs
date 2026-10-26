@@ -361,7 +361,13 @@ impl ItemMenu {
         );
         // A provider that lists no station tracks gets no station item at all, rather than one
         // that plays the seed and stops.
-        let stations = Sonora::global(cx).session.read(cx).capabilities().radio;
+        let stations = track.id.as_deref().is_some_and(|id| {
+            Sonora::global(cx)
+                .session
+                .read(cx)
+                .capabilities_of_id(id)
+                .radio
+        });
         let radio = match (many || !stations, track.id.is_some() && track.playable) {
             (true, _) => None,
             (false, true) => {
@@ -895,7 +901,7 @@ fn artist_library_item(artist: SavedArtist, cx: &App) -> Option<MenuItem> {
     if !Sonora::global(cx)
         .session
         .read(cx)
-        .capabilities()
+        .capabilities_of_id(&artist.id)
         .follow_artists
     {
         return None;
@@ -1317,7 +1323,12 @@ fn download_item(tracks: &[Track], ids: &[String], cx: &App) -> Option<MenuItem>
     let sonora = Sonora::global(cx);
     let downloads = sonora.downloads.clone();
     let all = ids.iter().all(|id| downloads.read(cx).has(id));
-    if !all && !sonora.session.read(cx).capabilities().downloads {
+    let session = sonora.session.read(cx);
+    if !all
+        && !ids
+            .iter()
+            .any(|id| session.capabilities_of_id(id).downloads)
+    {
         return None;
     }
     let count = ids.len();
@@ -1360,7 +1371,7 @@ fn set_download_items(kind: Collection, saved: Saved, cx: &App) -> Vec<MenuItem>
     };
     let progress = downloads.read(cx).set(kind, &id);
     let offered = match progress {
-        None | Some(Progress::Failed) => sonora.session.read(cx).capabilities().downloads,
+        None | Some(Progress::Failed) => sonora.session.read(cx).capabilities_of_id(&id).downloads,
         Some(Progress::Done | Progress::Running | Progress::Waiting) => false,
     };
     let download = offered.then(|| {
