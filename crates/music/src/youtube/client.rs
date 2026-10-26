@@ -3,18 +3,24 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use ytmusic::YtMusic;
+use ytmusic::nav::Nav as _;
 
-use crate::youtube::{genres, radio, subscriptions, wire};
+use crate::youtube::{genres, pages, radio, subscriptions, wire};
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, Feed, Genre, GenreDetail, HomeFeed,
-    MediaKind, MusicApi, Playlist, PlaylistDetail, SUGGESTIONS, SavedArtist, Track, UserProfile,
-    escape,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Feed, Genre,
+    GenreDetail, HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, SUGGESTIONS, SavedArtist,
+    Track, UserProfile, escape,
 };
 
 const PORTRAIT_LIMIT: usize = 24;
+/// How many duration requests `hydrate_durations` keeps in flight at once.
+const DURATION_CONCURRENCY: usize = 8;
 const EPISODES: &str = "SE";
+/// The prefix of a browse id that opens a playlist.
+const PLAYLIST_BROWSE: &str = "VL";
 
 pub struct YouTubeClient {
     api: Arc<YtMusic>,
@@ -38,6 +44,7 @@ impl YouTubeClient {
     }
 
     async fn hydrate_durations(&self, tracks: &mut [ytmusic::Track]) {
+        let limit = Arc::new(Semaphore::new(DURATION_CONCURRENCY));
         let mut tasks = JoinSet::new();
         for (index, track) in tracks.iter().enumerate() {
             if track.duration.is_some() {
@@ -47,7 +54,11 @@ impl YouTubeClient {
                 continue;
             };
             let api = self.api.clone();
-            tasks.spawn(async move { (index, api.track_duration(&video_id).await) });
+            let limit = limit.clone();
+            tasks.spawn(async move {
+                let _permit = limit.acquire_owned().await.ok();
+                (index, api.track_duration(&video_id).await)
+            });
         }
         while let Some(result) = tasks.join_next().await {
             if let Ok((index, Some(duration))) = result {
@@ -114,6 +125,49 @@ impl MusicApi for YouTubeClient {
         let mut artist = self.api.artist(artist_id).await?;
         self.hydrate_durations(&mut artist.top_tracks).await;
         Ok(wire::artist(artist))
+    }
+
+    /// Every song of the artist, from the playlist its songs shelf opens with "Show all",
+    /// behind the `known` top songs. An artist without that playlist has nothing to add.
+    async fn artist_catalogue(&self, artist_id: &str, known: &[Track]) -> Result<ArtistCatalogue> {
+        let artist = self
+            .api
+            .execute(
+                "browse",
+                ytmusic::Client::Music,
+                serde_json::json!({ "browseId": artist_id }),
+            )
+            .await
+            .context("cannot read the youtube music artist")?;
+        let Some(playlist) = songs_playlist(&artist) else {
+            return Ok(ArtistCatalogue::default());
+        };
+        let first = self
+            .api
+            .playlist_page(&playlist)
+            .await
+            .context("cannot read the artist's songs")?;
+        let api = self.api.clone();
+        let mut songs = pages::follow(
+            first.tracks,
+            first.continuation,
+            ArtistCatalogue::TRACKS,
+            |token| {
+                let api = api.clone();
+                async move {
+                    let page = api.playlist_continuation(&token).await?;
+                    Ok((page.tracks, page.continuation))
+                }
+            },
+        )
+        .await;
+        self.hydrate_durations(&mut songs).await;
+        let songs = songs
+            .into_iter()
+            .enumerate()
+            .map(|(index, song)| wire::track(song, index as u32))
+            .collect();
+        Ok(ArtistCatalogue::every_track(known, songs))
     }
 
     async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfile> {
@@ -473,9 +527,96 @@ fn shows_video(kind: Option<&str>) -> bool {
     kind.is_some_and(ytmusic::is_music_video)
 }
 
+/// The playlist that holds every song of an artist, from the browse id the artist page's songs
+/// shelf links its title or its "Show all" to. `None` for an artist without such a shelf, or one
+/// that links somewhere other than a playlist.
+fn songs_playlist(artist: &serde_json::Value) -> Option<String> {
+    let shelf = ytmusic::parse::find_renderer(artist, "musicShelfRenderer")?;
+    [
+        &[
+            "title",
+            "runs",
+            "0",
+            "navigationEndpoint",
+            "browseEndpoint",
+            "browseId",
+        ][..],
+        &["bottomEndpoint", "browseEndpoint", "browseId"],
+    ]
+    .into_iter()
+    .filter_map(|path| shelf.str_at(path))
+    .find(|id| id.starts_with(PLAYLIST_BROWSE))
+    .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::shows_video;
+    use serde_json::json;
+
+    use super::{shows_video, songs_playlist};
+
+    /// An artist response in the shape YouTube Music answers with, cut down to the songs shelf.
+    fn artist_with_songs(title: serde_json::Value, bottom: serde_json::Value) -> serde_json::Value {
+        let mut shelf = json!({
+            "title": title,
+            "contents": [{ "musicResponsiveListItemRenderer": {} }],
+        });
+        if !bottom.is_null() {
+            shelf["bottomEndpoint"] = bottom;
+        }
+        json!({
+            "header": { "musicImmersiveHeaderRenderer": { "title": { "runs": [{ "text": "Artist" }] } } },
+            "contents": { "singleColumnBrowseResultsRenderer": { "tabs": [{ "tabRenderer": {
+                "content": { "sectionListRenderer": { "contents": [
+                    { "musicShelfRenderer": shelf },
+                    { "musicCarouselShelfRenderer": { "contents": [] } },
+                ] } }
+            } }] } },
+        })
+    }
+
+    fn browse(id: &str) -> serde_json::Value {
+        json!({
+            "clickTrackingParams": "x",
+            "browseEndpoint": {
+                "browseId": id,
+                "browseEndpointContextSupportedConfigs": { "browseEndpointContextMusicConfig": {
+                    "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                } },
+            },
+        })
+    }
+
+    #[test]
+    fn the_songs_shelf_title_names_the_playlist_of_every_song() {
+        let artist = artist_with_songs(
+            json!({ "runs": [{ "text": "Top songs", "navigationEndpoint": browse("VLOLAK5uy_songs") }] }),
+            serde_json::Value::Null,
+        );
+
+        assert_eq!(songs_playlist(&artist).as_deref(), Some("VLOLAK5uy_songs"));
+    }
+
+    #[test]
+    fn the_show_all_link_names_it_when_the_title_does_not() {
+        let artist = artist_with_songs(
+            json!({ "runs": [{ "text": "Songs" }] }),
+            browse("VLOLAK5uy_bottom"),
+        );
+
+        assert_eq!(songs_playlist(&artist).as_deref(), Some("VLOLAK5uy_bottom"));
+    }
+
+    #[test]
+    fn a_shelf_that_links_to_no_playlist_names_none() {
+        let artist = artist_with_songs(
+            json!({ "runs": [{ "text": "Songs", "navigationEndpoint": browse("UCartist") }] }),
+            serde_json::Value::Null,
+        );
+
+        assert_eq!(songs_playlist(&artist), None);
+        assert_eq!(songs_playlist(&json!({ "contents": {} })), None);
+    }
 
     #[test]
     fn an_art_track_has_no_video() {

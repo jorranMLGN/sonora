@@ -10,10 +10,11 @@ use futures::future::{BoxFuture, Shared};
 use ytmusic::YtMusic;
 use ytmusic::web::{Video, WebPlaylist, WebSearch};
 
+use crate::youtube::pages;
 use crate::youtube_video::{VIDEO, wire};
 use crate::{
-    Album, AlbumDetail, Artist, ArtistProfile, HomeFeed, MediaKind, MusicApi, Playlist,
-    PlaylistDetail, SavedArtist, Track, UserProfile, escape,
+    Album, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, HomeFeed, MediaKind, MusicApi,
+    Playlist, PlaylistDetail, SavedArtist, Track, UserProfile, escape,
 };
 
 /// How long one search answer serves every kind the search page asks for.
@@ -207,6 +208,31 @@ impl MusicApi for YouTubeVideoClient {
 
     async fn artist(&self, artist_id: &str) -> Result<Artist> {
         Ok(wire::artist_page(self.api.web_channel(artist_id).await?))
+    }
+
+    /// Every upload of the channel that is a track, read on past its first page, behind the
+    /// `known` ones the page already lists.
+    async fn artist_catalogue(&self, artist_id: &str, known: &[Track]) -> Result<ArtistCatalogue> {
+        let channel = self
+            .api
+            .web_channel(artist_id)
+            .await
+            .context("cannot read the youtube channel")?;
+        let api = self.api.clone();
+        let uploads = pages::follow(
+            wire::tracks(channel.uploads),
+            channel.continuation,
+            ArtistCatalogue::TRACKS,
+            |token| {
+                let api = api.clone();
+                async move {
+                    let (videos, next) = api.web_continuation(&token).await?;
+                    Ok((wire::tracks(videos), next))
+                }
+            },
+        )
+        .await;
+        Ok(ArtistCatalogue::every_track(known, wire::numbered(uploads)))
     }
 
     async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfile> {

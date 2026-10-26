@@ -281,8 +281,33 @@ pub struct ArtistCatalogue {
 }
 
 impl ArtistCatalogue {
+    /// The most tracks a provider lists for an artist's whole catalogue, and so the most pages
+    /// it reads to get there.
+    pub(crate) const TRACKS: usize = 500;
+
     pub fn is_empty(&self) -> bool {
         self.albums.is_empty() && self.top_tracks.is_empty() && self.appears_on.is_empty()
+    }
+
+    /// A catalogue of every track of an artist: `known`, the ranked tracks the page already
+    /// shows, first, then the rest of `everything` in its own order, each track once and at
+    /// most `TRACKS` of them.
+    pub(crate) fn every_track(known: &[Track], everything: Vec<Track>) -> Self {
+        if everything.is_empty() {
+            return Self::default();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let top_tracks = known
+            .iter()
+            .cloned()
+            .chain(everything)
+            .filter(|track| track.id.clone().is_none_or(|id| seen.insert(id)))
+            .take(Self::TRACKS)
+            .collect();
+        Self {
+            top_tracks,
+            ..Default::default()
+        }
     }
 }
 
@@ -519,6 +544,65 @@ pub enum PinOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn track(id: &str) -> Track {
+        Track {
+            id: Some(id.to_owned()),
+            name: id.to_owned(),
+            playable: true,
+            artists: String::new(),
+            artist_refs: Vec::new(),
+            album: String::new(),
+            album_id: None,
+            cover: None,
+            duration: Duration::from_secs(1),
+            added_at: None,
+            added_by: None,
+            playcount: None,
+            popularity: 0,
+            explicit: false,
+            track_number: 1,
+            disc_number: 1,
+            tags: Vec::new(),
+            languages: Vec::new(),
+            credits: Vec::new(),
+        }
+    }
+
+    fn ids(tracks: &[Track]) -> Vec<&str> {
+        tracks
+            .iter()
+            .filter_map(|track| track.id.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn every_track_keeps_the_known_ones_first_and_lists_each_once() {
+        let known = [track("b"), track("d")];
+        let everything = vec![track("a"), track("b"), track("c"), track("d"), track("c")];
+
+        let catalogue = ArtistCatalogue::every_track(&known, everything);
+
+        assert_eq!(ids(&catalogue.top_tracks), ["b", "d", "a", "c"]);
+        assert!(catalogue.albums.is_empty() && catalogue.appears_on.is_empty());
+    }
+
+    #[test]
+    fn every_track_stops_at_the_cap() {
+        let everything = (0..ArtistCatalogue::TRACKS + 20)
+            .map(|index| track(&index.to_string()))
+            .collect();
+
+        let catalogue = ArtistCatalogue::every_track(&[], everything);
+
+        assert_eq!(catalogue.top_tracks.len(), ArtistCatalogue::TRACKS);
+        assert_eq!(catalogue.top_tracks[0].id.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn every_track_of_nothing_is_an_empty_catalogue() {
+        assert!(ArtistCatalogue::every_track(&[track("a")], Vec::new()).is_empty());
+    }
 
     #[test]
     fn musicbrainz_types_name_the_release() {

@@ -388,9 +388,55 @@ impl Http {
     }
 }
 
+/// The path and query of a listing's `next_href`, ready for `Http::get_json`, or `None` for a
+/// link that leaves the api host. Any `client_id` in it is dropped, since `get_json` adds the
+/// current one.
+pub fn next_path(href: &str) -> Option<String> {
+    let rest = href.strip_prefix(BASE)?;
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty() && !pair.starts_with("client_id="))
+        .collect();
+    Some(match kept.is_empty() {
+        true => path.to_owned(),
+        false => format!("{path}?{}", kept.join("&")),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ClientId, Http, PERMALINK_CAPACITY, Permalinks};
+    use super::{ClientId, Http, PERMALINK_CAPACITY, Permalinks, next_path};
+
+    #[test]
+    fn a_next_href_becomes_a_path_without_its_client_id() {
+        assert_eq!(
+            next_path(
+                "https://api-v2.soundcloud.com/users/7/tracks?offset=2024-01-01&client_id=old&limit=200"
+            )
+            .as_deref(),
+            Some("/users/7/tracks?offset=2024-01-01&limit=200")
+        );
+        assert_eq!(
+            next_path("https://api-v2.soundcloud.com/users/7/tracks?client_id=old").as_deref(),
+            Some("/users/7/tracks")
+        );
+    }
+
+    #[test]
+    fn a_next_href_off_the_api_host_is_not_followed() {
+        assert_eq!(
+            next_path("https://example.com/users/7/tracks?offset=1"),
+            None
+        );
+        assert_eq!(
+            next_path("https://api-v2.soundcloud.com.example.com/users/7/tracks"),
+            None
+        );
+    }
 
     #[test]
     fn evicts_the_oldest_id_once_the_cap_is_exceeded() {

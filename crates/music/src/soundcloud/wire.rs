@@ -11,8 +11,7 @@ use crate::models::{
 pub struct Page<T> {
     #[serde(default = "Vec::new")]
     pub collection: Vec<T>,
-    // pagination not implemented yet
-    #[allow(dead_code)]
+    /// The full url of the next page, which `http::next_path` turns back into a path.
     #[serde(default)]
     pub next_href: Option<String>,
 }
