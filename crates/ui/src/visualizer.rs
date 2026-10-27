@@ -1,8 +1,8 @@
 use gpui::prelude::*;
 use gpui::{
-    App, Background, Bounds, Div, Hsla, IntoElement, PathBuilder, Pixels, Point, RenderOnce, Rgba,
-    SharedString, StyleRefinement, Window, canvas, div, linear_color_stop, linear_gradient, point,
-    px,
+    App, Background, Bounds, Corners, Div, Hsla, IntoElement, PathBuilder, Pixels, Point,
+    RenderOnce, Rgba, SharedString, StyleRefinement, Window, canvas, div, linear_color_stop,
+    linear_gradient, point, px,
 };
 use i18n::t;
 
@@ -316,6 +316,24 @@ impl Paint {
         }
     }
 
+    /// The paint over the stretch `part` of a taller `whole`, each given as its top and its
+    /// bottom, so pieces painted one by one fade as one shape spanning `whole` would.
+    fn across(self, whole: (Pixels, Pixels), part: (Pixels, Pixels)) -> Background {
+        let height = whole.1 - whole.0;
+        match self {
+            Self::Solid(color) => color.into(),
+            Self::Fade { .. } if height <= Pixels::ZERO => self.at(1.).into(),
+            Self::Fade { .. } => {
+                let share = |y: Pixels| (whole.1 - y) / height;
+                linear_gradient(
+                    180.,
+                    linear_color_stop(self.at(share(part.0)), 0.),
+                    linear_color_stop(self.at(share(part.1)), 1.),
+                )
+            }
+        }
+    }
+
     /// The colour at `share` of the height, from the foot at 0 to the crest at 1.
     fn at(self, share: f32) -> Hsla {
         let (top, bottom) = self.ends();
@@ -521,30 +539,30 @@ struct Shape {
     peaks: bool,
 }
 
-/// The bars, painted as paths rather than laid out as elements. A corner radius on an element
-/// is clamped to half its size, and a bar's height is the music's to decide: a quiet band at
-/// the edge is a couple of pixels tall and could never carry the window's curve. Painted, each
-/// bar is simply cut to the rounded floor wherever it stands in a corner.
+/// The bars, painted rather than laid out as elements. A bar's height is the music's to decide:
+/// a quiet band at the edge is a couple of pixels tall and could never carry the window's
+/// curve, so each bar is cut to the rounded floor wherever it stands in a corner.
 ///
 /// There are far more bars than bands. Each is read off the same smooth curve the wave is drawn
-/// through, so neighbours rise and fall together rather than stepping from band to band, and
-/// all of them go into one path so a wide strip costs one paint instead of hundreds.
+/// through, so neighbours rise and fall together rather than stepping from band to band.
 fn bars(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl IntoElement {
     let bands = levels.mixed();
     let peaks = levels.mixed_peaks();
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let Some((count, width, gap)) = columns(bounds, bands.len(), shape.bar) else {
+            let scale = window.scale_factor();
+            let Some((count, width, gap, start)) = columns(bounds, bands.len(), shape.bar, scale)
+            else {
                 return;
             };
             let floor = Floor::new(bounds, shape.radius);
             let lift = |level: f32| shape.max * level.clamp(FLOOR, 1.) / (1. + shape.ride);
             let marked = shape.peaks && peaks.len() >= 2;
-            let mut body = PathBuilder::fill();
-            let mut caps = PathBuilder::fill();
+            let mut body = Shapes::default();
+            let mut caps = Shapes::default();
             for index in 0..count {
-                let left = bounds.origin.x + (width + gap) * index as f32;
+                let left = start + (width + gap) * index as f32;
                 let at = (index as f32 + 0.5) / count as f32;
                 bar(
                     &mut body,
@@ -566,9 +584,9 @@ fn bars(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl IntoE
                     }
                 }
             }
-            painted(body, paint.background(), window);
+            body.paint(paint, window);
             if marked {
-                painted(caps, marks.opacity(PEAK_OPACITY).background(), window);
+                caps.paint(marks.opacity(PEAK_OPACITY), window);
             }
         },
     )
@@ -576,19 +594,67 @@ fn bars(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl IntoE
     .inset_0()
 }
 
-/// A peak mark whose top sits at `top`, added to `builder`, kept inside the rounded floor.
-fn cap(builder: &mut PathBuilder, floor: &Floor, left: Pixels, right: Pixels, top: Pixels) {
+/// One paint's worth of bars. A plain bar is a rounded quad, which the GPU rounds as it draws;
+/// only the few cut to the rounded floor in a corner go into a path, since a path is cut into
+/// triangles on the CPU every frame and hundreds of rounded bars made that the app's main cost.
+#[derive(Default)]
+struct Shapes {
+    quads: Vec<(Bounds<Pixels>, Corners<Pixels>)>,
+    cut: PathBuilder,
+    /// The top and the bottom of the bars in `cut`, nothing while there are none.
+    cut_span: Option<(Pixels, Pixels)>,
+    /// The top and the bottom of everything added, which a fade runs across.
+    span: Option<(Pixels, Pixels)>,
+}
+
+impl Shapes {
+    fn quad(&mut self, bounds: Bounds<Pixels>, corners: Corners<Pixels>) {
+        widen(&mut self.span, bounds.top(), bounds.bottom());
+        self.quads.push((bounds, corners));
+    }
+
+    /// The path for a bar cut to the floor, which spans `top` to `bottom`, to add its outline to.
+    fn cut(&mut self, top: Pixels, bottom: Pixels) -> &mut PathBuilder {
+        widen(&mut self.span, top, bottom);
+        widen(&mut self.cut_span, top, bottom);
+        &mut self.cut
+    }
+
+    /// Paints everything added, the fade running across all of it as it would across one shape.
+    fn paint(self, paint: Paint, window: &mut Window) {
+        let Some(whole) = self.span else {
+            return;
+        };
+        for (bounds, corners) in self.quads {
+            let background = paint.across(whole, (bounds.top(), bounds.bottom()));
+            window.paint_quad(gpui::fill(bounds, background).corner_radii(corners));
+        }
+        if let Some(part) = self.cut_span {
+            painted(self.cut, paint.across(whole, part), window);
+        }
+    }
+}
+
+/// `span` stretched to reach from `top` to `bottom` as well.
+fn widen(span: &mut Option<(Pixels, Pixels)>, top: Pixels, bottom: Pixels) {
+    *span = Some(match *span {
+        None => (top, bottom),
+        Some((high, low)) => (high.min(top), low.max(bottom)),
+    });
+}
+
+/// A peak mark whose top sits at `top`, added to `shapes`, kept inside the rounded floor.
+fn cap(shapes: &mut Shapes, floor: &Floor, left: Pixels, right: Pixels, top: Pixels) {
     let bottom = top + px(PEAK);
     let (inside_left, inside_right) = floor.sides(bottom);
     let (left, right) = (left.max(inside_left), right.min(inside_right));
     if right <= left || bottom > floor.at(left).min(floor.at(right)) {
         return;
     }
-    builder.move_to(point(left, top));
-    builder.line_to(point(right, top));
-    builder.line_to(point(right, bottom));
-    builder.line_to(point(left, bottom));
-    builder.close();
+    shapes.quad(
+        Bounds::from_corners(point(left, top), point(right, bottom)),
+        Corners::default(),
+    );
 }
 
 /// Paints a built shape, logging rather than failing when it could not be built.
@@ -680,10 +746,10 @@ impl Floor {
     }
 }
 
-/// One bar from `left` to `right` standing `height` tall, added to `builder` as its own
-/// outline. Its top is rounded; a bar in a corner is cut to the rounded floor instead, and keeps
-/// a flat top there since it is too short to carry both.
-fn bar(builder: &mut PathBuilder, floor: &Floor, left: Pixels, right: Pixels, height: Pixels) {
+/// One bar from `left` to `right` standing `height` tall, added to `shapes`. Its top is rounded;
+/// a bar in a corner is cut to the rounded floor instead, and keeps a flat top there since it is
+/// too short to carry both.
+fn bar(shapes: &mut Shapes, floor: &Floor, left: Pixels, right: Pixels, height: Pixels) {
     let top = floor.bottom - height;
     let (inside_left, inside_right) = floor.sides(top);
     let (left, right) = (left.max(inside_left), right.min(inside_right));
@@ -694,6 +760,8 @@ fn bar(builder: &mut PathBuilder, floor: &Floor, left: Pixels, right: Pixels, he
     let cornered = floor.reach(left).is_some() || floor.reach(right).is_some();
     match cornered {
         true => {
+            let foot = floor.at(left).max(floor.at(right)).max(top);
+            let builder = shapes.cut(top, foot);
             builder.move_to(point(left, top));
             builder.line_to(point(right, top));
             // a bar in a corner follows the curve along its foot
@@ -701,23 +769,25 @@ fn bar(builder: &mut PathBuilder, floor: &Floor, left: Pixels, right: Pixels, he
                 let x = left + (right - left) * (step as f32 / CUT as f32);
                 builder.line_to(point(x, floor.at(x).max(top)));
             }
+            builder.close();
         }
         false => {
             let cap = ((right - left) / 2.).min(height).max(Pixels::ZERO);
-            let radii = point(cap, cap);
-            builder.move_to(point(left, top + cap));
-            builder.arc_to(radii, Pixels::ZERO, false, true, point(left + cap, top));
-            builder.line_to(point(right - cap, top));
-            builder.arc_to(radii, Pixels::ZERO, false, true, point(right, top + cap));
-            builder.line_to(point(right, floor.bottom));
-            builder.line_to(point(left, floor.bottom));
+            shapes.quad(
+                Bounds::from_corners(point(left, top), point(right, floor.bottom)),
+                Corners {
+                    top_left: cap,
+                    top_right: cap,
+                    bottom_right: Pixels::ZERO,
+                    bottom_left: Pixels::ZERO,
+                },
+            );
         }
     }
-    builder.close();
 }
 
 /// Bars that grow from the middle line, up and down at once. Drawn like the plain bars —
-/// many of them, read off the smooth curve, one path — but rounded at both ends, and kept above
+/// many of them, read off the smooth curve — but rounded at both ends, and kept above
 /// the rounded floor at the foot since a loud one reaches all the way down.
 fn mirror(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl IntoElement {
     let bands = levels.mixed();
@@ -725,17 +795,19 @@ fn mirror(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl Int
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let Some((count, width, gap)) = columns(bounds, bands.len(), shape.bar) else {
+            let scale = window.scale_factor();
+            let Some((count, width, gap, start)) = columns(bounds, bands.len(), shape.bar, scale)
+            else {
                 return;
             };
             let floor = Floor::new(bounds, shape.radius);
             let middle = bounds.origin.y + bounds.size.height / 2.;
             let half = |level: f32| shape.max * level.clamp(FLOOR, 1.) / 2.;
             let marked = shape.peaks && peaks.len() >= 2;
-            let mut body = PathBuilder::fill();
-            let mut caps = PathBuilder::fill();
+            let mut body = Shapes::default();
+            let mut caps = Shapes::default();
             for index in 0..count {
-                let left = bounds.origin.x + (width + gap) * index as f32;
+                let left = start + (width + gap) * index as f32;
                 let right = left + width;
                 let at = (index as f32 + 0.5) / count as f32;
                 let ground = floor.at(left).min(floor.at(right));
@@ -756,9 +828,9 @@ fn mirror(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl Int
                     }
                 }
             }
-            painted(body, paint.background(), window);
+            body.paint(paint, window);
             if marked {
-                painted(caps, marks.opacity(PEAK_OPACITY).background(), window);
+                caps.paint(marks.opacity(PEAK_OPACITY), window);
             }
         },
     )
@@ -766,37 +838,47 @@ fn mirror(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl Int
     .inset_0()
 }
 
-/// How many bars of `bar` pixels fit across `bounds`, how wide each is drawn and the space
-/// between two. Nothing when there is no room or no curve to read them off.
-fn columns(bounds: Bounds<Pixels>, bands: usize, bar: f32) -> Option<(usize, Pixels, Pixels)> {
-    if bands < 2 || bounds.size.width <= px(0.) {
+/// How many bars of `bar` pixels fit across `bounds`, how wide each is drawn, the space
+/// between two and where the first starts. Bars and gaps are whole device pixels at `scale`,
+/// since a quad's edges are snapped to them and a fractional pitch would draw bars of uneven
+/// width; what does not fit is split evenly at both ends. Nothing when there is no room or no
+/// curve to read them off.
+fn columns(
+    bounds: Bounds<Pixels>,
+    bands: usize,
+    bar: f32,
+    scale: f32,
+) -> Option<(usize, Pixels, Pixels, Pixels)> {
+    if bands < 2 || bounds.size.width <= px(0.) || scale <= 0. {
         return None;
     }
-    let spacing = bar * BAR_GAP / BAR;
-    let count = ((f32::from(bounds.size.width) + spacing) / (bar + spacing))
-        .floor()
-        .max(1.) as usize;
-    let gap = px(spacing);
-    let width = (bounds.size.width - gap * (count - 1) as f32) / count as f32;
-    (width > px(0.)).then_some((count, width, gap))
+    let total = (f32::from(bounds.size.width) * scale).floor();
+    let width = (bar * scale).round().max(1.);
+    let gap = (bar * BAR_GAP / BAR * scale).round().max(1.);
+    let count = ((total + gap) / (width + gap)).floor();
+    if count < 1. {
+        return None;
+    }
+    let spare = total - (count * (width + gap) - gap);
+    let start = (f32::from(bounds.origin.x) * scale).round() + (spare / 2.).floor();
+    Some((
+        count as usize,
+        px(width / scale),
+        px(gap / scale),
+        px(start / scale),
+    ))
 }
 
-/// A bar rounded at both ends, from `top` to `bottom`, added to `builder` as its own outline.
-fn pill(builder: &mut PathBuilder, left: Pixels, right: Pixels, top: Pixels, bottom: Pixels) {
+/// A bar rounded at both ends, from `top` to `bottom`, added to `shapes`.
+fn pill(shapes: &mut Shapes, left: Pixels, right: Pixels, top: Pixels, bottom: Pixels) {
     if bottom <= top || right <= left {
         return;
     }
     let cap = ((right - left) / 2.).min((bottom - top) / 2.);
-    let radii = point(cap, cap);
-    builder.move_to(point(left, top + cap));
-    builder.arc_to(radii, Pixels::ZERO, false, true, point(left + cap, top));
-    builder.line_to(point(right - cap, top));
-    builder.arc_to(radii, Pixels::ZERO, false, true, point(right, top + cap));
-    builder.line_to(point(right, bottom - cap));
-    builder.arc_to(radii, Pixels::ZERO, false, true, point(right - cap, bottom));
-    builder.line_to(point(left + cap, bottom));
-    builder.arc_to(radii, Pixels::ZERO, false, true, point(left, bottom - cap));
-    builder.close();
+    shapes.quad(
+        Bounds::from_corners(point(left, top), point(right, bottom)),
+        Corners::all(cap),
+    );
 }
 
 /// A dot on each band's crest, riding where the bar's top would be.

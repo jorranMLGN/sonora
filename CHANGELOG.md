@@ -75,6 +75,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The spectrum takes far less of your processor: about a third of what it did beside the
+  player, and a small fraction of it in fullscreen.
 - A jam works out for itself how far ahead of the sound it has to run. Every listener reports what
   its own network and speaker need and the host takes the highest, so a phone on a Bluetooth
   speaker joining is enough to move the whole room. The Jam lead setting is gone: the jam panel
