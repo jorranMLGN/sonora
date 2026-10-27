@@ -2882,14 +2882,18 @@ impl Playback {
         let (engine, events) = playback.start(config, self.cast.clone());
 
         self.listen(events, slug, cx);
-        self.engines.insert(slug, engine);
+        // The engine this replaces is dropped off the main thread, as Spotify's waits for its
+        // player thread to end.
+        retire(self.engines.insert(slug, engine));
         self.refused = None;
         if !self.playing_elsewhere(slug) {
             self.state = PlaybackState::Idle;
             self.position = Duration::ZERO;
             self.clock.reset(Duration::ZERO, false);
+            // Only the engine of the current track picks it up where it stood. Another provider's
+            // engine starting must not touch the resume the current one holds.
+            self.prepare_resume(cx);
         }
-        self.prepare_resume(cx);
         cx.notify();
     }
 
@@ -3133,7 +3137,7 @@ impl Playback {
     /// Whatever another provider is playing keeps playing.
     fn teardown(&mut self, slug: &str, cx: &mut Context<Self>) {
         self.tasks.remove(slug);
-        self.engines.remove(slug);
+        retire(self.engines.remove(slug));
         self.signals
             .retain(|(id, _)| music::tag::slug_of(id) != Some(slug));
 

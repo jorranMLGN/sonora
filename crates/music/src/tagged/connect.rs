@@ -23,13 +23,18 @@ impl Connect for TaggedConnect {
         self.inner.rename(naming);
     }
 
+    /// Reports only this network's own tracks. Another provider's track playing is nothing the
+    /// network can show, so it hears that nothing of its own plays.
     fn publish(&self, now: Option<NowPlaying>) {
-        self.inner.publish(now.map(|mut now| {
-            now.track = tag::untag(&now.track).to_owned();
-            untag_all(&mut now.upcoming);
-            now.context = now.context.map(untag_collection);
-            now
-        }));
+        let own = |id: &str| tag::slug_of(id) == Some(self.slug);
+        self.inner
+            .publish(now.filter(|now| own(&now.track)).map(|mut now| {
+                now.track = tag::untag(&now.track).to_owned();
+                now.upcoming.retain(|id| own(id));
+                untag_all(&mut now.upcoming);
+                now.context = now.context.map(untag_collection);
+                now
+            }));
     }
 
     /// The provider's events, tagged by a thread of their own, since the receiver is read from
@@ -158,6 +163,65 @@ fn untag_all(ids: &mut [String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A device network that keeps what it was told is playing.
+    #[derive(Default)]
+    struct Told(std::sync::Mutex<Vec<Option<NowPlaying>>>);
+
+    impl Connect for Told {
+        fn enable(&self, _: bool) {}
+        fn rename(&self, _: crate::connect::Naming) {}
+        fn publish(&self, now: Option<NowPlaying>) {
+            self.0.lock().unwrap().push(now);
+        }
+        fn events(&self) -> Option<UnboundedReceiver<Event>> {
+            None
+        }
+        fn device(&self) -> String {
+            String::new()
+        }
+        fn transfer(&self, _: &str) {}
+        fn control(&self, _: &str, _: Command) {}
+        fn join(&self, _: &str) {}
+        fn start(&self) {}
+        fn peek(&self, _: &str) {}
+        fn leave(&self) {}
+        fn kick(&self, _: &str) {}
+    }
+
+    fn playing(track: &str, upcoming: &[&str]) -> NowPlaying {
+        NowPlaying {
+            track: track.to_owned(),
+            upcoming: upcoming.iter().map(|id| (*id).to_owned()).collect(),
+            context: None,
+            index: None,
+            playing: true,
+            position: std::time::Duration::ZERO,
+            duration: std::time::Duration::ZERO,
+            volume: 1.,
+            shuffle: false,
+            repeat: crate::connect::RepeatMode::Off,
+        }
+    }
+
+    #[test]
+    fn only_the_networks_own_tracks_are_reported_as_playing() {
+        let told = Arc::new(Told::default());
+        let connect = TaggedConnect {
+            slug: "spotify",
+            inner: told.clone(),
+        };
+
+        connect.publish(Some(playing(
+            "spotify:a",
+            &["youtube-video:b", "spotify:c"],
+        )));
+        connect.publish(Some(playing("youtube-video:b", &["spotify:c"])));
+
+        let told = told.0.lock().unwrap();
+        assert_eq!(told[0], Some(playing("a", &["c"])));
+        assert_eq!(told[1], None);
+    }
 
     #[test]
     fn a_start_from_the_network_comes_in_tagged_and_goes_out_bare() {
