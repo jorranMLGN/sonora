@@ -66,6 +66,49 @@ impl YouTubeClient {
             }
         }
     }
+
+    /// Every song of the artist, from the playlist its songs shelf opens with "Show all",
+    /// behind the `known` top songs. An artist without that playlist has nothing to add.
+    async fn artist_songs(&self, artist_id: &str, known: &[Track]) -> Result<ArtistCatalogue> {
+        let artist = self
+            .api
+            .execute(
+                "browse",
+                ytmusic::Client::Music,
+                serde_json::json!({ "browseId": artist_id }),
+            )
+            .await
+            .context("cannot read the youtube music artist")?;
+        let Some(playlist) = songs_playlist(&artist) else {
+            return Ok(ArtistCatalogue::default());
+        };
+        let first = self
+            .api
+            .playlist_page(&playlist)
+            .await
+            .context("cannot read the artist's songs")?;
+        let api = self.api.clone();
+        let mut songs = pages::follow(
+            first.tracks,
+            first.continuation,
+            ArtistCatalogue::TRACKS,
+            |token| {
+                let api = api.clone();
+                async move {
+                    let page = api.playlist_continuation(&token).await?;
+                    Ok((page.tracks, page.continuation))
+                }
+            },
+        )
+        .await;
+        self.hydrate_durations(&mut songs).await;
+        let songs = songs
+            .into_iter()
+            .enumerate()
+            .map(|(index, song)| wire::track(song, index as u32))
+            .collect();
+        Ok(ArtistCatalogue::every_track(known, songs))
+    }
 }
 
 #[async_trait]
@@ -127,47 +170,20 @@ impl MusicApi for YouTubeClient {
         Ok(wire::artist(artist))
     }
 
-    /// Every song of the artist, from the playlist its songs shelf opens with "Show all",
-    /// behind the `known` top songs. An artist without that playlist has nothing to add.
+    /// Every song of the artist behind the `known` top songs, and the whole discography, since
+    /// the artist page `artist` reads holds only ten albums and ten singles.
     async fn artist_catalogue(&self, artist_id: &str, known: &[Track]) -> Result<ArtistCatalogue> {
-        let artist = self
-            .api
-            .execute(
-                "browse",
-                ytmusic::Client::Music,
-                serde_json::json!({ "browseId": artist_id }),
-            )
-            .await
-            .context("cannot read the youtube music artist")?;
-        let Some(playlist) = songs_playlist(&artist) else {
-            return Ok(ArtistCatalogue::default());
-        };
-        let first = self
-            .api
-            .playlist_page(&playlist)
-            .await
-            .context("cannot read the artist's songs")?;
-        let api = self.api.clone();
-        let mut songs = pages::follow(
-            first.tracks,
-            first.continuation,
-            ArtistCatalogue::TRACKS,
-            |token| {
-                let api = api.clone();
-                async move {
-                    let page = api.playlist_continuation(&token).await?;
-                    Ok((page.tracks, page.continuation))
-                }
-            },
-        )
-        .await;
-        self.hydrate_durations(&mut songs).await;
-        let songs = songs
+        let (songs, albums) = tokio::join!(
+            self.artist_songs(artist_id, known),
+            self.api.discography(artist_id)
+        );
+        let mut catalogue = songs?;
+        catalogue.albums = albums
+            .with_context(|| format!("cannot load the discography of artist {artist_id}"))?
             .into_iter()
-            .enumerate()
-            .map(|(index, song)| wire::track(song, index as u32))
+            .map(wire::album)
             .collect();
-        Ok(ArtistCatalogue::every_track(known, songs))
+        Ok(catalogue)
     }
 
     async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfile> {

@@ -46,7 +46,7 @@ pub fn po_token(binding: String, token: Option<String>) {
     match token.filter(|token| !token.is_empty()) {
         Some(token) if token.starts_with(FAILED) => {
             log::warn!("potoken: the page could not mint a token: {}", &token[1..]);
-            music::potoken::failed(&binding);
+            music::potoken::failed();
         }
         Some(token) => {
             log::debug!("potoken: minted a token for {binding}");
@@ -54,7 +54,7 @@ pub fn po_token(binding: String, token: Option<String>) {
         }
         None => {
             log::warn!("potoken: no token for {binding}");
-            music::potoken::failed(&binding);
+            music::potoken::failed();
         }
     }
 }

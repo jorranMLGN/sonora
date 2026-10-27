@@ -20,6 +20,7 @@
 //! A ranged spool can also be windowed, for a video nobody may watch to the end: its download
 //! stays a bounded distance ahead of where it is being read, and never fetches what lies behind.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::future::Future;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -97,6 +98,12 @@ pub trait Body: Send + 'static {
     fn confidential(&self) -> bool {
         false
     }
+
+    /// The most this track may spool. A body whose tracks run longer than any ordinary file
+    /// answers more, and its track may then reach the heap at that size if the disk fails it.
+    fn ceiling(&self) -> usize {
+        CEILING
+    }
 }
 
 /// A body that is already what it should be.
@@ -119,9 +126,13 @@ pub trait Ranged: Source + Sized {
     fn resumed(&self, at: u64) -> Self;
 }
 
+/// A failed read drops the url from its error, since a media url is often signed and the error
+/// ends up in the log.
 impl Source for reqwest::Response {
     async fn chunk(&mut self) -> Result<Option<Bytes>> {
-        Ok(reqwest::Response::chunk(self).await?)
+        Ok(reqwest::Response::chunk(self)
+            .await
+            .map_err(reqwest::Error::without_url)?)
     }
 }
 
@@ -131,6 +142,8 @@ impl Source for reqwest::Response {
 pub struct Spool {
     /// How many bytes from the start have arrived without a gap.
     len: usize,
+    /// The body length the server announced, which a body can size its own bookkeeping by.
+    announced: Option<usize>,
     store: Store,
     /// The ranges that have arrived, sorted and apart, for a spool filled out of order. `None`
     /// for one filled from the front only, where `len` says everything.
@@ -143,26 +156,38 @@ enum Store {
 }
 
 impl Spool {
-    /// A spool on disk, or in memory sized for `total` when the disk will not have one.
-    fn new(total: Option<u64>) -> Self {
+    /// A spool on disk, or in memory sized for `total` when the disk will not have one. The
+    /// track may spool up to `ceiling` bytes.
+    fn new(total: Option<u64>, ceiling: usize) -> Self {
         match spool_file() {
             Ok(file) => Self {
                 len: 0,
+                announced: announced(total, ceiling),
                 store: Store::File(file),
                 filled: None,
             },
             Err(error) => {
                 log::warn!("playback: cannot spool to disk, buffering in memory: {error}");
-                Self::in_memory(total)
+                Self::held(total, ceiling)
             }
         }
     }
 
-    /// A spool in memory, with room reserved for `total` bytes when that is known.
+    /// A spool in memory for a track under the default ceiling, for a test to fill by hand.
+    #[cfg(test)]
     pub(crate) fn in_memory(total: Option<u64>) -> Self {
-        let room = total.map_or(0, |total| usize::try_from(total).unwrap_or(CEILING));
+        Self::held(total, CEILING)
+    }
+
+    /// A spool in memory, with room reserved for `total` bytes when that is known and for the
+    /// preroll when it is not. A body of unknown length then starts out big enough to be mapped
+    /// on its own, rather than growing through a run of heap blocks that each leave a hole. The
+    /// reservation never passes the default ceiling, whatever `ceiling` the track may grow to.
+    fn held(total: Option<u64>, ceiling: usize) -> Self {
+        let room = total.map_or(PREROLL, |total| usize::try_from(total).unwrap_or(CEILING));
         Self {
             len: 0,
+            announced: announced(total, ceiling),
             store: Store::Memory(Vec::with_capacity(room.min(CEILING))),
             filled: None,
         }
@@ -176,6 +201,11 @@ impl Spool {
             self.filled = Some(Vec::new());
         }
         on_disk
+    }
+
+    /// The body length the server announced, if it did.
+    pub fn announced(&self) -> Option<usize> {
+        self.announced
     }
 
     /// How many bytes from the start have arrived, up to the first one that has not.
@@ -204,6 +234,18 @@ impl Spool {
         let mut out = vec![0; range.end.saturating_sub(range.start)];
         self.read_at(range.start, &mut out)?;
         Ok(out)
+    }
+
+    /// The bytes of `range`, which must lie within what has arrived. A spool in memory lends
+    /// them where they are, and only one on disk pays for a copy.
+    pub fn view(&self, range: Range<usize>) -> io::Result<Cow<'_, [u8]>> {
+        match &self.store {
+            Store::Memory(held) => {
+                let end = self.check(range.start, range.end.saturating_sub(range.start))?;
+                Ok(Cow::Borrowed(&held[range.start..end]))
+            }
+            Store::File(_) => self.bytes(range).map(Cow::Owned),
+        }
     }
 
     /// Overwrites the bytes at `at` with `bytes`, which must lie within what has arrived.
@@ -488,8 +530,8 @@ impl<B: Body> Stream<B> {
     /// `total` is the body length when it is known up front.
     pub fn pulling(source: impl Source, total: Option<u64>, body: B) -> Self {
         let spool = match body.confidential() {
-            true => Spool::in_memory(total),
-            false => Spool::new(total),
+            true => Spool::held(total, body.ceiling()),
+            false => Spool::new(total, body.ceiling()),
         };
         Self::spooling(source, spool, total, body)
     }
@@ -696,7 +738,7 @@ impl Stream<Plain> {
     /// A ranged stream, windowed or not. A spool that cannot be scattered, in memory or for a
     /// body of unknown length, is filled in order.
     fn ranged<S: Ranged>(source: S, total: Option<u64>, window: Option<usize>) -> Self {
-        let mut spool = Spool::new(total);
+        let mut spool = Spool::new(total, Plain.ceiling());
         let Some(length) = total
             .and_then(|total| usize::try_from(total).ok())
             .filter(|_| spool.scatter())
@@ -777,9 +819,15 @@ async fn pump<S: Source, B: Body>(
                 return;
             };
             let Buffered { spool, body, .. } = &mut *state;
-            if spool.len() + chunk.len() > CEILING {
+            let ceiling = body.ceiling();
+            if spool
+                .len()
+                .checked_add(chunk.len())
+                .is_none_or(|end| end > ceiling)
+            {
                 drop(state);
-                shared.finish(Some(format!("the track is longer than {CEILING} bytes")));
+                shared.finish(Some(format!("the track is longer than {ceiling} bytes")));
+                progress.send_modify(|_| {});
                 return;
             }
             staged.clear();
@@ -887,8 +935,25 @@ impl<S: Ranged> Ranges<S> {
             }
             if shared.held().is_ok_and(|state| state.complete) {
                 progress.send_modify(|_| {});
+                drop(shared);
+                self.finish().await;
                 return;
             }
+        }
+    }
+
+    /// Asks a run that wrote the last byte for its end, which a source that keeps what passes
+    /// through, as the vault's recording does, takes as the sign to seal it. A run that ended
+    /// at a range that had arrived already is left alone, since it never reached the end.
+    async fn finish(&mut self) {
+        if self.at < self.total {
+            return;
+        }
+        if let Ok(Ok(Some(_))) = tokio::time::timeout(PATIENCE, self.current.chunk()).await {
+            log::debug!(
+                "playback: the stream ran on past the {} bytes it announced",
+                self.total
+            );
         }
     }
 
@@ -1214,6 +1279,13 @@ fn holds(holding: bool, at: usize, read: usize, window: usize) -> bool {
         true => lead > window / 2,
         false => lead > window,
     }
+}
+
+/// An announced body length as a size, when it fits under `ceiling`.
+fn announced(total: Option<u64>, ceiling: usize) -> Option<usize> {
+    total
+        .and_then(|total| usize::try_from(total).ok())
+        .filter(|total| *total <= ceiling)
 }
 
 /// A file in Sonora's cache directory with no name, so nothing is left behind however the

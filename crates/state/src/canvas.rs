@@ -46,6 +46,7 @@ impl Canvas {
             .detach();
         cx.observe(&codec, |this, _, cx| this.retry(cx)).detach();
         cx.subscribe(&session, |this, _, event, cx| match event {
+            SessionEvent::WentOffline => {}
             SessionEvent::SignedOut(slug) => this.forget(slug, cx),
             SessionEvent::SignedIn(_)
             | SessionEvent::Reconnected(_)

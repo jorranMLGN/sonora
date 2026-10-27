@@ -31,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 storage.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 ui.workspace = true
@@ -39,6 +40,9 @@ webview.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 ashpd.workspace = true
 mpris-server.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
 souvlaki.workspace = true
@@ -49,3 +53,6 @@ windows-sys.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation.workspace = true
 objc2-io-kit.workspace = true
+
+[build-dependencies]
+embed.workspace = true

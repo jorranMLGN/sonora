@@ -6,9 +6,10 @@ use anyhow::{Context as _, Result};
 use rodio::Source;
 use rtrb::RingBuffer;
 
-use crate::audio::{Chain, Output, Volume};
-use crate::equalizer::Equalizer;
-use crate::spectrum::Spectrum;
+use crate::audio::{Chain, Meter, PublishedFormat, Volume};
+use crate::equalizer::{Curve, EqualizerWriter};
+use crate::output::Output;
+use crate::spectrum::{Analyzer, Spectrum};
 
 const RING_MILLIS: u32 = 1_000;
 const JITTER_MILLIS: u32 = 2_000;
@@ -94,6 +95,9 @@ struct Jitter {
     skip: Arc<AtomicI64>,
     cut: Arc<AtomicBool>,
     lane: u16,
+    /// Where the output's chain learns the format, told once before the first sample.
+    format: PublishedFormat,
+    published: bool,
 }
 
 impl Sink {
@@ -106,13 +110,20 @@ impl Sink {
         let skip = Arc::new(AtomicI64::new(0));
         let cut = Arc::new(AtomicBool::new(false));
 
-        let output = Output::open(Chain {
-            volume: Volume::new(1.0),
-            equalizer: Equalizer::default(),
-            spectrum: Spectrum::new(),
-            slug: "jam",
-            cast: None,
-        })?;
+        // A listener has no equalizer of its own, and nothing reopens on a device change.
+        let (changed, _) = tokio::sync::mpsc::unbounded_channel();
+        let output = Output::open(
+            Chain {
+                volume: Volume::new(1.0),
+                analyzer: Analyzer::default(),
+                equalizer: EqualizerWriter::new(false, Curve::bands(&[0.; 10])).reader(),
+                spectrum: Spectrum::new(),
+                meter: Meter::default(),
+                slug: "jam",
+                cast: None,
+            },
+            changed,
+        )?;
         output.sink().append(Jitter {
             samples,
             channels,
@@ -121,6 +132,8 @@ impl Sink {
             skip: skip.clone(),
             cut: cut.clone(),
             lane: 0,
+            format: output.format().clone(),
+            published: false,
         });
         output.sink().play();
 
@@ -166,6 +179,10 @@ impl Iterator for Jitter {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
+        if !self.published {
+            self.format.publish(self.rate, self.channels);
+            self.published = true;
+        }
         if self.lane == 0 {
             self.correct();
             self.played.fetch_add(1, Ordering::Relaxed);

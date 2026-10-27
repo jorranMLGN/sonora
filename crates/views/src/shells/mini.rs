@@ -117,7 +117,10 @@ impl Render for MiniPlayer {
         let held = self.playback.read(cx);
         let track = held.track().cloned();
         let seekable = track.is_some();
-        let progress = self.pending.unwrap_or_else(|| held.progress());
+        let progress = self.pending.unwrap_or_else(|| {
+            let total = held.track().map(|track| track.duration).unwrap_or_default();
+            crate::shared::transport::fraction(held.position(), total)
+        });
         let elapsed = held.position();
         let total = track
             .as_ref()

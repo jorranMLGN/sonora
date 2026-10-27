@@ -26,7 +26,11 @@ pub(crate) const VIDEO: Site = Site {
 
 /// The plain-YouTube provider, with credentials of its own beside YouTube Music's.
 pub fn provider() -> YouTubeProvider {
-    YouTubeProvider::for_site(&VIDEO, credentials::dir(VIDEO.slug))
+    YouTubeProvider::for_site(
+        &VIDEO,
+        credentials::dir(VIDEO.slug),
+        credentials::root().join(VIDEO.slug),
+    )
 }
 
 fn video_client(api: Arc<YtMusic>, owner: Option<String>) -> Arc<dyn MusicApi> {
