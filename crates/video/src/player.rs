@@ -21,6 +21,9 @@ const IDLE: Duration = Duration::from_millis(50);
 const FIRST_WIDTH: u32 = 360;
 /// `seen` before the first `watch`, so a fresh player counts as unwatched.
 const NEVER: u64 = u64::MAX;
+/// How many bytes of decoded frames one clip may keep to replay its laps: a few seconds of
+/// Canvas at the width of the queue fits, a fullscreen one usually does not and decodes.
+const KEPT: usize = 192 << 20;
 
 /// One decoded picture, BGRA, the way gpui's `RenderImage` wants it. `index` only grows, so a
 /// view can tell a new frame from the one it already holds.
@@ -50,6 +53,34 @@ pub struct Player {
 struct Clip {
     packets: Vec<Vec<u8>>,
     frame: Duration,
+}
+
+/// The frames of one whole lap, kept so the next laps replay them instead of decoding the clip
+/// again, which is most of what a Canvas costs. A lap is kept only when it was decoded at one
+/// width from its first packet and fits `budget`; otherwise every lap decodes as before.
+struct Reel {
+    budget: usize,
+    state: Spool,
+}
+
+/// Where a `Reel` stands with the lap it keeps.
+enum Spool {
+    /// Nothing kept, and nothing being kept.
+    Idle,
+    /// Keeping the lap being decoded at `width`.
+    Recording {
+        width: u32,
+        frames: Vec<Arc<Frame>>,
+        bytes: usize,
+    },
+    /// A lap at `width` did not fit, so laps at that width are not kept again.
+    Oversized { width: u32 },
+    /// Replaying a kept lap at `width`; `at` is the frame shown next.
+    Playing {
+        width: u32,
+        frames: Vec<Arc<Frame>>,
+        at: usize,
+    },
 }
 
 impl Player {
@@ -109,6 +140,81 @@ impl Drop for Player {
     }
 }
 
+impl Reel {
+    fn new(budget: usize) -> Self {
+        Self {
+            budget,
+            state: Spool::Idle,
+        }
+    }
+
+    /// A lap starts decoding from its first packet at `width`.
+    fn begin(&mut self, width: u32) {
+        self.state = match std::mem::replace(&mut self.state, Spool::Idle) {
+            Spool::Oversized { width: failed } if failed == width => Spool::Oversized { width },
+            _ => Spool::Recording {
+                width,
+                frames: Vec::new(),
+                bytes: 0,
+            },
+        };
+    }
+
+    /// A frame of the lap being decoded, asked for at `width`.
+    fn keep(&mut self, frame: &Arc<Frame>, width: u32) {
+        let Spool::Recording {
+            width: recording,
+            frames,
+            bytes,
+        } = &mut self.state
+        else {
+            return;
+        };
+        if *recording != width {
+            self.state = Spool::Idle;
+            return;
+        }
+        *bytes += frame.pixels.len();
+        match *bytes <= self.budget {
+            true => frames.push(frame.clone()),
+            false => self.state = Spool::Oversized { width },
+        }
+    }
+
+    /// The lap being decoded reached its last packet.
+    fn end(&mut self) {
+        self.state = match std::mem::replace(&mut self.state, Spool::Idle) {
+            Spool::Recording { width, frames, .. } if !frames.is_empty() => Spool::Playing {
+                width,
+                frames,
+                at: 0,
+            },
+            Spool::Recording { .. } => Spool::Idle,
+            other => other,
+        };
+    }
+
+    /// The next kept frame to show at `width`, or nothing when the clip has to be decoded:
+    /// no lap is kept, or the one kept was for another width, which is then let go.
+    fn replay(&mut self, width: u32) -> Option<Arc<Frame>> {
+        let Spool::Playing {
+            width: kept,
+            frames,
+            at,
+        } = &mut self.state
+        else {
+            return None;
+        };
+        if *kept != width {
+            self.state = Spool::Idle;
+            return None;
+        }
+        let frame = frames[*at].clone();
+        *at = (*at + 1) % frames.len();
+        Some(frame)
+    }
+}
+
 fn parse(bytes: &[u8]) -> Result<Clip> {
     let mut mp4 = mp4::Mp4Reader::read_header(Cursor::new(bytes), bytes.len() as u64)
         .context("cannot read the canvas")?;
@@ -136,8 +242,10 @@ fn parse(bytes: &[u8]) -> Result<Clip> {
 
 /// The loop. The first packet carries SPS/PPS and an IDR, so feeding it again restarts the
 /// decoder cleanly at every lap. `Flush::NoFlush` holds two frames back, so the last two of a
-/// lap are skipped; at 25–30 fps that is invisible.
+/// lap are skipped; at 25–30 fps that is invisible. Once a whole lap is kept in `Reel`, the
+/// laps after it replay those frames and the decoder rests until the width changes.
 fn run(clip: Clip, mut decoder: Decoder, shared: &Shared) {
+    let mut reel = Reel::new(KEPT);
     let mut next = 0usize;
     let mut index = 0u64;
     let mut due = Instant::now();
@@ -150,29 +258,127 @@ fn run(clip: Clip, mut decoder: Decoder, shared: &Shared) {
             due = Instant::now();
             continue;
         }
-        match decoder.decode(&clip.packets[next]) {
-            Ok(Some(image)) => {
-                let width = shared.width.load(Ordering::Relaxed);
-                let (pixels, width, height) = convert::bgra(&image, width);
-                index += 1;
-                if let Ok(mut latest) = shared.latest.lock() {
-                    *latest = Some(Arc::new(Frame {
-                        pixels,
-                        width,
-                        height,
-                        index,
-                    }));
+        let width = shared.width.load(Ordering::Relaxed);
+        match reel.replay(width) {
+            Some(frame) => show(shared, frame),
+            None => {
+                if next == 0 {
+                    reel.begin(width);
+                }
+                match decoder.decode(&clip.packets[next]) {
+                    Ok(Some(image)) => {
+                        let (pixels, width_drawn, height) = convert::bgra(&image, width);
+                        index += 1;
+                        let frame = Arc::new(Frame {
+                            pixels,
+                            width: width_drawn,
+                            height,
+                            index,
+                        });
+                        reel.keep(&frame, width);
+                        show(shared, frame);
+                    }
+                    Ok(None) => {}
+                    Err(error) => log::debug!("canvas: frame {next} did not decode: {error}"),
+                }
+                next = (next + 1) % clip.packets.len();
+                if next == 0 {
+                    reel.end();
                 }
             }
-            Ok(None) => {}
-            Err(error) => log::debug!("canvas: frame {next} did not decode: {error}"),
         }
-        next = (next + 1) % clip.packets.len();
         due += clip.frame;
         let wait = due.saturating_duration_since(Instant::now());
         if wait.is_zero() {
             due = Instant::now();
         }
         std::thread::sleep(wait);
+    }
+}
+
+/// Makes `frame` the newest one a view picks up.
+fn show(shared: &Shared, frame: Arc<Frame>) {
+    if let Ok(mut latest) = shared.latest.lock() {
+        *latest = Some(frame);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(index: u64, width: u32) -> Arc<Frame> {
+        Arc::new(Frame {
+            pixels: vec![0; (width * 2 * 4) as usize],
+            width,
+            height: 2,
+            index,
+        })
+    }
+
+    fn lap(reel: &mut Reel, width: u32, frames: &[u64]) {
+        reel.begin(width);
+        for index in frames {
+            reel.keep(&frame(*index, width), width);
+        }
+        reel.end();
+    }
+
+    fn indices(reel: &mut Reel, width: u32, count: usize) -> Vec<Option<u64>> {
+        (0..count)
+            .map(|_| reel.replay(width).map(|frame| frame.index))
+            .collect()
+    }
+
+    #[test]
+    fn a_whole_lap_that_fits_is_replayed_round_and_round() {
+        let mut reel = Reel::new(1 << 20);
+        assert!(reel.replay(4).is_none());
+        lap(&mut reel, 4, &[1, 2, 3]);
+        assert_eq!(
+            indices(&mut reel, 4, 5),
+            [Some(1), Some(2), Some(3), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn a_lap_over_the_budget_is_not_kept_nor_tried_again_at_that_width() {
+        let mut reel = Reel::new(100);
+        lap(&mut reel, 4, &[1, 2, 3, 4]);
+        assert!(reel.replay(4).is_none());
+        reel.begin(4);
+        assert!(matches!(reel.state, Spool::Oversized { width: 4 }));
+        lap(&mut reel, 2, &[5, 6]);
+        assert_eq!(indices(&mut reel, 2, 2), [Some(5), Some(6)]);
+    }
+
+    #[test]
+    fn another_width_lets_the_kept_lap_go() {
+        let mut reel = Reel::new(1 << 20);
+        lap(&mut reel, 4, &[1, 2]);
+        assert_eq!(reel.replay(4).map(|frame| frame.index), Some(1));
+        assert!(reel.replay(8).is_none());
+        assert!(reel.replay(4).is_none());
+        lap(&mut reel, 8, &[3]);
+        assert_eq!(indices(&mut reel, 8, 2), [Some(3), Some(3)]);
+    }
+
+    #[test]
+    fn a_lap_whose_width_changed_halfway_is_not_kept() {
+        let mut reel = Reel::new(1 << 20);
+        reel.begin(4);
+        reel.keep(&frame(1, 4), 4);
+        reel.keep(&frame(2, 8), 8);
+        reel.end();
+        assert!(reel.replay(8).is_none());
+        assert!(reel.replay(4).is_none());
+    }
+
+    #[test]
+    fn a_lap_joined_halfway_is_not_kept() {
+        let mut reel = Reel::new(1 << 20);
+        reel.keep(&frame(1, 4), 4);
+        reel.end();
+        assert!(reel.replay(4).is_none());
     }
 }
