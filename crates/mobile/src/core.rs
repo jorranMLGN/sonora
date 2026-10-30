@@ -412,6 +412,7 @@ impl Events {
     }
 
     /// Hands a log record to the listener; see `EventListener::on_log`.
+    #[cfg(target_os = "ios")]
     pub fn log(&self, level: &str, target: &str, message: String) {
         self.with(|listener| listener.on_log(level.to_owned(), target.to_owned(), message));
     }
