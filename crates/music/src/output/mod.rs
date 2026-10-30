@@ -29,7 +29,9 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use cpal::traits::{DeviceTrait as _, HostTrait as _};
-use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
+use rodio::buffer::SamplesBuffer;
+use rodio::queue::SourcesQueueOutput;
+use rodio::{ChannelCount, DeviceSinkBuilder, MixerDeviceSink, SampleRate, Source};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
@@ -606,7 +608,10 @@ impl Output {
     pub fn open(chain: Chain, changed: UnboundedSender<()>) -> Result<Self> {
         let device = Device::acquire()?;
         device.listen(changed);
-        let (sink, source) = rodio::Player::new();
+        let Format { rate, channels, .. } = device.info.format;
+        let channels = ChannelCount::new(channels).context("the output has no channels")?;
+        let rate = SampleRate::new(rate).context("the output has no sample rate")?;
+        let (sink, source) = primed_player(channels, rate);
         let format = audio::PublishedFormat::default();
         let integer = matches!(device.info.format.sample, Sample::Integer(_));
         device.add(chain.apply(source, format.clone(), integer));
@@ -1098,6 +1103,19 @@ fn open_stream(
     Ok((stream, frames))
 }
 
+/// A player whose queue already reports the device's format. An empty rodio queue reports rodio's
+/// 48 kHz mono default, so on a device at any other rate the mixer would resample an idle
+/// engine's silence for as long as it sits there; one frame of silence fixes what it reports.
+fn primed_player(channels: ChannelCount, rate: SampleRate) -> (rodio::Player, SourcesQueueOutput) {
+    let (player, source) = rodio::Player::new();
+    player.append(SamplesBuffer::new(
+        channels,
+        rate,
+        vec![0.0; usize::from(channels.get())],
+    ));
+    (player, source)
+}
+
 /// Looks at `device` every `DEVICE_POLL` for as long as it is open, playing or not, and retires
 /// it once it is outdated, so its outputs reopen and a settings page reads the new stream. A sink
 /// whose port or rate moved is announced the same way.
@@ -1122,5 +1140,32 @@ fn spawn_watcher(device: Weak<Device>) {
         });
     if let Err(error) = spawned {
         log::warn!("output: cannot watch the output device: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZero;
+
+    use super::*;
+
+    /// An idle player has to report the device's format, or rodio's mixer resamples its silence
+    /// from rodio's 48 kHz mono default for as long as it sits there.
+    #[test]
+    fn an_idle_player_reports_the_device_format() {
+        let (_player, mut source) =
+            primed_player(NonZero::new(2).unwrap(), NonZero::new(44_100).unwrap());
+        assert_eq!(
+            (source.channels().get(), source.sample_rate().get()),
+            (2, 44_100)
+        );
+
+        for _ in 0..64 {
+            assert_eq!(source.next(), Some(0.0));
+        }
+        assert_eq!(
+            (source.channels().get(), source.sample_rate().get()),
+            (2, 44_100)
+        );
     }
 }

@@ -13,6 +13,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by the artists you follow or play most, from every service you are signed in to, each release
   listed once.
 
+### Fixed
+
+- Playback no longer stutters on outputs that run at 44.1 kHz, such as many Bluetooth
+  headphones, where Sonora used most of a CPU core while playing.
+
 ## [0.45.0] - 2026-10-28
 
 ### Added
