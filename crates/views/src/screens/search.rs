@@ -461,7 +461,7 @@ impl SearchView {
         if let (Hit::Album(album), false) = (hit, compact) {
             return cards::released(
                 format!("album-artist-{place}"),
-                album.year,
+                cards::When::Year(album.year),
                 None,
                 &album.artist_refs,
                 album.artists.clone(),

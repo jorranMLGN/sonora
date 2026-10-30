@@ -12,6 +12,7 @@ use music::{Album, MusicApi, Shape, Track};
 use serde::{Deserialize, Serialize};
 use storage::Cache;
 
+use crate::releases::day_of;
 use crate::{History, HistoryState, Io, Library, LibraryPart, Session, SessionEvent, Shelf, join};
 
 /// How many followed artists are asked for their albums, most recently followed first.
@@ -615,33 +616,6 @@ fn release_key(album: &Album) -> (String, String) {
         .first()
         .map_or(album.artists.as_str(), |artist| artist.name.as_str());
     (album.name.to_lowercase(), artist.to_lowercase())
-}
-
-/// Days since 1970-01-01 for a `YYYY-MM-DD` date. A year or a year and month alone is not a
-/// day, so it answers none.
-fn day_of(date: &str) -> Option<i64> {
-    let mut parts = date.splitn(3, '-');
-    let year: i64 = parts.next()?.parse().ok()?;
-    let month: i64 = parts.next()?.parse().ok()?;
-    let day: i64 = parts
-        .next()?
-        .split(|letter: char| !letter.is_ascii_digit())
-        .next()?
-        .parse()
-        .ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    // Howard Hinnant's days_from_civil.
-    let year = match month <= 2 {
-        true => year - 1,
-        false => year,
-    };
-    let era = year.div_euclid(400);
-    let of_era = year - era * 400;
-    let of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
-    Some(era * 146_097 + of_cycle - 719_468)
 }
 
 /// A cached list, or none when it is missing or unreadable.
