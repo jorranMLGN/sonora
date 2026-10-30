@@ -232,8 +232,25 @@ pub fn track(value: &Value) -> Option<Track> {
         disc_number: number(value, &["DISK_NUMBER"]).unwrap_or(1) as u32,
         tags: Vec::new(),
         languages: Vec::new(),
+        release_date: released(value)
+            .or_else(|| released(&album))
+            .unwrap_or_default()
+            .to_owned(),
         credits: Vec::new(),
     })
+}
+
+/// The first known release date `value` carries. The gateway spells an unknown date
+/// `0000-00-00`, which counts as none.
+fn released(value: &Value) -> Option<&str> {
+    [
+        "PHYSICAL_RELEASE_DATE",
+        "DIGITAL_RELEASE_DATE",
+        "release_date",
+    ]
+    .iter()
+    .filter_map(|key| value.get(key)?.as_str())
+    .find(|date| !date.is_empty() && !date.starts_with("0000"))
 }
 
 pub fn track_list(value: &Value) -> Vec<Track> {
@@ -348,4 +365,34 @@ pub fn saved_artist(value: &Value) -> Option<SavedArtist> {
         cover: artist_picture(value, 300),
         added_at: when(value, &["ADDED_AT", "time_add", "DATE_ADD"]),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_gateway_song_keeps_its_physical_release() {
+        let song = json!({"SNG_ID": "1", "SNG_TITLE": "Song", "DURATION": "200",
+            "PHYSICAL_RELEASE_DATE": "2019-05-17", "DIGITAL_RELEASE_DATE": "2019-05-10"});
+        assert_eq!(track(&song).unwrap().release_date, "2019-05-17");
+    }
+
+    #[test]
+    fn a_public_track_falls_back_to_its_album() {
+        let song = json!({"id": 1, "title": "Song", "duration": 200,
+            "album": {"id": 2, "title": "Album", "release_date": "2001-03-07"}});
+        assert_eq!(track(&song).unwrap().release_date, "2001-03-07");
+    }
+
+    #[test]
+    fn an_unknown_release_is_empty() {
+        let song = json!({"SNG_ID": "1", "SNG_TITLE": "Song", "DURATION": "200",
+            "PHYSICAL_RELEASE_DATE": "0000-00-00"});
+        assert_eq!(track(&song).unwrap().release_date, "");
+        let bare = json!({"id": 1, "title": "Song", "duration": 200});
+        assert_eq!(track(&bare).unwrap().release_date, "");
+    }
 }

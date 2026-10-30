@@ -57,6 +57,15 @@ pub struct Track {
     pub waveform_url: Option<String>,
     #[serde(default)]
     pub media: Media,
+    /// The release date the uploader set, as an ISO timestamp; often null.
+    #[serde(default)]
+    pub release_date: Option<String>,
+    /// The release date, or the upload time when the uploader set none.
+    #[serde(default)]
+    pub display_date: Option<String>,
+    /// When the track was uploaded.
+    #[serde(default)]
+    pub created_at: Option<String>,
     pub user: User,
 }
 
@@ -173,6 +182,12 @@ pub fn track(raw: Track) -> Model {
         disc_number: 1,
         tags: raw.genre.into_iter().collect(),
         languages: Vec::new(),
+        // an upload is a release on soundcloud, so the upload day stands in for a missing one
+        release_date: day(raw
+            .release_date
+            .as_deref()
+            .or(raw.display_date.as_deref())
+            .or(raw.created_at.as_deref())),
         credits: Vec::new(),
     }
 }
@@ -304,6 +319,7 @@ pub fn album(raw: Playlist) -> AlbumModel {
     );
     let artist = raw.user.username.clone();
     let release_type = release_type(&raw.set_type).unwrap_or(ReleaseType::Album);
+    let release_date = day(raw.release_date.as_deref());
     AlbumModel {
         id: raw.id.to_string(),
         name: raw.title,
@@ -315,13 +331,22 @@ pub fn album(raw: Playlist) -> AlbumModel {
         cover: artwork(raw.artwork_url.as_deref(), "t500x500"),
         cover_large: artwork(raw.artwork_url.as_deref(), "t500x500"),
         release_type,
-        year: 0,
+        year: release_date
+            .get(..4)
+            .and_then(|year| year.parse().ok())
+            .unwrap_or(0),
         track_count: raw.track_count,
-        release_date: raw.release_date.unwrap_or_default(),
+        release_date,
         label: String::new(),
         copyrights: Vec::new(),
         added_at: None,
     }
+}
+
+/// The `YYYY-MM-DD` day of an ISO timestamp, or nothing when there is none.
+fn day(timestamp: Option<&str>) -> String {
+    let timestamp = timestamp.map(str::trim).unwrap_or_default();
+    timestamp.get(..10).unwrap_or(timestamp).to_owned()
 }
 
 fn drm_only(media: &Media) -> bool {
@@ -448,6 +473,27 @@ mod tests {
         let converted = album(raw);
         assert!(!converted.name.is_empty());
         assert!(!converted.artists.is_empty());
+    }
+
+    #[test]
+    fn a_track_is_dated_by_its_release_else_its_upload() {
+        let mut raw = fixture();
+        assert_eq!(track(raw.clone()).release_date, "2003-06-02");
+        raw.release_date = None;
+        assert_eq!(track(raw.clone()).release_date, "2007-09-22");
+        raw.display_date = None;
+        assert_eq!(track(raw.clone()).release_date, "2007-09-22");
+        raw.created_at = None;
+        assert_eq!(track(raw).release_date, "");
+    }
+
+    #[test]
+    fn an_album_release_is_a_day_and_a_year() {
+        let raw: Playlist =
+            serde_json::from_str(include_str!("fixtures/playlist_album.json")).unwrap();
+        let converted = album(raw);
+        assert_eq!(converted.release_date, "2026-06-04");
+        assert_eq!(converted.year, 2026);
     }
 
     #[test]

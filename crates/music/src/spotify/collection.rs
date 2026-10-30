@@ -145,6 +145,12 @@ fn track_from(uri: &str, track: &TrackMessage) -> Track {
         disc_number: track.disc_number.unwrap_or_default().max(0) as u32,
         tags: track.tags.clone(),
         languages: track.language_of_performance.clone(),
+        release_date: track
+            .album
+            .as_ref()
+            .and_then(|album| album.date.as_ref())
+            .map(wire::day)
+            .unwrap_or_default(),
         credits: track
             .artist_with_role
             .iter()
@@ -217,4 +223,49 @@ fn cover_url(album: &AlbumMessage) -> Option<String> {
         })?;
 
     wire::image_url(smallest.file_id())
+}
+
+#[cfg(test)]
+mod tests {
+    use librespot_protocol::metadata::Date;
+
+    use super::*;
+
+    fn dated(year: i32, month: i32, day: i32) -> TrackMessage {
+        let mut date = Date::new();
+        date.set_year(year);
+        date.set_month(month);
+        date.set_day(day);
+        let mut album = AlbumMessage::new();
+        album.date = Some(date).into();
+        let mut track = TrackMessage::new();
+        track.album = Some(album).into();
+        track
+    }
+
+    #[test]
+    fn a_track_carries_its_albums_day() {
+        let track = track_from("spotify:track:x", &dated(1975, 10, 31));
+        assert_eq!(track.release_date, "1975-10-31");
+    }
+
+    #[test]
+    fn a_partial_album_date_stays_partial() {
+        assert_eq!(
+            track_from("spotify:track:x", &dated(1975, 10, 0)).release_date,
+            "1975-10"
+        );
+        assert_eq!(
+            track_from("spotify:track:x", &dated(1975, 0, 0)).release_date,
+            "1975"
+        );
+    }
+
+    #[test]
+    fn a_track_without_an_album_date_has_none() {
+        assert_eq!(
+            track_from("spotify:track:x", &TrackMessage::new()).release_date,
+            ""
+        );
+    }
 }

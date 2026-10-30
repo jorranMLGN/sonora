@@ -32,6 +32,12 @@ pub fn track(song: Child, cover: Option<String>) -> Track {
         disc_number: song.disc_number.unwrap_or(1).max(1) as u32,
         tags: Vec::new(),
         languages: Vec::new(),
+        // subsonic dates a song by its year alone
+        release_date: song
+            .year
+            .filter(|year| *year > 0)
+            .map(|year| year.to_string())
+            .unwrap_or_default(),
         credits: Vec::new(),
     }
 }
@@ -164,4 +170,26 @@ pub(crate) fn artists_of(
         }],
     };
     (name, refs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song(year: Option<i32>) -> Child {
+        serde_json::from_value(serde_json::json!({
+            "id": "1",
+            "isDir": false,
+            "title": "Song",
+            "year": year,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_song_is_dated_by_its_year() {
+        assert_eq!(track(song(Some(1991)), None).release_date, "1991");
+        assert_eq!(track(song(Some(0)), None).release_date, "");
+        assert_eq!(track(song(None), None).release_date, "");
+    }
 }

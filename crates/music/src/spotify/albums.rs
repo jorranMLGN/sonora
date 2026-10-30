@@ -160,20 +160,7 @@ fn album_from(uri: &str, album: &AlbumMessage) -> Album {
         release_type: release_type(album.type_()),
         year: album.date.as_ref().map(|date| date.year()).unwrap_or(0),
         track_count: track_ids(album).len() as u32,
-        release_date: album
-            .date
-            .as_ref()
-            .map(|date| {
-                let year = date.year();
-                let month = date.month();
-                let day = date.day();
-                match (month > 0, day > 0) {
-                    (true, true) => format!("{year:04}-{month:02}-{day:02}"),
-                    (true, false) => format!("{year:04}-{month:02}"),
-                    _ => format!("{year:04}"),
-                }
-            })
-            .unwrap_or_default(),
+        release_date: album.date.as_ref().map(wire::day).unwrap_or_default(),
         label: album.label().to_owned(),
         copyrights: album
             .copyright

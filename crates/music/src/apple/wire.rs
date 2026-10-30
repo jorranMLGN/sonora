@@ -1076,6 +1076,7 @@ fn song_as(value: &Resource, id: String) -> Option<Track> {
             .map(str::to_owned)
             .collect(),
         languages: Vec::new(),
+        release_date: text(&attributes.release_date).unwrap_or_default(),
         credits: Vec::new(),
     })
 }
@@ -1176,6 +1177,14 @@ mod tests {
         );
         // The relationship is what makes an artist clickable.
         assert_eq!(track.artist_refs[0].id.as_deref(), Some("555"));
+    }
+
+    #[test]
+    fn a_catalog_song_keeps_its_release_date() {
+        let mut row = catalog_song();
+        row["attributes"]["releaseDate"] = Value::from("1983-03-07");
+        assert_eq!(song(&read(&row)).unwrap().release_date, "1983-03-07");
+        assert_eq!(song(&read(&catalog_song())).unwrap().release_date, "");
     }
 
     #[test]

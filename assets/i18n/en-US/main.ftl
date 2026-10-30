@@ -95,6 +95,7 @@ column-plays = Plays
 column-name = Name
 column-owner = Owner
 column-year = Year
+column-released = Released
 column-tracks = Tracks
 
 # track menu

@@ -12,6 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A New releases page in the sidebar shows the albums, singles and EPs from the last four weeks
   by the artists you follow or play most, from every service you are signed in to, each release
   listed once.
+- Search shows when each song and album came out, and sorts by release date on the All, Songs
+  and Albums tabs, newest or oldest first.
 
 ### Fixed
 

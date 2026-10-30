@@ -658,6 +658,7 @@ mod tests {
             disc_number: 0,
             tags: Vec::new(),
             languages: Vec::new(),
+            release_date: String::new(),
             credits: Vec::new(),
         }
     }

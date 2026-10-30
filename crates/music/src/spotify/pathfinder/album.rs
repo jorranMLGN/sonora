@@ -274,6 +274,7 @@ fn track_from(track: PathTrack, album: &Album) -> Result<Track> {
         disc_number: track.disc_number,
         tags: Vec::new(),
         languages: Vec::new(),
+        release_date: album.release_date.clone(),
         credits: Vec::new(),
     })
 }
@@ -358,6 +359,7 @@ mod tests {
         assert_eq!(page.total, 2);
         assert_eq!(page.tracks[0].id.as_deref(), Some("abc123"));
         assert_eq!(page.tracks[0].playcount, Some(462_537_503));
+        assert_eq!(page.tracks[0].release_date, "2005");
         assert!(page.tracks[0].playable);
         assert!(page.tracks[0].explicit);
     }
