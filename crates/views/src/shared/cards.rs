@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, ElementId, Entity, FontWeight, SharedString, div};
+use gpui::{AnyElement, App, ElementId, Entity, FontWeight, SharedString, div};
 use i18n::t;
 use music::{Album, ArtistRef, Genre, GenreItem, Playlist, ReleaseType, SavedArtist, Track};
 use router::{Destination, navigate};
@@ -7,6 +7,7 @@ use state::{Origin, Playback};
 use ui::{ActiveTheme as _, Card, InlineLinks, Pinnable, Text, Theme};
 
 use crate::shared::cells;
+use crate::shared::hero::release_date_label;
 use crate::shared::menus::{CardMenu, Item};
 use crate::shared::pins::Pinned as _;
 
@@ -33,14 +34,7 @@ pub(crate) fn album_card(
         .weight(FontWeight::SEMIBOLD)
         .underline()
         .hint()
-        .bare_meta(released(
-            SharedString::new_static("album-card-artist"),
-            album.year,
-            Some(album.release_type),
-            &album.artist_refs,
-            album.artists.clone(),
-            cx.theme(),
-        ))
+        .bare_meta(album_meta(album, When::Year(album.year), cx.theme()))
         .play(playing, move |_, _, cx| {
             toggled.update(cx, |playback, cx| playback.toggle_origin(&origin, cx));
         })
@@ -274,7 +268,7 @@ pub(crate) fn listed(
             i18n::lookup(release_key(album.release_type), None),
             released(
                 SharedString::new_static("listed-artist"),
-                album.year,
+                When::Year(album.year),
                 None,
                 &album.artist_refs,
                 album.artists.clone(),
@@ -335,9 +329,29 @@ pub(crate) fn release_key(kind: ReleaseType) -> &'static str {
 /// compilation's twentieth credit could never be read anyway, while every name past the
 /// first few costs the grid an interactive element and a string on every frame a scroll
 /// asks for.
+/// The line under an album card's title: when it came out, then its artists.
+pub(crate) fn album_meta(album: &Album, when: When, theme: &Theme) -> AnyElement {
+    released(
+        SharedString::new_static("album-card-artist"),
+        when,
+        Some(album.release_type),
+        &album.artist_refs,
+        album.artists.clone(),
+        theme,
+    )
+    .into_any_element()
+}
+
+/// What a release line names before its artists: the year, or the whole day it came out.
+pub(crate) enum When<'a> {
+    Year(i32),
+    /// A `YYYY-MM-DD` release date, shown as a full date.
+    Day(&'a str),
+}
+
 pub(crate) fn released(
     id: impl Into<SharedString>,
-    year: i32,
+    when: When,
     kind: Option<ReleaseType>,
     artists: &[ArtistRef],
     fallback: impl Into<SharedString>,
@@ -345,9 +359,12 @@ pub(crate) fn released(
 ) -> impl IntoElement {
     let small = theme.text(Text::Small);
     let muted = theme.muted_foreground;
-    let year = match year {
-        0 => kind.map(|kind| i18n::lookup(release_key(kind), None)),
-        year => Some(SharedString::from(year.to_string())),
+    // a whole date is too long to share a line, so it sits above the artists
+    let stacked = matches!(when, When::Day(date) if !date.is_empty());
+    let year = match when {
+        When::Day(date) if !date.is_empty() => Some(release_date_label(date)),
+        When::Day(_) | When::Year(0) => kind.map(|kind| i18n::lookup(release_key(kind), None)),
+        When::Year(year) => Some(SharedString::from(year.to_string())),
     };
     let fallback = fallback.into();
     let credited: Vec<ArtistRef> = artists
@@ -361,18 +378,21 @@ pub(crate) fn released(
         .text_size(small)
         .truncate();
 
-    div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .min_w_0()
-        .text_size(small)
-        .text_color(muted)
-        .when_some(year, |this, year| {
-            this.child(div().flex_none().child(year))
-                .when(named, |this| this.child(div().flex_none().child(BULLET)))
-        })
-        .child(artists)
+    let line = div().flex().min_w_0().text_size(small).text_color(muted);
+    match stacked {
+        true => line
+            .flex_col()
+            .when_some(year, |this, year| this.child(div().truncate().child(year)))
+            .child(artists),
+        false => line
+            .items_center()
+            .gap_1()
+            .when_some(year, |this, year| {
+                this.child(div().flex_none().child(year))
+                    .when(named, |this| this.child(div().flex_none().child(BULLET)))
+            })
+            .child(artists),
+    }
 }
 
 pub(crate) fn imported_playlist_card(

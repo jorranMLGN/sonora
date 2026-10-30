@@ -57,8 +57,8 @@ impl Group {
     }
 }
 
-/// One navigation row per signed-in provider, in provider order, with History and Settings
-/// around them.
+/// One navigation row per signed-in provider, in provider order, with Home, Search and New
+/// releases above them and History and Settings below.
 fn nav(session: &Session) -> Vec<(Option<NavEntry>, &'static str, Destination)> {
     let mut nav = vec![
         (Some(NavEntry::Home), "icons/house.svg", Destination::Home),
@@ -66,6 +66,11 @@ fn nav(session: &Session) -> Vec<(Option<NavEntry>, &'static str, Destination)> 
             Some(NavEntry::Search),
             "icons/search.svg",
             Destination::Search,
+        ),
+        (
+            Some(NavEntry::Releases),
+            "icons/disc-3.svg",
+            Destination::Releases,
         ),
     ];
     nav.extend(libraries(session).map(|slug| {

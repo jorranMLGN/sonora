@@ -33,6 +33,7 @@ impl LibraryTab {
 pub enum NavEntry {
     Home,
     Search,
+    Releases,
     History,
     Library(&'static str),
     Pins,
@@ -41,7 +42,7 @@ pub enum NavEntry {
 impl NavEntry {
     /// One library entry per signed-in provider, in provider order, with the pins last.
     pub fn entries(slugs: &[&'static str]) -> Vec<Self> {
-        let mut entries = vec![Self::Home, Self::Search, Self::History];
+        let mut entries = vec![Self::Home, Self::Search, Self::Releases, Self::History];
         entries.extend(slugs.iter().copied().map(Self::Library));
         entries.push(Self::Pins);
         entries
@@ -51,6 +52,7 @@ impl NavEntry {
         match self {
             Self::Home => "home",
             Self::Search => "search",
+            Self::Releases => "releases",
             Self::History => "history",
             Self::Library(slug) => slug,
             Self::Pins => "sidebar-pins",
@@ -61,6 +63,7 @@ impl NavEntry {
         match self {
             Self::Home => "nav-home",
             Self::Search => "nav-search",
+            Self::Releases => "nav-releases",
             Self::History => "nav-history",
             Self::Library(slug) if slug == LOCAL => "nav-local",
             Self::Library(_) => "nav-library",
@@ -371,6 +374,8 @@ impl SettingsTab {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Destination {
     Home,
+    /// New releases from the user's artists, across every signed-in provider.
+    Releases,
     History,
     Library(&'static str, LibraryTab),
     Album(SharedString),

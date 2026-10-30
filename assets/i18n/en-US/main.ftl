@@ -21,6 +21,7 @@ number-group = { "," }
 # navigation
 nav-history = History
 nav-home = Home
+nav-releases = New releases
 nav-search = Search
 nav-library = Your Library
 nav-settings = Settings
@@ -300,6 +301,16 @@ history-not-loaded = Listening history could not be loaded.
 history-clear = Clear history
 history-clear-title = Clear listening history
 history-clear-confirm = Every play is removed from this device. This cannot be undone.
+releases-eyebrow = From your artists
+releases-window =
+    { $days ->
+        [one] Out in the last day
+       *[other] Out in the last { $days } days
+    }
+releases-empty = Nothing new from your artists lately.
+releases-empty-detail = Follow artists or keep listening, and their new albums, singles and EPs show up here.
+releases-failed = New releases could not be loaded.
+releases-signed-out = Sign in to a provider to see new releases from your artists.
 filter-library = Filter your library
 filter-album = Filter album tracks
 filter-reset = Reset filters
@@ -543,6 +554,11 @@ count-tracks =
     { $count ->
         [one] { $count } track
        *[other] { $count } tracks
+    }
+count-releases =
+    { $count ->
+        [one] { $count } release
+       *[other] { $count } releases
     }
 
 # running times

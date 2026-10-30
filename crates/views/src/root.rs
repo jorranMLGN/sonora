@@ -11,8 +11,8 @@ use input::{
 use router::{Destination, NavigationEvent, Screen, back, forward, navigate};
 use state::{
     ArtistDetail, Detail, Discover, GenreDetails, Genres, HistoryState, Home, Io, Library,
-    LibraryState, Network, Playback, Profile, Queue, Reconnected, SYSTEM_FONT, Scan, Search,
-    Session, SessionEvent, SessionState, Shelf, SideTab, SongDetail, Sonora,
+    LibraryState, Network, Playback, Profile, Queue, Reconnected, Releases, SYSTEM_FONT, Scan,
+    Search, Session, SessionEvent, SessionState, Shelf, SideTab, SongDetail, Sonora,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use ui::WindowFrame;
@@ -28,12 +28,13 @@ use crate::shells::Shell;
 use crate::shells::workspace::Workspace;
 use crate::{
     Adaptive, ArtistView, DetailView, EqualizerView, FullscreenView, GenreView, HistoryView,
-    HomeView, LibraryView, LoginView, SettingsView, SongView, UserView,
+    HomeView, LibraryView, LoginView, ReleasesView, SettingsView, SongView, UserView,
 };
 
 struct Screens {
     home: Entity<HomeView>,
     history: Entity<HistoryView>,
+    releases: Entity<ReleasesView>,
     libraries: HashMap<&'static str, Entity<LibraryView>>,
     artist: Option<Entity<ArtistView>>,
     artist_detail: Option<Entity<ArtistDetail>>,
@@ -226,6 +227,16 @@ impl Root {
             )
         });
         let home = cx.new(|cx| HomeView::new(home_state, discover, playback.clone(), cx));
+        let releases = cx.new(|cx| {
+            Releases::new(
+                session.clone(),
+                library.clone(),
+                history_state.clone(),
+                io.clone(),
+                cx,
+            )
+        });
+        let releases = cx.new(|cx| ReleasesView::new(releases, playback.clone(), cx));
         let history = cx.new(|cx| HistoryView::new(history_state, playback.clone(), window, cx));
 
         let search_library = library.clone();
@@ -341,6 +352,7 @@ impl Root {
             screens: Screens {
                 home,
                 history,
+                releases,
                 libraries: HashMap::new(),
                 artist: None,
                 artist_detail: None,
@@ -639,6 +651,10 @@ impl Root {
                 let history = Sonora::global(cx).history.clone();
                 Box::new(move |cx| matches!(history.read(cx).state(), HistoryState::Loading))
             }
+            Destination::Releases => {
+                let releases = self.screens.releases.clone();
+                Box::new(move |cx| releases.read(cx).is_loading(cx))
+            }
             Destination::Library(slug, _) => shelf(Shelf::Of(slug)),
             Destination::Album(_) => {
                 let detail = self.screens.album_detail.clone()?;
@@ -680,6 +696,10 @@ impl Root {
                 let history = Sonora::global(cx).history.clone();
                 history.update(cx, |history, cx| history.reload(cx));
             }
+            Destination::Releases => self
+                .screens
+                .releases
+                .update(cx, |releases, cx| releases.reload(cx)),
             Destination::Library(slug, _) => {
                 library.update(cx, |library, cx| library.reload(Shelf::Of(slug), cx))
             }
@@ -859,6 +879,10 @@ impl Root {
         self.screens
             .home
             .update(cx, |view, cx| view.set_visible(home, cx));
+        let releases = matches!(destination, Destination::Releases);
+        self.screens
+            .releases
+            .update(cx, |view, cx| view.set_visible(releases, cx));
         self.follow_settings(&destination, cx);
         if let Destination::Fullscreen = destination {
             self.view = RootView::Fullscreen;
@@ -881,6 +905,7 @@ impl Root {
         let content: AnyView = match destination {
             Destination::Fullscreen => return,
             Destination::Home => self.screens.home.clone().into(),
+            Destination::Releases => self.screens.releases.clone().into(),
             Destination::History => {
                 let history = self.screens.history.clone();
                 history.update(cx, |history, cx| history.refresh(cx));
