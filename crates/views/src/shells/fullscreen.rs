@@ -1285,8 +1285,11 @@ impl Render for FullscreenView {
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let corner: Option<Pixels> = None;
         if video {
-            self.video_art
-                .update(cx, |art, _| art.fill(corner.unwrap_or_default()));
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            let fill = corner.unwrap_or_default();
+            #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+            let fill = Pixels::ZERO;
+            self.video_art.update(cx, |art, _| art.fill(fill));
         }
         let visualizer_tint = match ambient::shown(cx) {
             true => theme.tint.map(|tint| theme.primary_of(tint)),
