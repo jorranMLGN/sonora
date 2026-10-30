@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Playback no longer stutters on outputs that run at 44.1 kHz, such as many Bluetooth
+  headphones, where Sonora used most of a CPU core while playing.
+
 ## [0.45.0] - 2026-10-28
 
 ### Added
