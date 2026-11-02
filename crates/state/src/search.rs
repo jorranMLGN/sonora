@@ -58,7 +58,8 @@ pub enum Axis {
     Title,
     Artist,
     Duration,
-    Year,
+    /// When a song or album came out, by the whole day where the provider gives one.
+    Released,
 }
 
 impl Axis {
@@ -66,9 +67,8 @@ impl Axis {
     /// some kinds carry orders those hits and leaves the rest in relevance order.
     pub fn of(kind: Option<Kind>) -> &'static [Axis] {
         match kind {
-            None => &[Axis::Title, Axis::Artist, Axis::Duration],
-            Some(Kind::Song) => &[Axis::Title, Axis::Artist, Axis::Duration],
-            Some(Kind::Album) => &[Axis::Title, Axis::Artist, Axis::Year],
+            None | Some(Kind::Song) => &[Axis::Title, Axis::Artist, Axis::Duration, Axis::Released],
+            Some(Kind::Album) => &[Axis::Title, Axis::Artist, Axis::Released],
             Some(Kind::Artist | Kind::Playlist) => &[Axis::Title],
         }
     }
@@ -198,6 +198,8 @@ pub struct AlbumHit {
     pub artist_refs: Vec<ArtistRef>,
     pub cover: Option<String>,
     pub year: i32,
+    /// `YYYY-MM-DD`, `YYYY-MM` or `YYYY`, or empty when only `year` (or nothing) is known.
+    pub release_date: String,
 }
 
 #[derive(Clone)]
@@ -784,6 +786,7 @@ fn albums_of(
             None,
             0,
             album.year,
+            &album.release_date,
         )
     });
     let total = catalog.albums.len();
@@ -797,6 +800,7 @@ fn albums_of(
             Some(placed(at, total)),
             0,
             album.year,
+            &album.release_date,
         )
     });
     let derived = sources(library, &catalog.tracks).filter_map(|(track, rank)| {
@@ -810,12 +814,13 @@ fn albums_of(
             rank,
             track.popularity,
             0,
+            &track.release_date,
         ))
     });
 
     let mut scored: Vec<Scored> = Vec::new();
     let mut seen: Vec<&String> = Vec::new();
-    for (id, name, artists, artist_refs, cover, rank, popularity, year) in
+    for (id, name, artists, artist_refs, cover, rank, popularity, year, release_date) in
         saved.chain(found).chain(derived)
     {
         let fields = [(TITLE, name.as_str()), (ARTIST, artists.as_str())];
@@ -838,6 +843,7 @@ fn albums_of(
                 artist_refs: artist_refs.clone(),
                 cover: cover.clone(),
                 year,
+                release_date: release_date.clone(),
             }),
         });
     }
@@ -1140,11 +1146,29 @@ fn measure(hit: &Hit, axis: Axis) -> Option<Measure> {
         (Axis::Artist, Hit::Playlist(list)) => text(&list.owner),
         (Axis::Duration, Hit::Song(track)) => (!track.duration.is_zero())
             .then_some(Measure::Number(track.duration.as_millis() as u64)),
-        (Axis::Year, Hit::Album(album)) => {
-            (album.year > 0).then_some(Measure::Number(album.year as u64))
-        }
-        (Axis::Duration | Axis::Year, _) => None,
+        (Axis::Released, Hit::Song(track)) => day_of(&track.release_date).map(Measure::Number),
+        (Axis::Released, Hit::Album(album)) => day_of(&album.release_date)
+            .or_else(|| (album.year > 0).then(|| album.year as u64 * 10_000))
+            .map(Measure::Number),
+        (Axis::Duration | Axis::Released, _) => None,
     }
+}
+
+/// A release date as one number that orders by day: `YYYYMMDD`, where an unknown month or
+/// day counts as zero. A year or a month so sorts just before the days inside it, and a date
+/// without a readable year has no value.
+fn day_of(date: &str) -> Option<u64> {
+    let mut parts = date.trim().get(..10).unwrap_or(date.trim()).split('-');
+    let year: u64 = parts.next()?.parse().ok().filter(|year| *year > 0)?;
+    let mut next = || {
+        parts
+            .next()
+            .and_then(|part| part.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let month = next().min(12);
+    let day = next().min(31);
+    Some(year * 10_000 + month * 100 + day)
 }
 
 /// The rows a search part answered with, or none for a part the lens did not ask for.
@@ -1204,13 +1228,13 @@ mod tests {
             kind: Some(Kind::Album),
             hidden: vec!["spotify"],
             mine_only: true,
-            order: Some((Axis::Year, Sort::Descending)),
+            order: Some((Axis::Released, Sort::Descending)),
         };
         assert_eq!(
             lens.unfiltered(),
             Lens {
                 kind: Some(Kind::Album),
-                order: Some((Axis::Year, Sort::Descending)),
+                order: Some((Axis::Released, Sort::Descending)),
                 ..Lens::default()
             }
         );
@@ -1268,6 +1292,7 @@ mod tests {
             disc_number: 0,
             tags: Vec::new(),
             languages: Vec::new(),
+            release_date: String::new(),
             credits: Vec::new(),
         }
     }
@@ -1509,7 +1534,120 @@ mod tests {
             artist_refs: Vec::new(),
             cover: None,
             year: 2001,
+            release_date: "2001".to_owned(),
         })
+    }
+
+    fn released(name: &str, date: &str) -> Hit {
+        Hit::Song(Track {
+            release_date: date.to_owned(),
+            ..track(name, "Band", "Record")
+        })
+    }
+
+    fn pressed(name: &str, year: i32, date: &str) -> Hit {
+        Hit::Album(AlbumHit {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            artists: "Band".to_owned(),
+            artist_refs: Vec::new(),
+            cover: None,
+            year,
+            release_date: date.to_owned(),
+        })
+    }
+
+    fn by_release(hits: Vec<Hit>, sort: Sort) -> Vec<String> {
+        let lens = Lens {
+            order: Some((Axis::Released, sort)),
+            ..Lens::default()
+        };
+        let found = hits.into_iter().map(|hit| found(hit, false)).collect();
+        names(&narrowed(found, &lens))
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn release_date_sorts_by_the_whole_day() {
+        let hits = || {
+            vec![
+                released("March", "2024-03-12"),
+                released("January", "2024-01-30"),
+                released("Late March", "2024-03-29"),
+            ]
+        };
+        assert_eq!(
+            by_release(hits(), Sort::Descending),
+            ["Late March", "March", "January"]
+        );
+        assert_eq!(
+            by_release(hits(), Sort::Ascending),
+            ["January", "March", "Late March"]
+        );
+    }
+
+    #[test]
+    fn a_partial_date_sorts_ahead_of_the_days_inside_it() {
+        let hits = || {
+            vec![
+                released("Day", "2024-03-12"),
+                released("Year", "2024"),
+                released("Month", "2024-03"),
+                released("Older", "2023-12-31"),
+            ]
+        };
+        assert_eq!(
+            by_release(hits(), Sort::Descending),
+            ["Day", "Month", "Year", "Older"]
+        );
+        assert_eq!(
+            by_release(hits(), Sort::Ascending),
+            ["Older", "Year", "Month", "Day"]
+        );
+    }
+
+    #[test]
+    fn undated_hits_trail_both_ways() {
+        let hits = || {
+            vec![
+                released("Undated", ""),
+                released("New", "2020-01-01"),
+                released("Garbled", "soon"),
+                released("Old", "1990"),
+            ]
+        };
+        assert_eq!(
+            by_release(hits(), Sort::Descending),
+            ["New", "Old", "Undated", "Garbled"]
+        );
+        assert_eq!(
+            by_release(hits(), Sort::Ascending),
+            ["Old", "New", "Undated", "Garbled"]
+        );
+    }
+
+    #[test]
+    fn songs_and_albums_share_the_release_axis() {
+        let hits = vec![
+            released("Song", "2010-06-01"),
+            pressed("Dated album", 2015, "2015-02-03"),
+            pressed("Year album", 2012, ""),
+            pressed("Undated album", 0, ""),
+        ];
+        assert_eq!(
+            by_release(hits, Sort::Descending),
+            ["Dated album", "Year album", "Song", "Undated album"]
+        );
+    }
+
+    #[test]
+    fn songs_and_albums_offer_the_release_axis() {
+        assert!(Axis::of(None).contains(&Axis::Released));
+        assert!(Axis::of(Some(Kind::Song)).contains(&Axis::Released));
+        assert!(Axis::of(Some(Kind::Album)).contains(&Axis::Released));
+        assert!(!Axis::of(Some(Kind::Artist)).contains(&Axis::Released));
     }
 
     fn names(hits: &[Found]) -> Vec<&str> {

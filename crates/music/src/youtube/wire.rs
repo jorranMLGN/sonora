@@ -43,6 +43,7 @@ pub fn track(source: ytmusic::Track, index: u32) -> Track {
         disc_number: 1,
         tags: Vec::new(),
         languages: Vec::new(),
+        release_date: String::new(),
         credits: Vec::new(),
     }
 }
@@ -78,14 +79,18 @@ pub fn album(source: ytmusic::Album) -> Album {
     }
 }
 
+/// An album page. A listed song names no date of its own, so it takes the album's year.
 pub fn album_detail(source: ytmusic::AlbumDetail) -> AlbumDetail {
+    let album = album(source.album);
     let tracks = source
         .tracks
         .into_iter()
         .enumerate()
-        .map(|(index, item)| track(item, index as u32))
+        .map(|(index, item)| Track {
+            release_date: album.release_date.clone(),
+            ..track(item, index as u32)
+        })
         .collect();
-    let album = album(source.album);
     AlbumDetail {
         cover_max: album.cover_large.clone(),
         album,
@@ -192,4 +197,36 @@ pub fn cover(thumbnails: &[ytmusic::Thumbnail]) -> Option<String> {
 
 pub fn cover_large(thumbnails: &[ytmusic::Thumbnail]) -> Option<String> {
     thumbnails.last().map(|thumb| thumb.url.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detail(year: Option<i32>) -> ytmusic::AlbumDetail {
+        ytmusic::AlbumDetail {
+            album: ytmusic::Album {
+                browse_id: "MPRE1".to_owned(),
+                playlist_id: None,
+                title: "Album".to_owned(),
+                artists: Vec::new(),
+                kind: ytmusic::AlbumKind::Album,
+                year,
+                track_count: Some(1),
+                thumbnails: Vec::new(),
+            },
+            description: None,
+            duration_text: None,
+            tracks: vec![ytmusic::Track::default()],
+        }
+    }
+
+    #[test]
+    fn an_albums_tracks_carry_its_year() {
+        assert_eq!(
+            album_detail(detail(Some(1999))).tracks[0].release_date,
+            "1999"
+        );
+        assert_eq!(album_detail(detail(None)).tracks[0].release_date, "");
+    }
 }

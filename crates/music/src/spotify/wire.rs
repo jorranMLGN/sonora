@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use librespot_protocol::metadata::Date;
 use librespot_protocol::playlist4_external::{ListAttributes, SelectedListContent as RootList};
 
 use crate::models;
@@ -143,6 +144,18 @@ pub fn copyright(recording: bool, text: &str) -> String {
             true => format!("℗ {text}"),
             false => format!("© {text}"),
         },
+    }
+}
+
+/// A protobuf release date as `YYYY-MM-DD`, or `YYYY-MM` or `YYYY` when the day or month is
+/// unknown. Empty when the year is.
+pub fn day(date: &Date) -> String {
+    let (year, month, day) = (date.year(), date.month(), date.day());
+    match (year > 0, month > 0, day > 0) {
+        (false, _, _) => String::new(),
+        (true, true, true) => format!("{year:04}-{month:02}-{day:02}"),
+        (true, true, false) => format!("{year:04}-{month:02}"),
+        (true, false, _) => format!("{year:04}"),
     }
 }
 

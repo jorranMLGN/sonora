@@ -62,6 +62,11 @@ pub struct Track {
     pub artist_refs: Vec<ArtistRef>,
     pub album: String,
     pub album_id: Option<String>,
+    /// When the track came out, as `YYYY-MM-DD`, `YYYY-MM` or `YYYY` like
+    /// `Album::release_date`: the track's own date, else its album's. Empty when the provider
+    /// does not say.
+    #[serde(default)]
+    pub release_date: String,
     pub cover: Option<String>,
     pub duration: Duration,
     pub added_at: Option<i64>,
@@ -579,6 +584,7 @@ mod tests {
             disc_number: 1,
             tags: Vec::new(),
             languages: Vec::new(),
+            release_date: String::new(),
             credits: Vec::new(),
         }
     }
@@ -588,6 +594,14 @@ mod tests {
             .iter()
             .filter_map(|track| track.id.as_deref())
             .collect()
+    }
+
+    #[test]
+    fn a_track_saved_before_release_dates_still_loads() {
+        let mut saved = serde_json::to_value(track("a")).unwrap();
+        saved.as_object_mut().unwrap().remove("release_date");
+        let loaded: Track = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.release_date, "");
     }
 
     #[test]

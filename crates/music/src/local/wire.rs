@@ -549,12 +549,13 @@ pub fn track_from_file(
             .unwrap_or_else(|| album_folder(path).to_string_lossy().into_owned());
         album_id(&owner, &album_name)
     });
-    let year = tag
-        .and_then(|tag| tag.date())
+    let stamp = tag.and_then(|tag| tag.date());
+    let year = stamp
         .map(|date| date.year as i32)
         .filter(|year| *year > 0)
         .or_else(|| fallback.as_ref().and_then(|fb| fb.year))
         .or_else(|| lenient.as_ref().and_then(|l| l.year));
+    let release_date = released(stamp, year);
 
     let release = match tag {
         Some(tag) => release_type(
@@ -587,6 +588,7 @@ pub fn track_from_file(
             disc_number,
             tags: Vec::new(),
             languages: Vec::new(),
+            release_date,
             credits: Vec::new(),
         },
         album_artist,
@@ -787,6 +789,22 @@ fn flagged(value: &str) -> bool {
     matches!(value.trim(), "1" | "true" | "True" | "TRUE")
 }
 
+/// A track's release date out of its tagged timestamp, as precise as the tag is, or out of
+/// `year` alone when the tag has no usable date.
+fn released(stamp: Option<lofty::tag::items::Timestamp>, year: Option<i32>) -> String {
+    match stamp.filter(|stamp| stamp.year > 0) {
+        Some(stamp) => match (stamp.month, stamp.day) {
+            (Some(month), Some(day)) => format!("{:04}-{month:02}-{day:02}", stamp.year),
+            (Some(month), None) => format!("{:04}-{month:02}", stamp.year),
+            _ => format!("{:04}", stamp.year),
+        },
+        None => year
+            .filter(|year| *year > 0)
+            .map(|year| year.to_string())
+            .unwrap_or_default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,6 +815,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn stamp(year: u16, month: Option<u8>, day: Option<u8>) -> lofty::tag::items::Timestamp {
+        lofty::tag::items::Timestamp {
+            year,
+            month,
+            day,
+            hour: None,
+            minute: None,
+            second: None,
+        }
+    }
+
+    #[test]
+    fn a_tagged_date_keeps_its_precision() {
+        assert_eq!(
+            released(Some(stamp(1997, Some(5), Some(21))), None),
+            "1997-05-21"
+        );
+        assert_eq!(released(Some(stamp(1997, Some(5), None)), None), "1997-05");
+        assert_eq!(released(Some(stamp(1997, None, None)), None), "1997");
+    }
+
+    #[test]
+    fn a_bare_year_dates_a_file_without_a_full_date() {
+        assert_eq!(released(None, Some(2003)), "2003");
+        assert_eq!(released(Some(stamp(0, None, None)), Some(2003)), "2003");
+        assert_eq!(released(None, None), "");
     }
 
     #[test]

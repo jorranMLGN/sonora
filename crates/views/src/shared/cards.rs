@@ -349,6 +349,19 @@ pub(crate) enum When<'a> {
     Day(&'a str),
 }
 
+/// How a release line names `when`: the whole day, the year of a partial date, or else the
+/// release kind. `None` when there is nothing to say.
+pub(crate) fn when_label(when: When, kind: Option<ReleaseType>) -> Option<SharedString> {
+    match when {
+        When::Day(date) if date.len() >= 10 => Some(release_date_label(date)),
+        When::Day(date) if !date.is_empty() => Some(SharedString::from(
+            date.split('-').next().unwrap_or(date).to_owned(),
+        )),
+        When::Day(_) | When::Year(0) => kind.map(|kind| i18n::lookup(release_key(kind), None)),
+        When::Year(year) => Some(SharedString::from(year.to_string())),
+    }
+}
+
 pub(crate) fn released(
     id: impl Into<SharedString>,
     when: When,
@@ -361,11 +374,7 @@ pub(crate) fn released(
     let muted = theme.muted_foreground;
     // a whole date is too long to share a line, so it sits above the artists
     let stacked = matches!(when, When::Day(date) if !date.is_empty());
-    let year = match when {
-        When::Day(date) if !date.is_empty() => Some(release_date_label(date)),
-        When::Day(_) | When::Year(0) => kind.map(|kind| i18n::lookup(release_key(kind), None)),
-        When::Year(year) => Some(SharedString::from(year.to_string())),
-    };
+    let year = when_label(when, kind);
     let fallback = fallback.into();
     let credited: Vec<ArtistRef> = artists
         .iter()

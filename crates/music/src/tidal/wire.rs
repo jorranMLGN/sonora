@@ -164,6 +164,11 @@ pub fn track(wrapper: &Value) -> Option<Track> {
         disc_number: count(value, "volumeNumber").unwrap_or(1),
         tags: Vec::new(),
         languages: Vec::new(),
+        // not `streamStartDate`: the day a track reached tidal says nothing of its age
+        release_date: text(value, "releaseDate")
+            .or_else(|| text(album, "releaseDate"))
+            .map(|date| date.get(..10).unwrap_or(date).to_owned())
+            .unwrap_or_default(),
         credits: Vec::new(),
     })
 }
@@ -483,4 +488,28 @@ fn atmos_only(value: &Value) -> bool {
                     .iter()
                     .all(|mode| mode.as_str() == Some("DOLBY_ATMOS"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_track_takes_its_albums_release_day() {
+        let song = json!({"id": 1, "title": "Song", "duration": 200,
+            "streamStartDate": "2014-10-01T00:00:00.000+0000",
+            "album": {"id": 2, "title": "Album", "releaseDate": "1975-11-21"}});
+        assert_eq!(track(&song).unwrap().release_date, "1975-11-21");
+    }
+
+    #[test]
+    fn a_track_without_a_release_date_has_none() {
+        // the day a track reached tidal is not the day it came out
+        let song = json!({"id": 1, "title": "Song", "duration": 200,
+            "streamStartDate": "2014-10-01T00:00:00.000+0000",
+            "album": {"id": 2, "title": "Album"}});
+        assert_eq!(track(&song).unwrap().release_date, "");
+    }
 }

@@ -457,19 +457,9 @@ impl SearchView {
             .collect()
     }
 
+    /// The line under a hit's name: its artists or owner, led by the kind on the All tab. A
+    /// release date sits in the row's trailing slot instead, so it never squeezes the artists.
     fn subtitle(&self, hit: &Hit, place: usize, compact: bool, theme: &Theme) -> AnyElement {
-        if let (Hit::Album(album), false) = (hit, compact) {
-            return cards::released(
-                format!("album-artist-{place}"),
-                cards::When::Year(album.year),
-                None,
-                &album.artist_refs,
-                album.artists.clone(),
-                theme,
-            )
-            .into_any_element();
-        }
-
         let (kind, id, artists, fallback) = match hit {
             Hit::Song(track) => (
                 Kind::Song,
@@ -537,12 +527,13 @@ impl SearchView {
                     .when(track.explicit, |card| card.explicit())
                     .trailing(
                         div()
+                            .flex()
                             .flex_none()
-                            .whitespace_nowrap()
-                            .text_size(theme.text(Text::Small))
-                            .text_color(theme.muted_foreground)
-                            .font_features(tabular())
-                            .child(clock(track.duration)),
+                            .gap_3()
+                            .when_some(release(&track.release_date, 0), |this, day| {
+                                this.child(aside(day, &theme))
+                            })
+                            .child(aside(clock(track.duration), &theme)),
                     )
                     .press(pressed(Press::Song(Box::new(track.clone())), me))
             }
@@ -563,6 +554,9 @@ impl SearchView {
                 .underline()
                 .meta(meta)
                 .when_some(mark, Card::mark)
+                .when_some(release(&album.release_date, album.year), |card, day| {
+                    card.trailing(aside(day, &theme))
+                })
                 .press(pressed(Press::Album(album.id.clone()), me)),
             Hit::Playlist(list) => Card::new(("playlist", place), list.name.clone())
                 .cover(list.cover.clone())
@@ -1158,7 +1152,7 @@ fn axis_key(axis: Axis) -> &'static str {
         Axis::Title => "title",
         Axis::Artist => "artist",
         Axis::Duration => "duration",
-        Axis::Year => "year",
+        Axis::Released => "released",
     }
 }
 
@@ -1167,12 +1161,12 @@ fn axis_label(axis: Axis) -> &'static str {
         Axis::Title => "column-title",
         Axis::Artist => "column-artist",
         Axis::Duration => "column-length",
-        Axis::Year => "column-year",
+        Axis::Released => "column-released",
     }
 }
 
 fn axis_of(key: &str) -> Option<Axis> {
-    [Axis::Title, Axis::Artist, Axis::Duration, Axis::Year]
+    [Axis::Title, Axis::Artist, Axis::Duration, Axis::Released]
         .into_iter()
         .find(|axis| axis_key(*axis) == key)
 }
@@ -1240,9 +1234,9 @@ fn album_of(hit: &AlbumHit, cx: &App) -> Album {
             cover: hit.cover.clone(),
             cover_large: hit.cover.clone(),
             release_type: ReleaseType::Album,
-            year: 0,
+            year: hit.year,
             track_count: 0,
-            release_date: String::new(),
+            release_date: hit.release_date.clone(),
             label: String::new(),
             copyrights: Vec::new(),
             added_at: None,
@@ -1307,6 +1301,26 @@ fn meta(hit: &Hit, compact: bool) -> SharedString {
             false => SharedString::from(list.owner.clone()),
         },
     }
+}
+
+/// How a row names the day a hit came out: `date` in full, or `year` when the provider gave
+/// no date. `None` when neither is known.
+fn release(date: &str, year: i32) -> Option<SharedString> {
+    match date.is_empty() {
+        false => cards::when_label(cards::When::Day(date), None),
+        true => cards::when_label(cards::When::Year(year), None),
+    }
+}
+
+/// A muted, tabular figure for a row's trailing slot, such as a length or a release day.
+fn aside(text: impl Into<SharedString>, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex_none()
+        .whitespace_nowrap()
+        .text_size(theme.text(Text::Small))
+        .text_color(theme.muted_foreground)
+        .font_features(tabular())
+        .child(text.into())
 }
 
 fn tag(kind: Kind) -> SharedString {
