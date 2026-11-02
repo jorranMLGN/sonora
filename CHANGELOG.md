@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-02
+
 ### Added
 
 - A New releases page in the sidebar shows the albums, singles and EPs from the last four weeks
@@ -2438,7 +2440,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/jorranMLGN/sonora/compare/v0.45.0...HEAD
+[unreleased]: https://github.com/jorranMLGN/sonora/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/jorranMLGN/sonora/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/jorranMLGN/sonora/compare/v0.44.2...v0.45.0
 [0.44.2]: https://github.com/sonorahq/sonora/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/sonorahq/sonora/compare/v0.44.0...v0.44.1
