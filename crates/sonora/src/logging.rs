@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use env_logger::{Env, Logger, Target};
 use log::{Log, Metadata, Record};
 
-const CONSOLE: &str = "warn,symphonia=error,lofty=error,discord_rich_presence=error";
-const DISK: &str = "warn,symphonia=error,lofty=error,discord_rich_presence=error,sonora=debug,ui=debug,music=debug,ytmusic=debug,state::potoken=debug";
+const CONSOLE: &str = "warn,symphonia=error,lofty=error,discord_rich_presence=error,zbus=error";
+const DISK: &str = "warn,symphonia=error,lofty=error,discord_rich_presence=error,zbus=error,sonora=debug,ui=debug,music=debug,ytmusic=debug,state::potoken=debug";
 const FILTER: &str = "SONORA_LOG";
 const PREVIOUS: &str = "sonora.log.1";
 const LIMIT: u64 = 16 * 1024 * 1024;
