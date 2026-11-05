@@ -165,7 +165,7 @@ fn debian() -> bool {
             .all(|path| Path::new(path).exists())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn debian() -> bool {
     false
 }
