@@ -6,7 +6,6 @@ use librespot_protocol::extension_kind::ExtensionKind;
 use librespot_protocol::metadata::Album as AlbumMessage;
 use librespot_protocol::metadata::album::Type as AlbumType;
 use librespot_protocol::metadata::copyright::Type as CopyrightType;
-use librespot_protocol::metadata::image::Size as ImageSize;
 use protobuf::Message as _;
 
 use crate::spotify::{collection, collection2, pathfinder, wire};
@@ -67,7 +66,7 @@ async fn legacy_album(session: &Session, album_id: &str) -> Result<AlbumDetail> 
         }
     };
     Ok(AlbumDetail {
-        cover_max: cover_max(&message),
+        cover_max: cover_large(&message),
         album,
         tracks,
     })
@@ -197,39 +196,17 @@ fn cover(album: &AlbumMessage) -> Option<String> {
     wire::image_url(smallest.file_id())
 }
 
-fn cover_max(album: &AlbumMessage) -> Option<String> {
-    let biggest = album
+/// The largest cover Spotify lists, which is 640 pixels for nearly every album.
+fn cover_large(album: &AlbumMessage) -> Option<String> {
+    let largest = album
         .cover_group
         .as_ref()?
         .image
         .iter()
         .filter(|image| image.has_file_id())
-        .max_by_key(|image| (step(image.size()), image.width()))?;
+        .max_by_key(|image| wire::image_width(image))?;
 
-    wire::image_url(biggest.file_id())
-}
-
-fn step(size: ImageSize) -> u8 {
-    match size {
-        ImageSize::SMALL => 0,
-        ImageSize::DEFAULT => 1,
-        ImageSize::LARGE => 2,
-        ImageSize::XLARGE => 3,
-    }
-}
-
-fn cover_large(album: &AlbumMessage) -> Option<String> {
-    const HEADER: i32 = 300;
-
-    let images = album.cover_group.as_ref()?.image.iter();
-    let usable: Vec<_> = images.filter(|image| image.has_file_id()).collect();
-    let picked = usable
-        .iter()
-        .filter(|image| image.width() >= HEADER)
-        .min_by_key(|image| image.width())
-        .or_else(|| usable.iter().max_by_key(|image| image.width()))?;
-
-    wire::image_url(picked.file_id())
+    wire::image_url(largest.file_id())
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {

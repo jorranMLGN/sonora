@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{AnyView, App, Context, Entity, FocusHandle, Pixels, Render, StyleRefinement};
 use gpui::{Window, deferred, div};
@@ -11,8 +12,8 @@ use ui::{
 };
 
 use crate::chrome::{
-    AppNotice, Chrome, JamCode, JamJoin, PlayerBar, SidebarLeft, SidebarRight, SpectrumStrip,
-    TitleBarOptions, ToastStack,
+    AppNotice, Chrome, JamCode, JamJoin, PlayerBar, SessionCode, SessionJoin, SidebarLeft,
+    SidebarRight, SpectrumStrip, TitleBarOptions, ToastStack,
 };
 use crate::shared::codec::CodecPrompt;
 use crate::shared::confirm::Confirm;
@@ -22,13 +23,14 @@ use crate::shared::tag_editor::TagEditor;
 use crate::shared::widevine::WidevinePrompt;
 use crate::shells::Shell;
 
+/// The paint layer toasts take. Dialogs paint at 0 and menus at 1, so a toast shows over an
+/// open dialog and a menu opened after it still shows over the toast.
+const TOAST_LAYER: usize = 1;
+
 pub(crate) struct Workspace {
     sidebar: Entity<SidebarLeft>,
     player_bar: Entity<PlayerBar>,
     spectrum: Entity<SpectrumStrip>,
-    playback: Entity<Playback>,
-    /// How tall the strip over the player bar stands, which the pages' bottom clearance adds.
-    strip: Pixels,
     settings: Entity<AppSettings>,
     sidebar_right: Entity<SidebarRight>,
     playlist_editor: Entity<PlaylistEditor>,
@@ -39,6 +41,8 @@ pub(crate) struct Workspace {
     codec: Entity<CodecPrompt>,
     jam_join: Entity<JamJoin>,
     jam_code: Entity<JamCode>,
+    session_join: Entity<SessionJoin>,
+    session_code: Entity<SessionCode>,
     toasts: Entity<ToastStack>,
     notice: Entity<AppNotice>,
     content: AnyView,
@@ -66,18 +70,11 @@ impl Workspace {
         let spectrum = cx.new(SpectrumStrip::new);
         let settings = Sonora::global(cx).settings.clone();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
-        let devices = Sonora::global(cx).devices.clone();
-        cx.observe(&devices, |this, _, cx| this.restrip(cx))
-            .detach();
-        cx.observe(&playback, |this, _, cx| this.restrip(cx))
-            .detach();
 
         Self {
             sidebar,
             player_bar,
             spectrum,
-            playback,
-            strip: Pixels::ZERO,
             settings,
             sidebar_right,
             playlist_editor: PlaylistEditor::entity(cx),
@@ -88,6 +85,8 @@ impl Workspace {
             codec: cx.new(CodecPrompt::new),
             jam_join: cx.new(JamJoin::new),
             jam_code: cx.new(JamCode::new),
+            session_join: cx.new(SessionJoin::new),
+            session_code: cx.new(SessionCode::new),
             toasts: cx.new(ToastStack::new),
             notice: cx.new(AppNotice::new),
             content,
@@ -95,18 +94,6 @@ impl Workspace {
             cached: true,
             transition: None,
             focus: cx.focus_handle(),
-        }
-    }
-
-    /// Reads how tall the strip over the player bar stands, and redraws only when that changes,
-    /// since playback notifies on every tick.
-    fn restrip(&mut self, cx: &mut Context<Self>) {
-        let strip = PlayerBar::strip(self.playback.read(cx), cx);
-        if self.strip != strip {
-            self.strip = strip;
-            self.toasts
-                .update(cx, |toasts, cx| toasts.set_strip(strip, cx));
-            cx.notify();
         }
     }
 
@@ -125,6 +112,12 @@ impl Workspace {
     pub fn show_side(&self, tab: SideTab, cx: &mut Context<Self>) {
         self.sidebar_right
             .update(cx, |panel, cx| panel.show(tab, cx));
+    }
+
+    /// Opens the right sidebar on `tab` without closing it when it already shows there.
+    pub fn reveal_side(&self, tab: SideTab, cx: &mut Context<Self>) {
+        self.sidebar_right
+            .update(cx, |panel, cx| panel.reveal(tab, cx));
     }
 
     #[allow(dead_code)]
@@ -217,7 +210,7 @@ impl Render for Workspace {
         let bottom = match underlap {
             true => bar_height,
             false => Pixels::ZERO,
-        } + self.strip;
+        };
         Chrome::set_bottom(bottom, cx);
         // A cached view is laid out from the style given here and its own root
         // style is never consulted, so it can only be cached while it is in the
@@ -274,6 +267,8 @@ impl Render for Workspace {
         };
 
         div()
+            .id("workspace")
+            .role(Role::Main)
             .relative()
             .flex()
             .flex_col()
@@ -402,7 +397,9 @@ impl Render for Workspace {
                             .clone()
                             .cached(StyleRefinement::default().w_full().h(bar_height)),
                     )
-                    .child(self.toasts.clone()),
+                    // Deferred above the dialogs, which are deferred too, so a toast raised
+                    // while one is open shows over it and its backdrop.
+                    .child(deferred(self.toasts.clone()).with_priority(TOAST_LAYER)),
             )
             // deferred so the cards sit above the sidebars' resize grips, and ahead of the
             // dialogs so those still cover them
@@ -415,5 +412,7 @@ impl Render for Workspace {
             .child(self.codec.clone())
             .child(self.jam_join.clone())
             .child(self.jam_code.clone())
+            .child(self.session_join.clone())
+            .child(self.session_code.clone())
     }
 }

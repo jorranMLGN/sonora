@@ -1,14 +1,16 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, MouseButton,
-    MouseDownEvent, Pixels, Point, Render, ScrollHandle, SharedString, WeakEntity, Window, div,
+    AnyElement, App, ClickEvent, Context, ElementId, Entity, FocusHandle, Focusable, FontWeight,
+    MouseButton, MouseDownEvent, Pixels, Point, Render, ScrollHandle, SharedString, WeakEntity,
+    Window, div,
 };
 use i18n::t;
 use input::{SEARCH_CONTEXT, SearchAlbums, SearchAll, SearchArtists, SearchPlaylists, SearchSongs};
-use music::{Album, Playlist, ReleaseType, SavedArtist, Track};
+use music::{Album, Playlist, SavedArtist, Track};
 use router::{Destination, NavEntry, navigate};
 use ui::Input;
 
@@ -21,10 +23,10 @@ use state::{
 };
 use ui::ActiveTheme as _;
 use ui::{
-    Activate, Button, Card, Deck, Deselect, Filter, FilterChange, FlagAxis, Pinnable, Popovers,
-    Popup, Room, Scrollbar, Scroller, SelectLeft, SelectNext, SelectPrevious, SelectRight,
-    Separator, SortAxis, Submit, TabBar, Text, Theme, VAST, clock, eyebrow, scrolled, snapped,
-    tabular, vacant,
+    Activate, Button, Card, Deck, Deselect, Dismiss, Dropdown, Filter, FilterChange, FlagAxis,
+    Pinnable, Popovers, Popup, Room, Scrollbar, Scroller, SelectLeft, SelectNext, SelectPrevious,
+    SelectRight, Separator, SortAxis, Submit, TabBar, Text, Theme, VAST, clock, eyebrow, scrolled,
+    snapped, tabular, vacant,
 };
 
 use crate::shared::cards;
@@ -36,6 +38,14 @@ use crate::shared::trouble;
 
 const RAIL: Pixels = gpui::px(12.);
 const LANE: Pixels = gpui::px(246.);
+/// How tall the band is where results fade out as they scroll up under what sits above them.
+const FADE: Pixels = gpui::px(12.);
+/// How many past searches the panel lists.
+const PAST: usize = 8;
+/// How many songs the panel suggests.
+const SUGGESTED: usize = 6;
+/// How many placeholder rows stand in while the first suggestions load.
+const SUGGESTED_WAITING: usize = 3;
 const ROW_GAP: f32 = 0.25;
 const SONGS: &[Kind] = &[Kind::Song];
 const ARTISTS: &[Kind] = &[Kind::Artist];
@@ -104,9 +114,53 @@ impl HitMenu {
     }
 }
 
+/// One row of the panel under the search field: a past query while the field is empty, a
+/// suggested hit of any kind while something is typed.
+#[derive(Clone)]
+enum Offer {
+    Past(String),
+    Hit(Box<Found>),
+}
+
+impl Offer {
+    /// What tells one row from another when the suggestions fill in under it.
+    fn key(&self) -> String {
+        match self {
+            Offer::Past(query) => format!("past:{query}"),
+            Offer::Hit(found) => match &found.hit {
+                Hit::Song(track) => {
+                    format!("song:{}", track.id.as_deref().unwrap_or(&track.name))
+                }
+                Hit::Artist(artist) => {
+                    format!("artist:{}", artist.id.as_deref().unwrap_or(&artist.name))
+                }
+                Hit::Album(album) => format!("album:{}", album.id),
+                Hit::Playlist(list) => format!("playlist:{}", list.id),
+            },
+        }
+    }
+}
+
+/// The search page. Typing asks `suggestions`, whose best hits show in a panel under the field,
+/// and only Enter or the Search button asks `search` for the full results the page lists.
 pub(crate) struct SearchView {
     input: Entity<Input>,
     search: Entity<Search>,
+    suggestions: Entity<Search>,
+    /// The text the field last held, so a change of caret or selection is not taken for typing.
+    typed: String,
+    /// Whether the panel under the field was put away, by Escape, a press outside or a submit.
+    /// Typing or focusing the field again brings it back.
+    dismissed: bool,
+    /// Keeps the next focus of the field from reopening the panel, for a focus the page moves
+    /// there itself.
+    hush: bool,
+    /// The panel row the arrow keys are on.
+    pick: Option<usize>,
+    /// The `key` of the row `pick` is on, so the pick stays with it as the suggestions reorder.
+    picked: Option<String>,
+    /// Whether the arrow keys are on the best match, the stop between the field and the lists.
+    on_best: bool,
     genres: Entity<Genres>,
     history: Entity<SearchHistory>,
     playback: Entity<Playback>,
@@ -127,12 +181,13 @@ pub(crate) struct SearchView {
 impl SearchView {
     pub(crate) fn new(
         search: Entity<Search>,
+        suggestions: Entity<Search>,
         genres: Entity<Genres>,
         playback: Entity<Playback>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&genres, |_, _, cx| cx.notify()).detach();
-        genres.update(cx, |genres, cx| genres.load(cx));
         let input = cx.new(|cx| {
             Input::new("search-placeholder", cx)
                 .icon("icons/search.svg")
@@ -141,14 +196,40 @@ impl SearchView {
 
         cx.observe(&input, |this, input, cx| {
             let query = input.read(cx).text().to_owned();
-            this.search.update(cx, |search, cx| search.ask(&query, cx));
+            if query == this.typed {
+                return;
+            }
+            this.typed = query.clone();
+            this.dismissed = false;
+            this.pick = None;
+            this.suggestions
+                .update(cx, |suggestions, cx| suggestions.ask(&query, cx));
+            // An emptied field goes back to browsing rather than keeping the last results.
+            if query.trim().is_empty() {
+                this.search.update(cx, |search, cx| search.ask("", cx));
+            }
+            cx.notify();
         })
         .detach();
+        cx.observe(&suggestions, |this, _, cx| {
+            this.keep_pick(cx);
+            cx.notify();
+        })
+        .detach();
+        let field = input.read(cx).focus_handle(cx);
+        cx.on_focus(&field, window, |this, _, cx| {
+            this.dismissed = std::mem::take(&mut this.hush);
+            this.pick = None;
+            cx.notify();
+        })
+        .detach();
+        cx.on_blur(&field, window, |_, _, cx| cx.notify()).detach();
 
         cx.observe(&search, |this, _, cx| {
             this.track_menu.reset(cx);
             this.context_menu = None;
             this.cursor = None;
+            this.on_best = false;
             this.rows.clear();
             cx.notify();
         })
@@ -179,6 +260,13 @@ impl SearchView {
         Self {
             input,
             search,
+            suggestions,
+            typed: String::new(),
+            dismissed: false,
+            hush: false,
+            pick: None,
+            picked: None,
+            on_best: false,
             genres,
             history,
             playback,
@@ -205,27 +293,337 @@ impl SearchView {
         }
     }
 
-    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
+    /// Puts the keyboard in the field when the page opens, without the panel, so the categories
+    /// stay in view until the listener clicks the field, presses Down or starts typing.
+    pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut App) {
+        if !self.typing(window, cx) {
+            self.hush = true;
+        }
         self.input.update(cx, |input, cx| input.focus(window, cx));
     }
 
-    /// Keeps the current query in the recent searches, once the user acted on it.
-    fn remember(&self, cx: &mut App) {
+    /// Keeps the query the results answer in the recent searches, once the user acted on it.
+    fn remember_query(&self, cx: &mut App) {
         let query = self.search.read(cx).query().to_owned();
-        self.history
-            .update(cx, |history, cx| history.record(&query, cx));
+        remember(&query, cx);
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        self.remember(cx);
+    /// Moves the keyboard back to the field without opening the panel, for the arrow keys and
+    /// Escape coming back up out of the results.
+    fn return_to_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hush = true;
+        self.input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    fn typing(&self, window: &Window, cx: &App) -> bool {
+        self.input.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    /// The rows of the panel: past queries while the field is empty, the best suggested hits
+    /// once something is typed.
+    fn offers(&self, cx: &App) -> Vec<Offer> {
+        if self.typed.trim().is_empty() {
+            return self
+                .history
+                .read(cx)
+                .entries()
+                .iter()
+                .take(PAST)
+                .cloned()
+                .map(Offer::Past)
+                .collect();
+        }
+        self.suggestions
+            .read(cx)
+            .hits()
+            .iter()
+            .take(SUGGESTED)
+            .map(|found| Offer::Hit(Box::new(found.clone())))
+            .collect()
+    }
+
+    /// Whether the panel shows: the field has the keyboard, nothing put the panel away, and it
+    /// has rows or is still waiting on the first suggestions.
+    fn panel_open(&self, window: &Window, cx: &App) -> bool {
+        if self.dismissed || !self.typing(window, cx) {
+            return false;
+        }
+        let waiting = !self.typed.trim().is_empty() && self.suggestions.read(cx).is_loading();
+        waiting || !self.offers(cx).is_empty()
+    }
+
+    /// Puts the arrow keys on panel row `at` and notes which row that is.
+    fn choose(&mut self, at: Option<usize>, cx: &App) {
+        self.pick = at;
+        self.picked = at.and_then(|at| self.offers(cx).get(at).map(Offer::key));
+    }
+
+    /// Keeps the pick on the row it was on after the suggestions changed, or on the same place
+    /// when that row is gone.
+    fn keep_pick(&mut self, cx: &App) {
+        let Some(at) = self.pick else {
+            return;
+        };
+        let offers = self.offers(cx);
+        let found = self
+            .picked
+            .as_ref()
+            .and_then(|key| offers.iter().position(|offer| offer.key() == *key));
+        let kept = found.or_else(|| offers.len().checked_sub(1).map(|last| at.min(last)));
+        self.choose(kept, cx);
+    }
+
+    fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.dismissed = true;
+        self.pick = None;
+        cx.notify();
+    }
+
+    /// Runs `query` as a full search, files it in the history and puts the panel away.
+    fn run(&mut self, query: &str, cx: &mut Context<Self>) {
+        let query = query.trim().to_owned();
+        if query.is_empty() {
+            return;
+        }
+        remember(&query, cx);
+        self.search.update(cx, |search, cx| search.ask(&query, cx));
+        self.close_panel(cx);
+    }
+
+    /// Enter in the field: the panel row the arrow keys are on, or else a full search for what
+    /// is typed.
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = self
+            .pick
+            .filter(|_| self.panel_open(window, cx))
+            .and_then(|at| self.offers(cx).into_iter().nth(at));
+        match picked {
+            Some(offer) => self.take(offer, cx),
+            None => {
+                let query = self.typed.clone();
+                self.run(&query, cx);
+            }
+        }
+    }
+
+    /// Acts on a panel row. A past query fills the field and runs again, and a hit opens the way
+    /// it does in the results, which files what was typed in the history as a search would.
+    fn take(&mut self, offer: Offer, cx: &mut Context<Self>) {
+        match offer {
+            Offer::Past(query) => {
+                // Set ahead of the field, so its observer does not take this for typing and
+                // open the panel again.
+                self.typed = query.clone();
+                self.input
+                    .update(cx, |input, cx| input.set_text(query.clone(), cx));
+                self.suggestions
+                    .update(cx, |suggestions, cx| suggestions.ask(&query, cx));
+                self.run(&query, cx);
+            }
+            Offer::Hit(found) => {
+                remember(&self.typed, cx);
+                self.open_hit(found.hit, cx);
+                self.close_panel(cx);
+            }
+        }
+    }
+
+    fn forget(&mut self, query: &str, cx: &mut Context<Self>) {
+        self.history
+            .update(cx, |history, cx| history.remove(query, cx));
+        self.pick = None;
+        cx.notify();
+    }
+
+    /// Escape on the page: it puts the panel away first and lets go of the field second. An
+    /// escape with neither goes on to the workspace.
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_open(window, cx) {
+            self.close_panel(cx);
+            return;
+        }
+        if self.typing(window, cx) {
+            window.focus(&self.focus, cx);
+            return;
+        }
+        cx.propagate();
+    }
+
+    fn offer_row(
+        &self,
+        offer: &Offer,
+        at: usize,
+        total: usize,
+        me: &WeakEntity<Self>,
+        cx: &App,
+    ) -> AnyElement {
+        let chosen = self.pick == Some(at);
+        let query = match offer {
+            Offer::Hit(found) => return self.row(found, at, at, total, true, chosen, me, cx),
+            Offer::Past(query) => query,
+        };
+        let theme = *cx.theme();
+        let taken = offer.clone();
+        let forgotten = query.clone();
+        let take = me.clone();
+        let forget = me.clone();
+
+        Card::new(("search-past", at), query.clone())
+            .tucked()
+            .fallback("icons/rotate-ccw-clock.svg")
+            .action(
+                Button::new(("search-forget", at))
+                    .ghost()
+                    .small()
+                    .mr_1()
+                    .icon("icons/x.svg")
+                    .tooltip("search-forget")
+                    .tint(theme.muted_foreground)
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        forget
+                            .update(cx, |this, cx| this.forget(&forgotten, cx))
+                            .ok();
+                    }),
+            )
+            .press(move |_, _, cx| {
+                take.update(cx, |this, cx| this.take(taken.clone(), cx))
+                    .ok();
+            })
+            .chosen(chosen)
+            .when(chosen, |card| card.aria_active_descendant())
+            .into_any_element()
+    }
+
+    /// The panel's rows, with placeholder rows while the first suggestions load. The heading only
+    /// names the list for screen readers.
+    fn panel_rows(&self, cx: &Context<Self>) -> AnyElement {
+        let offers = self.offers(cx);
+        let me = cx.entity().downgrade();
+        let heading = match self.typed.trim().is_empty() {
+            true => t!("search-recent"),
+            false => t!("search-results"),
+        };
+        let waiting = offers.is_empty().then(|| {
+            (0..SUGGESTED_WAITING).map(|at| {
+                Card::skeleton(("search-offer-waiting", at))
+                    .tucked()
+                    .into_any_element()
+            })
+        });
+
+        div()
+            .id("search-offers")
+            .role(Role::ListBox)
+            .aria_label(heading)
+            .flex()
+            .flex_col()
+            .gap_px()
+            // A hit opens through its own card, so the panel only files the query and goes away
+            // once a click inside it has landed.
+            .on_click(cx.listener(|this, _, _, cx| {
+                remember(&this.typed, cx);
+                this.close_panel(cx);
+            }))
+            .children(waiting.into_iter().flatten())
+            .children(
+                offers
+                    .iter()
+                    .enumerate()
+                    .map(|(at, offer)| self.offer_row(offer, at, offers.len(), &me, cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The search field with its panel and the button that runs the full search. Once the page
+    /// is too narrow for two columns of categories, the panel spans the button too, so the
+    /// suggestions get the whole width. Once results are listed, their sort and filter menus sit
+    /// after the button.
+    fn field(
+        &self,
+        asked: bool,
+        gutter: Pixels,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let open = self.panel_open(window, cx);
+        let me = cx.entity().downgrade();
+        let input = div()
+            .flex_1()
+            .min_w_0()
+            .on_mouse_down(
+                MouseButton::Left,
+                // A click in the field asks for the panel, even when the focus it brings was
+                // going to arrive quietly.
+                cx.listener(|this, _, _, cx| {
+                    this.hush = false;
+                    if this.dismissed {
+                        this.dismissed = false;
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(self.input.clone());
+        let button = Button::new("search-submit")
+            .icon("icons/search.svg")
+            .label(t!("search-submit"))
+            .primary()
+            .h(cx.theme().metrics.field)
+            .disabled(self.typed.trim().is_empty())
+            .on_click(cx.listener(|this, _, _, cx| {
+                let query = this.typed.clone();
+                this.run(&query, cx);
+            }));
+        let row = || div().flex().items_center().gap_2();
+        let dropdown = |anchor: AnyElement| {
+            Dropdown::new("search-field", anchor)
+                .flex_1()
+                .min_w_0()
+                .open(open)
+                .on_close(move |_, cx| {
+                    me.update(cx, |this, cx| this.close_panel(cx)).ok();
+                })
+                .when(open, |this| this.child(self.panel_rows(cx)))
+        };
+
+        let width = cells::content_width(window, cx.theme().metrics.inset * 2., cx);
+        let field = match shelves::lanes(width) == 1 {
+            true => row().child(dropdown(
+                row().child(input).child(button).into_any_element(),
+            )),
+            false => row()
+                .child(dropdown(input.into_any_element()))
+                .child(button),
+        };
+        field
+            .when(asked, |this| {
+                this.child(self.sorts(cx)).child(self.filters(cx))
+            })
+            .flex_none()
+            .px(gutter)
+            .into_any_element()
     }
 
     fn select_next(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_open(window, cx) {
+            if let Some(last) = self.offers(cx).len().checked_sub(1) {
+                self.choose(Some(self.pick.map_or(0, |at| (at + 1).min(last))), cx);
+                cx.notify();
+            }
+            return;
+        }
         if self.search.read(cx).query().trim().is_empty() {
+            // With no results to step into, Down asks for the panel the page opened without.
+            if self.typing(window, cx) && self.dismissed {
+                self.dismissed = false;
+                cx.notify();
+            }
             return;
         }
         let stacked = self.stacked(window, cx);
+        let best = self.search.read(cx).best().is_some();
         match self.cursor {
+            None if best && !self.on_best => self.on_best = true,
             None => {
                 let Some(column) = self.first_filled(0, stacked, cx) else {
                     return;
@@ -234,6 +632,7 @@ impl SearchView {
                 let Some(first) = after(&seats, 0) else {
                     return;
                 };
+                self.on_best = false;
                 self.place(column, first);
             }
             Some((column, row)) => {
@@ -249,14 +648,31 @@ impl SearchView {
     }
 
     fn select_previous(&mut self, _: &SelectPrevious, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_open(window, cx) {
+            if let Some(at) = self.pick {
+                self.choose(at.checked_sub(1), cx);
+                cx.notify();
+            }
+            return;
+        }
         let Some((column, row)) = self.cursor else {
+            if std::mem::take(&mut self.on_best) {
+                self.return_to_field(window, cx);
+                cx.notify();
+            }
             return;
         };
         let stacked = self.stacked(window, cx);
         let seats = self.column_seats(column, stacked, cx);
         let Some(previous) = before(&seats, row) else {
             self.cursor = None;
-            self.input.update(cx, |input, cx| input.focus(window, cx));
+            match self.search.read(cx).best().is_some() {
+                true => {
+                    self.on_best = true;
+                    self.reveal(window, cx);
+                }
+                false => self.return_to_field(window, cx),
+            }
             cx.notify();
             return;
         };
@@ -295,6 +711,13 @@ impl SearchView {
     }
 
     fn activate_hit(&mut self, _: &Activate, window: &mut Window, cx: &mut Context<Self>) {
+        if self.on_best {
+            if let Some(best) = self.search.read(cx).best().cloned() {
+                self.remember_query(cx);
+                self.open_hit(best.hit, cx);
+            }
+            return;
+        }
         let Some((column, row)) = self.cursor else {
             return;
         };
@@ -306,8 +729,14 @@ impl SearchView {
         let Some(found) = self.search.read(cx).hits().get(at).cloned() else {
             return;
         };
-        self.remember(cx);
-        match found.hit {
+        self.remember_query(cx);
+        self.open_hit(found.hit, cx);
+    }
+
+    /// What choosing a hit does: a song plays its radio, or pauses and resumes when it is the one
+    /// playing, and anything else opens its page.
+    fn open_hit(&mut self, hit: Hit, cx: &mut Context<Self>) {
+        match hit {
             Hit::Song(track) => {
                 let current = track.id.is_some() && track.id == self.playback_status.0;
                 self.playback.update(cx, |playback, cx| match current {
@@ -326,10 +755,11 @@ impl SearchView {
     }
 
     fn deselect_hit(&mut self, _: &Deselect, window: &mut Window, cx: &mut Context<Self>) {
-        if self.cursor.take().is_none() {
+        let on_best = std::mem::take(&mut self.on_best);
+        if self.cursor.take().is_none() && !on_best {
             return;
         }
-        self.input.update(cx, |input, cx| input.focus(window, cx));
+        self.return_to_field(window, cx);
         cx.notify();
     }
 
@@ -392,11 +822,18 @@ impl SearchView {
             .find(|&at| after(&self.column_seats(at, stacked, cx), 0).is_some())
     }
 
+    /// Scrolls the list the arrow keys are in so their row shows. The best match heads the
+    /// mixed list, so standing on it scrolls that list to the top.
     fn reveal(&self, window: &Window, cx: &App) {
+        let stacked = self.stacked(window, cx);
+        if self.on_best && stacked {
+            let scroll = self.mixed.read(cx).scroll().clone();
+            scroll.set_offset(gpui::point(scroll.offset().x, Pixels::ZERO));
+            return;
+        }
         let Some((column, row)) = self.cursor else {
             return;
         };
-        let stacked = self.stacked(window, cx);
         let scroll = self.bar(column, stacked, cx).read(cx).scroll().clone();
         let theme = *cx.theme();
         let gap = theme.font_size * ROW_GAP;
@@ -498,10 +935,16 @@ impl SearchView {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the row reports its seat in the list, so position and total ride along"
+    )]
     fn row(
         &self,
         found: &Found,
         place: usize,
+        index: usize,
+        total: usize,
         compact: bool,
         chosen: bool,
         me: &WeakEntity<Self>,
@@ -572,6 +1015,16 @@ impl SearchView {
         .when_some(hit.pin(), Pinnable::pin)
         .when_some(HitMenu::of(hit), |card, target| card.menu(menu(target, me)))
         .chosen(chosen)
+        .when(compact, Card::tucked)
+        // The keyboard cursor stays on the container, so the chosen card claims
+        // the active descendant while every card reports its seat in the list.
+        .aria_position_in_set(index + 1)
+        .aria_size_of_set(total)
+        // The mixed list tags each row with its kind, which the card's name leaves out.
+        .when(compact, |card| card.aria_description(noun(hit.kind())))
+        .when(chosen, |card| {
+            card.aria_selected(true).aria_active_descendant()
+        })
         .into_any_element()
     }
 
@@ -584,7 +1037,7 @@ impl SearchView {
                 let track = track.clone();
                 let play: Play = Box::new(move |_, _, cx| {
                     me.update(cx, |this, cx| {
-                        this.remember(cx);
+                        this.remember_query(cx);
                         this.playback.update(cx, |playback, cx| match current {
                             true => playback.toggle_play(cx),
                             false => playback.play_radio(&track, cx),
@@ -605,7 +1058,7 @@ impl SearchView {
         let playing = self.playback.read(cx).playing_from(&origin, cx) == Some(true);
         let play: Play = Box::new(move |_, _, cx| {
             me.update(cx, |this, cx| {
-                this.remember(cx);
+                this.remember_query(cx);
                 this.playback
                     .update(cx, |playback, cx| playback.toggle_origin(&origin, cx));
             })
@@ -668,7 +1121,13 @@ impl SearchView {
             .flat()
             .gap_4()
             .p_3()
-            .bg(theme.secondary)
+            .bg(match self.on_best {
+                true => theme.table_active,
+                false => theme.secondary,
+            })
+            .when(self.on_best, |card| {
+                card.aria_selected(true).aria_active_descendant()
+            })
             .when_some(self.transport(hit, &me, cx), |card, (playing, play)| {
                 card.play(playing, play)
             })
@@ -677,6 +1136,7 @@ impl SearchView {
             .when_some(HitMenu::of(hit), |card, target| {
                 card.on_mouse_down(MouseButton::Right, menu(target, &me))
             })
+            .aria_description(noun(kind))
             .into_any_element();
 
         Some(
@@ -685,7 +1145,15 @@ impl SearchView {
                 .flex_col()
                 .flex_none()
                 .gap_2()
-                .child(eyebrow(t!("search-best-match"), cx).pb_1())
+                .child({
+                    let label = t!("search-best-match");
+                    eyebrow(label.clone(), cx)
+                        .id("search-best-heading")
+                        .role(Role::Heading)
+                        .aria_level(2)
+                        .aria_label(label)
+                        .pb_1()
+                })
                 .child(card)
                 .into_any_element(),
         )
@@ -740,6 +1208,7 @@ impl SearchView {
 
     fn shell(
         &self,
+        id: impl Into<ElementId>,
         title: SharedString,
         body: AnyElement,
         gutter: Pixels,
@@ -752,7 +1221,15 @@ impl SearchView {
             .min_w_0()
             .min_h_0()
             .gap_1()
-            .child(div().pl(gutter).child(eyebrow(title, cx).pb_1()))
+            .child(
+                div()
+                    .id(id)
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .aria_label(title.clone())
+                    .pl(gutter)
+                    .child(eyebrow(title, cx).pb_1()),
+            )
             .child(body)
             .into_any_element()
     }
@@ -760,9 +1237,10 @@ impl SearchView {
     fn column(&self, lane: &'static str, window: &Window, cx: &Context<Self>) -> AnyElement {
         let session = Sonora::global(cx).session.clone();
         let title = nav_label(NavEntry::Library(lane), session.read(cx));
-        let body = self.deck(Some(lane), RAIL, None, window, cx);
+        let id = SharedString::from(format!("search-{lane}-heading"));
+        let body = self.deck(Some(lane), RAIL, None, title.clone(), window, cx);
 
-        self.shell(title, body, RAIL, cx)
+        self.shell(id, title, body, RAIL, cx)
     }
 
     fn browse(&self, gutter: Pixels, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -777,12 +1255,20 @@ impl SearchView {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .gap_3()
             .children(self.recent(gutter, cx))
-            .child(div().px(gutter).child(eyebrow(t!("search-browse"), cx)))
+            .child(div().px(gutter).child({
+                let label = t!("search-browse");
+                div()
+                    .id("search-browse-heading")
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .aria_label(label.clone())
+                    .child(eyebrow(label, cx))
+            }))
             .child(
                 Scroller::new("search-browse", &self.browsing)
                     .bottom_inset(crate::chrome::Chrome::bottom(cx))
+                    .fade_top(FADE)
                     .px(gutter)
                     .pb(pad)
                     .child(plates),
@@ -808,8 +1294,8 @@ impl SearchView {
                         .label(SharedString::from(query.clone()))
                         .small()
                         .ghost()
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.fill(&asked, window, cx);
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.take(Offer::Past(asked.clone()), cx);
                         })),
                 )
                 .child(
@@ -832,12 +1318,21 @@ impl SearchView {
                 .flex_none()
                 .gap_1()
                 .px(gutter)
+                .pb_3()
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(eyebrow(t!("search-recent"), cx))
+                        .child({
+                            let label = t!("search-recent");
+                            div()
+                                .id("search-recent-heading")
+                                .role(Role::Heading)
+                                .aria_level(2)
+                                .aria_label(label.clone())
+                                .child(eyebrow(label, cx))
+                        })
                         .child(
                             Button::new("search-recent-clear")
                                 .label(t!("search-recent-clear"))
@@ -853,27 +1348,24 @@ impl SearchView {
         )
     }
 
-    /// Searches for a recent query again.
-    fn fill(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let query = query.to_owned();
-        self.input.update(cx, |input, cx| {
-            input.set_text(query.clone(), cx);
-            input.focus(window, cx);
-        });
-        self.history
-            .update(cx, |history, cx| history.record(&query, cx));
-    }
-
     fn everything(&self, gutter: Pixels, window: &Window, cx: &Context<Self>) -> AnyElement {
         let lead = div()
             .flex()
             .flex_col()
             .gap_6()
             .children(self.best(cx))
-            .child(eyebrow(t!("search-results"), cx).pb_1())
+            .child({
+                let label = t!("search-results");
+                eyebrow(label.clone(), cx)
+                    .id("search-results-heading")
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .aria_label(label)
+                    .pb_1()
+            })
             .into_any_element();
 
-        self.deck(None, gutter, Some(lead), window, cx)
+        self.deck(None, gutter, Some(lead), t!("search-results"), window, cx)
     }
 
     /// Applies a change to the search lens.
@@ -984,18 +1476,27 @@ impl SearchView {
 
     /// What a lane or the mixed list shows when nothing is left: a plain "No matches", or,
     /// when the lens narrowed it, why, with a way back.
-    fn empty(&self, cx: &Context<Self>) -> AnyElement {
+    fn empty(&self, id: &str, cx: &Context<Self>) -> AnyElement {
         let lens = self.search.read(cx).lens();
-        match lens.hidden.is_empty() && !lens.mine_only {
-            true => vacant(t!("search-no-matches"), cx)
-                .flex_none()
-                .into_any_element(),
-            false => div()
+        let narrowed = !lens.hidden.is_empty() || lens.mine_only;
+        let title = match narrowed {
+            true => t!("search-filtered-empty"),
+            false => t!("search-no-matches"),
+        };
+        let status = div()
+            .id(SharedString::from(format!("{id}-empty")))
+            .role(Role::Status)
+            .aria_label(title.clone())
+            .flex_none()
+            .child(vacant(title, cx));
+        match narrowed {
+            false => status.into_any_element(),
+            true => div()
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap_2()
-                .child(vacant(t!("search-filtered-empty"), cx).flex_none())
+                .child(status)
                 .child(
                     Button::new("search-filters-reset")
                         .label(t!("filter-reset"))
@@ -1008,12 +1509,15 @@ impl SearchView {
         }
     }
 
+    /// Where each hit of `lane`, or of every lane when `None`, sits in its list, under a head
+    /// per kind on the All tab. The best match is drawn above the lists, so they leave it out.
     fn seats(&self, lane: Option<&str>, cx: &App) -> Vec<Seat> {
         let search = self.search.read(cx);
         let hits = search.hits();
         let single = search.lens().kind.is_some();
+        let skipped = usize::from(search.best().is_some());
         let Some(lane) = lane else {
-            return (0..hits.len())
+            return (skipped..hits.len())
                 .map(|at| Seat::Item {
                     at,
                     compact: !single,
@@ -1033,7 +1537,7 @@ impl SearchView {
         for group in GROUPS {
             let compact = group.len() > 1;
             let mut opened = false;
-            for (at, found) in hits.iter().enumerate() {
+            for (at, found) in hits.iter().enumerate().skip(skipped) {
                 if found.slug != lane || !group.contains(&found.kind()) {
                     continue;
                 }
@@ -1053,6 +1557,7 @@ impl SearchView {
         lane: Option<&'static str>,
         gutter: Pixels,
         lead: Option<AnyElement>,
+        label: SharedString,
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -1065,7 +1570,7 @@ impl SearchView {
         };
         let seats = self.seats(lane, cx);
         if after(&seats, 0).is_none() {
-            let empty = self.empty(cx);
+            let empty = self.empty(&id, cx);
             return match lead {
                 Some(lead) => div()
                     .flex()
@@ -1079,6 +1584,8 @@ impl SearchView {
             };
         }
 
+        let leading = lead.is_some();
+        let total = seats.iter().filter(|seat| seat.at().is_some()).count();
         let column = match lane {
             None => 0,
             Some(lane) => self
@@ -1126,6 +1633,11 @@ impl SearchView {
                 this.row(
                     found,
                     at,
+                    seats[..index]
+                        .iter()
+                        .filter(|seat| seat.at().is_some())
+                        .count(),
+                    total,
                     compact,
                     this.cursor == Some((column, index)),
                     &view.downgrade(),
@@ -1134,17 +1646,31 @@ impl SearchView {
             });
 
         div()
+            .id(SharedString::from(format!("{id}-results")))
+            .role(Role::ListBox)
+            .aria_label(label)
             .flex_1()
             .min_h_0()
+            // The mixed list sits right under the field, so its fade spends the gap above it.
+            .when(leading, |this| this.mt(-FADE))
             .child(
                 Scroller::new(id.clone(), bar)
                     .bottom_inset(crate::chrome::Chrome::bottom(cx))
+                    .fade_top(FADE)
                     .px(gutter)
                     .pb(theme.metrics.inset)
                     .child(div().flex().flex_col().gap_1().children(lead).child(deck)),
             )
             .into_any_element()
     }
+}
+
+/// Files `query` at the top of the search history.
+fn remember(query: &str, cx: &mut App) {
+    Sonora::global(cx)
+        .search_history
+        .clone()
+        .update(cx, |history, cx| history.record(query, cx));
 }
 
 fn axis_key(axis: Axis) -> &'static str {
@@ -1189,7 +1715,7 @@ fn pressed(
 
     move |_, _, cx| {
         me.update(cx, |this, cx| {
-            this.remember(cx);
+            this.remember_query(cx);
             match &target {
                 Press::Song(track) => this
                     .playback
@@ -1233,13 +1759,9 @@ fn album_of(hit: &AlbumHit, cx: &App) -> Album {
             artist_refs: hit.artist_refs.clone(),
             cover: hit.cover.clone(),
             cover_large: hit.cover.clone(),
-            release_type: ReleaseType::Album,
             year: hit.year,
-            track_count: 0,
             release_date: hit.release_date.clone(),
-            label: String::new(),
-            copyrights: Vec::new(),
-            added_at: None,
+            ..Default::default()
         })
 }
 
@@ -1253,14 +1775,8 @@ fn playlist_of(hit: &PlaylistHit, cx: &App) -> Playlist {
             id: hit.id.clone(),
             name: hit.name.clone(),
             owner: hit.owner.clone(),
-            owner_id: String::new(),
-            owned: false,
-            collaborative: false,
-            blend: false,
-            public: false,
             cover: hit.cover.clone(),
-            track_count: 0,
-            modified_at: None,
+            ..Default::default()
         })
 }
 
@@ -1275,7 +1791,7 @@ fn artist_of(hit: &ArtistHit, cx: &App) -> SavedArtist {
             id,
             name: hit.name.clone(),
             cover: hit.cover.clone(),
-            added_at: None,
+            ..Default::default()
         })
 }
 
@@ -1396,7 +1912,7 @@ impl Render for SearchView {
                         true => div()
                             .flex_1()
                             .px(gutter)
-                            .child(self.empty(cx))
+                            .child(self.empty("search-lanes", cx))
                             .into_any_element(),
                         false => div()
                             .flex()
@@ -1432,6 +1948,7 @@ impl Render for SearchView {
             .on_action(cx.listener(Self::activate_hit))
             .on_action(cx.listener(Self::deselect_hit))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(|this, _: &SearchAll, _, cx| this.show(None, cx)))
             .on_action(cx.listener(|this, _: &SearchSongs, _, cx| this.show(Some(Kind::Song), cx)))
             .on_action(
@@ -1443,18 +1960,7 @@ impl Render for SearchView {
             .on_action(
                 cx.listener(|this, _: &SearchPlaylists, _, cx| this.show(Some(Kind::Playlist), cx)),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_2()
-                    .px(gutter)
-                    .child(div().flex_1().min_w_0().child(self.input.clone()))
-                    .when(asked, |this| {
-                        this.child(self.sorts(cx)).child(self.filters(cx))
-                    }),
-            )
+            .child(self.field(asked, gutter, window, cx))
             .when(asked, |this| {
                 this.child(div().flex_none().px(gutter).child(self.tabs(cx)))
             })

@@ -108,6 +108,7 @@ pub fn artist_page(source: ChannelPage) -> Artist {
         monthly_listeners: None,
         top_tracks: tracks(source.uploads),
         albums: Vec::new(),
+        banner: None,
     }
 }
 

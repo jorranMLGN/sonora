@@ -1,6 +1,7 @@
 mod add_album;
 mod artist_catalogue;
 mod follow_artist;
+mod playlist_cover;
 mod playlist_privacy;
 mod release_type;
 mod soundcloud;

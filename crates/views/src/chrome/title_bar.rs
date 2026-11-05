@@ -1,5 +1,6 @@
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use gpui::Decorations;
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Window, div};
 use gpui::{
@@ -11,6 +12,7 @@ use ui::WindowControls;
 use ui::{ActiveTheme as _, Button, Spin};
 
 use crate::chrome::SidebarRight;
+use crate::chrome::downloads::DownloadsButton;
 use input::Refresh;
 use router::Navigation;
 use state::{AppSettings, Sonora};
@@ -78,6 +80,7 @@ pub(crate) struct TitleBar {
     busy: Option<Busy>,
     /// The refresh icon's turn, which springs back to rest once `busy` is gone.
     spin: Spin,
+    downloads: Entity<DownloadsButton>,
 }
 
 impl EventEmitter<TitleBarEvent> for TitleBar {}
@@ -100,6 +103,7 @@ impl TitleBar {
             grabbed: false,
             busy: None,
             spin: Spin::default(),
+            downloads: cx.new(DownloadsButton::new),
         }
     }
 
@@ -134,6 +138,9 @@ impl TitleBar {
         let forward = self.navigation.clone();
 
         div()
+            .id("titlebar-history")
+            .role(Role::Toolbar)
+            .aria_label(i18n::lookup("nav-history", None))
             .flex()
             .flex_none()
             .items_center()
@@ -206,6 +213,7 @@ impl TitleBar {
                         false => "icons/panel-right-open.svg",
                     })
                     .tooltip("nav-sidebar-right")
+                    .aria_expanded(open)
                     .on_click(
                         cx.listener(|_, _, _, cx| cx.emit(TitleBarEvent::ToggleSidebarRight)),
                     ),
@@ -231,6 +239,7 @@ impl TitleBar {
                     .small()
                     .icon(icon)
                     .tooltip("nav-sidebar")
+                    .aria_expanded(self.options.sidebar_open)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(TitleBarEvent::ToggleSidebar))),
             )
     }
@@ -266,6 +275,8 @@ impl Render for TitleBar {
         let radius: Option<Pixels> = None;
 
         div()
+            .id("title-bar")
+            .role(Role::Banner)
             .flex()
             .items_center()
             .w_full()
@@ -331,6 +342,16 @@ impl Render for TitleBar {
                     .gap_1()
                     .items_center()
                     .when(navigation, |this| this.child(self.history(window, cx)))
+                    .child(div().flex_1())
+                    .when(navigation, |this| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .occlude()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(self.downloads.clone()),
+                        )
+                    })
                     .children(content)
                     .pr_3(),
             )

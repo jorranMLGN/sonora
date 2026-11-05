@@ -334,12 +334,12 @@ impl Paced {
         if self.output.failed() {
             return Err(self.disconnected());
         }
-        self.output.sink().play();
+        self.output.play();
         Ok(())
     }
 
     pub fn pause(&self) {
-        self.output.sink().pause();
+        self.output.pause();
     }
 
     pub fn set_volume(&self, gain: f32) {
@@ -427,6 +427,13 @@ impl Paced {
     /// The rate the device runs at. A packet at any other rate is resampled before it is heard.
     pub fn rate(&self) -> u32 {
         self.output.rate()
+    }
+
+    /// Has a direct output run at the rate a track made at `rate` Hz plays best at, as the track
+    /// starts being heard, when following each track's rate is on. Every packet is resampled to
+    /// the device's rate either way, so a device that refuses, or a shared one, changes nothing.
+    pub fn follow_rate(&self, rate: u32) {
+        output::follow_track_rate(rate);
     }
 
     /// Waits until there is room for another packet.

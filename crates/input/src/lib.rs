@@ -30,6 +30,7 @@ actions!(
         ToggleMiniPlayer,
         TogglePip,
         ToggleVideo,
+        ShowMembers,
         CloseWindow,
         MinimizeWindow,
         ZoomWindow,
@@ -75,7 +76,7 @@ fn shared() -> Vec<KeyBinding> {
         "{WORKSPACE_CONTEXT} && !{INPUT_CONTEXT} && !{MENU_CONTEXT} && !{FORM_CONTEXT} && !{TABLE_CONTEXT} && !{SEARCH_CONTEXT}"
     );
     let results = format!("{SEARCH_CONTEXT} && !{INPUT_CONTEXT}");
-    let typing = format!("{SEARCH_CONTEXT} && {INPUT_CONTEXT}");
+    let typing = format!("{SEARCH_CONTEXT} > {INPUT_CONTEXT}");
 
     vec![
         KeyBinding::new("down", SelectNext, table),

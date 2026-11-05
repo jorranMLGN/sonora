@@ -46,6 +46,7 @@ impl SubsonicProvider {
             .profile()
             .await
             .context("cannot reach the subsonic server")?;
+        let covers = client.takes_playlist_covers().await;
         auth::store(&auth::Credentials {
             server,
             username,
@@ -61,6 +62,7 @@ impl SubsonicProvider {
             authenticated: true,
             capabilities: Capabilities {
                 transcode: true,
+                playlist_covers: covers,
                 ..Capabilities::ALL
             },
         })
@@ -86,15 +88,16 @@ impl SubsonicProvider {
         match client.profile().await {
             Ok(profile) => Ok(Some(ProviderSession {
                 expired: false,
+                capabilities: Capabilities {
+                    transcode: true,
+                    playlist_covers: client.takes_playlist_covers().await,
+                    ..Capabilities::ALL
+                },
                 profile,
                 api: Arc::new(client.clone()),
                 playback: Arc::new(Factory::new(client)),
                 shape: Shape::Catalog(Catalog::Fixed),
                 authenticated: true,
-                capabilities: Capabilities {
-                    transcode: true,
-                    ..Capabilities::ALL
-                },
             })),
             Err(error) if crate::trouble::offline(&format!("{error:#}")) => Err(error),
             Err(error) => {

@@ -18,6 +18,7 @@ state.workspace = true
 log.workspace = true
 open.workspace = true
 dirs.workspace = true
+unicode-bidi.workspace = true
 
 [dev-dependencies]
 etagere.workspace = true

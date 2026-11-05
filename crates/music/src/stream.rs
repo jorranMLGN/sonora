@@ -1473,6 +1473,10 @@ mod tests {
         at: u64,
         log: Arc<Mutex<Vec<u64>>>,
         gate: Option<Arc<tokio::sync::Semaphore>>,
+        /// How many chunks each restart may serve, or `None` for all of them. A bound keeps a
+        /// restarted download short of the end, where the stream would go on to fill the holes
+        /// and restart again while a test is still counting restarts.
+        resumed_permits: Option<usize>,
     }
 
     impl Source for Fake {
@@ -1497,7 +1501,10 @@ mod tests {
                 data: self.data.clone(),
                 at,
                 log: self.log.clone(),
-                gate: None,
+                gate: self
+                    .resumed_permits
+                    .map(|permits| Arc::new(tokio::sync::Semaphore::new(permits))),
+                resumed_permits: self.resumed_permits,
             }
         }
     }
@@ -1512,6 +1519,7 @@ mod tests {
             at: 0,
             log: Arc::default(),
             gate: Some(gate.clone()),
+            resumed_permits: None,
         };
         (source, data, gate)
     }
@@ -1526,7 +1534,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_read_far_ahead_restarts_the_download_there() {
-        let (source, data, _gate) = fake(16 * MIB, 16);
+        let (mut source, data, _gate) = fake(16 * MIB, 16);
+        source.resumed_permits = Some(4);
         let log = source.log.clone();
         let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
         stream.wait_for(MIB).await.unwrap();
@@ -1556,7 +1565,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn bytes_before_a_jump_stay_readable() {
-        let (source, data, _gate) = fake(16 * MIB, 16);
+        let (mut source, data, _gate) = fake(16 * MIB, 16);
+        source.resumed_permits = Some(4);
         let log = source.log.clone();
         let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
         stream.wait_for(MIB).await.unwrap();
@@ -1568,7 +1578,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_read_into_an_earlier_hole_restarts_there() {
-        let (source, data, _gate) = fake(16 * MIB, 16);
+        let (mut source, data, _gate) = fake(16 * MIB, 16);
+        source.resumed_permits = Some(4);
         let log = source.log.clone();
         let mut stream = Stream::pulling_ranged(source, Some(16 * MIB as u64));
         stream.wait_for(MIB).await.unwrap();

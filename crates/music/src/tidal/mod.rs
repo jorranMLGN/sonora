@@ -193,6 +193,7 @@ async fn session(client: TidalClient) -> Result<ProviderSession> {
         expired: false,
         capabilities: Capabilities {
             playcounts: false,
+            playlist_covers: true,
             qualities: client::QUALITIES,
             ..Capabilities::ALL
         },

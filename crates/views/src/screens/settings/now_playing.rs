@@ -29,6 +29,7 @@ impl SettingsView {
         self.row(
             t!("settings-ambient"),
             Switch::new("ambient", on)
+                .name(t!("settings-ambient"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_ambient(!on, cx));
@@ -44,6 +45,7 @@ impl SettingsView {
         Row::new(
             t!("settings-ambient-motion"),
             Switch::new("ambient-motion", on)
+                .name(t!("settings-ambient-motion"))
                 .disabled(disabled)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -61,6 +63,7 @@ impl SettingsView {
         self.row(
             t!("settings-visualizer-absolute"),
             Switch::new("visualizer-absolute", on)
+                .name(t!("settings-visualizer-absolute"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_visualizer_absolute(!on, cx));
@@ -87,7 +90,9 @@ impl SettingsView {
 
         self.row(
             t!("settings-fullscreen-controls-autohide"),
-            picker.into_any_element(),
+            picker
+                .name(t!("settings-fullscreen-controls-autohide"))
+                .into_any_element(),
         )
     }
 
@@ -97,6 +102,7 @@ impl SettingsView {
         self.row(
             t!("settings-os-fullscreen"),
             Switch::new("os-fullscreen", on)
+                .name(t!("settings-os-fullscreen"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_os_fullscreen(!on, cx));

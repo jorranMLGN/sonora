@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::catalog::CatalogSource;
 use crate::settings::AppSettings;
-use crate::{Io, Network, Outcome, Scan, Shelf, Toast, Toasts, join};
+use crate::{Io, Network, Outcome, Scan, Shelf, Target, Toast, Toasts, join};
 
 const HEARTBEAT: Duration = Duration::from_secs(30);
 /// How often the sign-in window is asked whether the user is through.
@@ -587,6 +587,9 @@ impl Session {
             this.update(cx, |this, cx| match restored {
                 Ok(Some(session)) => this.signed_in(session, active, cx),
                 Ok(None) => {
+                    if this.providers[active].stored() {
+                        this.invalidated(slug, cx);
+                    }
                     this.state = SessionState::SignedOut;
                     cx.notify();
                     cx.emit(SessionEvent::SignedOut(slug));
@@ -610,7 +613,7 @@ impl Session {
 
             this.update(cx, |this, cx| match restored {
                 Ok(Some(session)) => this.joined(slug, session, cx),
-                Ok(None) => log::warn!("session: nothing stored for {slug}"),
+                Ok(None) => this.invalidated(slug, cx),
                 Err(error) => log::warn!("session: cannot restore {slug}: {error:#}"),
             })
             .ok();
@@ -624,6 +627,18 @@ impl Session {
         self.warn_expired(slug, expired, cx);
         cx.notify();
         cx.emit(SessionEvent::SignedIn(slug));
+    }
+
+    /// Says with a lasting toast that `slug` refused its stored sign-in outright, with a button
+    /// to sign in again.
+    fn invalidated(&self, slug: &'static str, cx: &mut App) {
+        let name = self.provider_name_for(slug).unwrap_or(slug);
+        log::warn!("session: {name} refused its stored sign-in");
+        let toast = Toast::new(Outcome::Failed, "toast-session-invalidated")
+            .name(name)
+            .open("toast-sign-in", Target::ProviderSettings)
+            .lasting();
+        Toasts::post(toast, cx);
     }
 
     fn warn_expired(&self, slug: &'static str, expired: bool, cx: &mut App) {

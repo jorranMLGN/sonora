@@ -2,6 +2,7 @@ mod artist;
 mod canvas;
 mod catalog;
 mod codec;
+mod control;
 mod cover;
 mod detail;
 mod devices;
@@ -16,6 +17,7 @@ mod home;
 mod jam;
 mod library;
 mod links;
+mod listening;
 mod logging;
 mod lyrics;
 mod mosaic;
@@ -53,11 +55,14 @@ mod window_shape;
 pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use canvas::Canvas;
 pub use codec::{Codec, CodecState};
+pub use control::Control;
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
-pub use devices::{Devices, Steered, Upcoming};
+pub use devices::Devices;
 pub use discover::{Discover, Featured, Mix};
-pub use downloads::{Downloads, DownloadsChanged, Progress, downloaded};
+pub use downloads::{
+    Active, Downloads, DownloadsChanged, Pending, Progress, Remaining, Subject, downloaded,
+};
 pub use drm::{CdmState, Drm};
 pub use equalizer::{DeviceRule, Equalizer, RuleDevice, Sound};
 pub use genre::{GenreDetails, Genres};
@@ -65,18 +70,24 @@ pub use history::{History, HistoryState};
 pub use home::Home;
 pub use jam::{Cap, Caps, Jam, JamEvent, JamRole, Listener};
 pub use library::{
-    Addition, Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready, Shelf,
+    Addition, CoverEdit, Leaving, Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready,
+    Shelf, cover_problem,
 };
 pub use links::{Links, Opened};
+pub use listening::{CODE_LENGTH as SESSION_CODE_LENGTH, Listening, Member as RoomMember, Room};
 pub use logging::log_file;
 pub use lyrics::{Lyrics, LyricsState};
+pub use music::connect::{Elsewhere, Repeat};
 pub use network::{Network, Reconnected};
 pub use outputs::Outputs;
 pub use overload::OutputLevel;
 pub use pins::{PinSort, Pins};
-pub use playback::{Origin, Playback, PlaybackState, Repeat, Sleep, Unreachable, Whence};
+pub use playback::{Origin, Playback, PlaybackState, Sleep, Unreachable, Whence};
 pub use profile::Profile;
-pub use queue::{Named, Queue, Resume, Stub};
+pub use queue::{
+    Queue, QueueKind, QueuePlacement, QueuePosition, QueueSections, QueueSlot, QueueView, Resume,
+    Stub,
+};
 pub use releases::{Releases, ReleasesState};
 pub use remote::{Remote, attach as attach_remote};
 pub use requirements::{Requirement, Requirements};
@@ -88,14 +99,14 @@ pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, ConnectName, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES,
     MiniCorner, PlayerBarLayout, Reloaded, RomanizationScripts, SYSTEM_FONT, SideTab,
-    SpectrumPlace, SpectrumProfile, SpectrumSettings, ThemeFamily, ThemeVariant, VIDEO_HEIGHTS,
-    WaveformPlace, equalizer_profile_label, remember_window, window_placement,
+    SpectrumPlace, SpectrumProfile, SpectrumSettings, ThemeFamily, ThemeOffer, ThemeVariant,
+    VIDEO_HEIGHTS, WaveformPlace, equalizer_profile_label, remember_window, window_placement,
 };
 pub use signal::{Change, Equalizing, FLOAT_BITS, Following, Signal, SignalPath};
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, ToastAction, Toasts};
-pub use updates::{Release, UpdateState, Updates};
+pub use updates::{Channel, Release, UpdateState, Updates, VERSION, updates_itself};
 pub use usage::Usage;
 pub use vault::CACHE_GB_RANGE;
 pub use video::{Place, Video};
@@ -108,7 +119,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Entity, Global};
+use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use music::{LyricsProvider, MusicProvider};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -159,6 +170,20 @@ impl Io {
         self.0.spawn(future)
     }
 
+    /// Loads on tokio and applies the result on the entity's thread. The caller retains the task.
+    pub fn load<E: 'static, T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T>> + Send + 'static,
+        apply: impl FnOnce(&mut E, Result<T>, &mut Context<E>) + 'static,
+        cx: &mut Context<E>,
+    ) -> Task<()> {
+        let io = self.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = join(io.spawn(work)).await;
+            this.update(cx, |this, cx| apply(this, loaded, cx)).ok();
+        })
+    }
+
     pub fn spawn_blocking<F, R>(&self, func: F) -> JoinHandle<R>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -170,6 +195,16 @@ impl Io {
 
 pub(crate) async fn join<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
     handle.await?
+}
+
+/// Hands the free pages of the malloc heap back to the kernel after a burst of short-lived
+/// allocations. The app runs on one malloc arena, which otherwise keeps what a burst freed resident.
+/// It locks the heap while it walks it, so call it off the main thread and only once a burst is over.
+pub(crate) fn trim_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }
 
 /// Flattens a failed call's reason and tells `Network` about it, so one screen's failure puts
@@ -200,6 +235,7 @@ pub(crate) fn settled<T>(result: Result<T>, cx: &mut gpui::App) -> std::result::
 
 pub struct Sonora {
     pub session: Entity<Session>,
+    pub control: Entity<Control>,
     pub cover: Entity<Cover>,
     pub devices: Entity<Devices>,
     pub downloads: Entity<Downloads>,
@@ -210,6 +246,7 @@ pub struct Sonora {
     pub equalizer: Entity<Equalizer>,
     pub library: Entity<Library>,
     pub links: Entity<Links>,
+    pub listening: Entity<Listening>,
     pub history: Entity<History>,
     pub jam: Entity<Jam>,
     pub lyrics: Entity<Lyrics>,
@@ -410,7 +447,18 @@ pub fn init(
             cx,
         )
     });
-    let links = cx.new(|cx| Links::new(session.clone(), devices.clone(), cx));
+    let listening = cx.new(|cx| {
+        Listening::new(
+            playback.clone(),
+            queue.clone(),
+            session.clone(),
+            settings.clone(),
+            io.clone(),
+            cx,
+        )
+    });
+    let links = cx.new(|cx| Links::new(session.clone(), devices.clone(), settings.clone(), cx));
+    let control = cx.new(|cx| Control::new(session.clone(), playback.clone(), library.clone(), cx));
     discord::attach(
         playback.clone(),
         settings.clone(),
@@ -423,6 +471,7 @@ pub fn init(
 
     cx.set_global(Sonora {
         session,
+        control,
         cover,
         devices,
         downloads,
@@ -433,6 +482,7 @@ pub fn init(
         equalizer,
         library,
         links,
+        listening,
         history,
         jam,
         lyrics,

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{App, EntityId, Window};
-use music::Spectrum;
+use music::{Listening, Spectrum};
 use ui::Levels;
 
 /// How long the drawn levels take to close 63% of the gap to the analyzer's, until a caller
@@ -22,7 +22,10 @@ const STALL: Duration = Duration::from_millis(250);
 struct State {
     shown: Levels,
     spectrum: Spectrum,
+    listening: Option<Listening>,
     armed: bool,
+    /// Set by every `show`, so a step can tell the view stopped rendering.
+    seen: bool,
     visible: bool,
     beat: Option<Instant>,
     settle: Duration,
@@ -36,7 +39,9 @@ impl Default for State {
         Self {
             shown: Levels::default(),
             spectrum: Spectrum::default(),
+            listening: None,
             armed: false,
+            seen: false,
             visible: false,
             beat: None,
             settle: SETTLE,
@@ -61,6 +66,8 @@ impl VisualizerDrive {
         let mut state = self.state.borrow_mut();
         state.visible = true;
         state.settle = settle.max(Duration::from_millis(1));
+        state.seen = true;
+        state.listening = Some(spectrum.listen());
         state.spectrum = spectrum;
         if state.armed {
             return;
@@ -80,8 +87,9 @@ impl VisualizerDrive {
     fn step(&self, watch: EntityId, window: &mut Window, cx: &mut App) {
         {
             let mut state = self.state.borrow_mut();
-            if !state.visible {
+            if !state.visible || !std::mem::take(&mut state.seen) {
                 state.armed = false;
+                state.listening = None;
                 return;
             }
             let spectrum = state.spectrum.clone();

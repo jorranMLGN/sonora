@@ -502,24 +502,29 @@ impl Jam {
                 this.set_volume(level.min(100) as f32 / 100., cx)
             }),
             Act::Shuffle { on } => self.queue.update(cx, |this, cx| this.set_shuffle(on, cx)),
-            Act::Drop { index } => self
-                .queue
-                .update(cx, |this, cx| this.remove_upcoming(index as usize, cx)),
+            Act::Drop { index } => self.queue.update(cx, |this, cx| {
+                this.remove(crate::QueuePosition::Upcoming(index as usize), cx)
+            }),
             Act::Jump { index } => {
-                let behind = self.queue.read(cx).past().len();
-                match index.cmp(&0) {
-                    Ordering::Equal => {}
-                    Ordering::Greater => self
-                        .playback
-                        .update(cx, |this, cx| this.play_upcoming(index as usize - 1, cx)),
+                let queue = self.queue.read(cx);
+                let behind = queue.past().len();
+                let position = match index.cmp(&0) {
+                    Ordering::Equal => None,
+                    Ordering::Greater => Some(crate::QueuePosition::Upcoming(index as usize - 1)),
                     Ordering::Less => {
                         let Some(back) = behind.checked_add_signed(index as isize) else {
                             reply.send(false).ok();
                             return;
                         };
-                        self.playback
-                            .update(cx, |this, cx| this.play_past(back, cx));
+                        Some(crate::QueuePosition::Past(back))
                     }
+                };
+                if let Some(uid) = position
+                    .and_then(|position| queue.uid(position))
+                    .map(str::to_owned)
+                {
+                    self.playback
+                        .update(cx, |this, cx| this.play_queue(&uid, cx));
                 }
             }
         }
@@ -574,7 +579,7 @@ impl Jam {
             },
             lineup: Lineup {
                 revision: queue.revision(),
-                total: queue.len() as u32,
+                total: queue.upcoming().len() as u32,
                 at,
                 rows,
             },
@@ -652,7 +657,9 @@ impl Jam {
             let title = track.name.clone();
             let queued = this
                 .update(cx, |_, cx| {
-                    queue.update(cx, |queue, cx| queue.append_all([track], None, cx))
+                    queue.update(cx, |queue, cx| {
+                        queue.insert([track], None, crate::QueuePlacement::End, cx)
+                    })
                 })
                 .is_ok();
             reply
@@ -804,8 +811,8 @@ impl Jam {
 
         let origin = crate::Origin::playlist(pack.clone()).named(name.clone());
         self.playback.update(cx, |this, cx| match next {
-            true => this.play_playlist_next(origin, cx),
-            false => this.enqueue_playlist(origin, cx),
+            true => this.enqueue_collection(origin, crate::QueuePlacement::Next, cx),
+            false => this.enqueue_collection(origin, crate::QueuePlacement::End, cx),
         });
         reply.send(Ok(name)).ok();
     }

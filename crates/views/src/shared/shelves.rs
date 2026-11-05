@@ -1,7 +1,8 @@
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EntityId, Pixels, Point, ScrollHandle,
-    ScrollWheelEvent, SharedString, WeakEntity, Window, div, point, px,
+    ScrollWheelEvent, SharedString, Stateful, WeakEntity, Window, div, point, px,
 };
 use std::rc::Rc;
 
@@ -47,6 +48,7 @@ impl Shelves {
         SharedString::from(format!("{}-{kind}-{place}", self.id))
     }
 
+    /// Draws loading rows through the page edges, with their headings inside the content inset.
     pub(crate) fn pending(&self, width: Pixels, cx: &App) -> Vec<AnyElement> {
         let theme = *cx.theme();
         let layout = CardGrid::layout(width);
@@ -56,19 +58,26 @@ impl Shelves {
                 div()
                     .flex()
                     .flex_col()
+                    .mx(-theme.metrics.inset)
                     .gap_3()
                     .child(
                         Skeleton::new()
+                            .mx(theme.metrics.inset)
                             .w(HEADING)
                             .h(theme.text(Text::Large))
                             .rounded(theme.radius),
                     )
-                    .child(div().flex().w_full().gap_4().overflow_hidden().children(
-                        (0..layout.columns).map(|place| {
-                            Card::skeleton(self.tag("pending", shelf * 100 + place))
-                                .tile(layout.card)
-                        }),
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .px(theme.metrics.inset)
+                            .gap_4()
+                            .overflow_hidden()
+                            .children((0..=layout.columns).map(|place| {
+                                Card::skeleton(self.tag("pending", shelf * 100 + place))
+                                    .tile(layout.card)
+                            })),
+                    )
                     .into_any_element()
             })
             .collect()
@@ -78,6 +87,7 @@ impl Shelves {
         self.rails.clear();
     }
 
+    /// Virtualizes full-width sections while keeping headings and lists inside the content inset.
     pub(crate) fn render(
         &mut self,
         sections: Rc<Vec<GenreSection>>,
@@ -120,7 +130,12 @@ impl Shelves {
                 }
             });
 
-        div().relative().w_full().child(stack).into_any_element()
+        // Sections span the page so the deck's row clips do not cut off sideways cards.
+        div()
+            .relative()
+            .mx(-cx.theme().metrics.inset)
+            .child(stack)
+            .into_any_element()
     }
 
     fn height(
@@ -146,6 +161,7 @@ impl Shelves {
         head + body
     }
 
+    /// Lays out a section as inset columns without horizontal scrolling.
     fn lane(
         &self,
         place: usize,
@@ -155,17 +171,24 @@ impl Shelves {
         cx: &App,
     ) -> AnyElement {
         let lanes = lanes(width);
+        let total = section.items.len().min(lanes * ROWS);
         let cards = section
             .items
             .iter()
-            .take(lanes * ROWS)
+            .take(total)
             .enumerate()
-            .map(|(index, item)| self.card(place * 100 + index, item, None, cx))
+            .map(|(index, item)| {
+                self.card(place * 100 + index, item, None, cx)
+                    .aria_position_in_set(index + 1)
+                    .aria_size_of_set(total)
+                    .into_any_element()
+            })
             .collect();
 
         div()
             .flex()
             .flex_col()
+            .px(cx.theme().metrics.inset)
             .gap_3()
             .child(
                 div()
@@ -173,13 +196,18 @@ impl Shelves {
                     .items_end()
                     .gap_2()
                     .h(head(window, cx))
-                    .child(heading(i18n::translate(&section.title), cx))
+                    .child(shelf_heading(
+                        self.tag("heading", place),
+                        i18n::translate(&section.title),
+                        cx,
+                    ))
                     .children(credit(section, cx)),
             )
             .child(spread(cards, lanes))
             .into_any_element()
     }
 
+    /// Clips a section's cards at the page edges and keeps its heading aligned with the content.
     fn rail(
         &self,
         place: usize,
@@ -207,6 +235,7 @@ impl Shelves {
             .child(
                 div()
                     .flex()
+                    .px(cx.theme().metrics.inset)
                     .items_end()
                     .justify_between()
                     .gap_4()
@@ -217,7 +246,11 @@ impl Shelves {
                             .items_end()
                             .gap_2()
                             .min_w_0()
-                            .child(heading(i18n::translate(&section.title), cx))
+                            .child(shelf_heading(
+                                self.tag("heading", place),
+                                i18n::translate(&section.title),
+                                cx,
+                            ))
                             .children(credit(section, cx)),
                     )
                     .when(crowded, |this| {
@@ -228,6 +261,7 @@ impl Shelves {
                 div()
                     .id((self.id, place))
                     .w_full()
+                    .px(cx.theme().metrics.inset)
                     .h(tall)
                     .overflow_x_scroll()
                     .restrict_scroll_to_axis()
@@ -251,14 +285,19 @@ impl Shelves {
                                 let Some(view) = drawn.upgrade() else {
                                     return div().into_any_element();
                                 };
-                                let Some(item) =
-                                    feed.get(place).and_then(|section| section.items.get(index))
+                                let Some(items) = feed.get(place).map(|section| &section.items)
                                 else {
+                                    return div().into_any_element();
+                                };
+                                let Some(item) = items.get(index) else {
                                     return div().into_any_element();
                                 };
 
                                 view.read(cx)
                                     .card(place * 100 + index, item, Some(card), cx)
+                                    .aria_position_in_set(index + 1)
+                                    .aria_size_of_set(items.len())
+                                    .into_any_element()
                             }),
                     ),
             )
@@ -320,10 +359,9 @@ impl Shelves {
             })
     }
 
-    fn card(&self, id: usize, item: &GenreItem, tile: Option<Pixels>, cx: &App) -> AnyElement {
+    fn card(&self, id: usize, item: &GenreItem, tile: Option<Pixels>, cx: &App) -> Card {
         cards::item_card(slot("item", id), item, &self.playback, cx)
             .map(|card| dressed(card, tile, cx))
-            .into_any_element()
     }
 }
 
@@ -332,10 +370,8 @@ pub(crate) fn plate(
     genre: &music::Genre,
     tile: Option<Pixels>,
     cx: &App,
-) -> AnyElement {
-    cards::genre_card(id, genre)
-        .map(|card| dressed(card, tile, cx))
-        .into_any_element()
+) -> Card {
+    cards::genre_card(id, genre).map(|card| dressed(card, tile, cx))
 }
 
 pub(crate) fn grid(
@@ -354,8 +390,11 @@ pub(crate) fn grid(
         .gap(LANE_GAP)
         .draw(move |place, _, cx| {
             let first = place * lanes;
-            let cells = (first..(first + lanes).min(genres.len()))
-                .map(|index| plate((id, index), &genres[index], None, cx));
+            let cells = (first..(first + lanes).min(genres.len())).map(|index| {
+                plate((id, index), &genres[index], None, cx)
+                    .aria_position_in_set(index + 1)
+                    .aria_size_of_set(genres.len())
+            });
 
             div()
                 .flex()
@@ -367,7 +406,8 @@ pub(crate) fn grid(
         .into_any_element()
 }
 
-fn lanes(width: Pixels) -> usize {
+/// How many columns a grid of genre plates `width` wide lays out.
+pub(crate) fn lanes(width: Pixels) -> usize {
     ((width / PLATE).floor().max(1.) as usize).min(LANES)
 }
 
@@ -473,6 +513,7 @@ impl Rail {
             tabs,
         } = spec;
         let tall = Card::tile_height(tile, window, cx);
+        let inset = cx.theme().metrics.inset;
         let scrolled = self.scroll.clone();
         let glided = self.glide.clone();
         let arrows = match count > columns {
@@ -483,22 +524,29 @@ impl Rail {
         div()
             .flex()
             .flex_col()
+            .mx(-inset)
             .gap_3()
             .child(
                 div()
                     .flex()
+                    .px(inset)
                     .items_end()
                     .justify_between()
                     .gap_4()
                     .h(head(window, cx))
-                    .child(heading(title, cx))
+                    .child(shelf_heading(
+                        SharedString::from(format!("{tag}-heading-{place}")),
+                        title,
+                        cx,
+                    ))
                     .children(arrows),
             )
-            .children(tabs)
+            .children(tabs.map(|tabs| div().px(inset).child(tabs)))
             .child(
                 div()
                     .id((tag, place))
                     .w_full()
+                    .px(inset)
                     .h(tall)
                     .overflow_x_scroll()
                     .restrict_scroll_to_axis()
@@ -529,26 +577,34 @@ impl Rail {
         cx: &mut App,
     ) -> AnyElement {
         let tall = Card::tile_height(tile, window, cx);
+        let inset = cx.theme().metrics.inset;
 
         div()
             .flex()
             .flex_col()
+            .mx(-inset)
             .gap_3()
             .child(
                 div()
                     .flex()
+                    .px(inset)
                     .items_end()
                     .h(head(window, cx))
-                    .child(heading(title, cx)),
+                    .child(shelf_heading(
+                        SharedString::from(format!("rail-pending-heading-{title}")),
+                        title,
+                        cx,
+                    )),
             )
             .child(
                 div()
                     .flex()
                     .w_full()
+                    .px(inset)
                     .h(tall)
                     .gap(RAIL_GAP)
                     .overflow_hidden()
-                    .children((0..columns).map(|place| {
+                    .children((0..=columns).map(|place| {
                         Card::skeleton(("rail-pending", place))
                             .tile(tile)
                             .into_any_element()
@@ -646,4 +702,14 @@ fn slot(kind: &'static str, place: usize) -> ElementId {
 /// trackpad scrolls the rail itself and a vertical notch belongs to the page.
 fn sideways(event: &ScrollWheelEvent) -> bool {
     !event.delta.precise() && event.delta.pixel_delta(px(1.)).x != Pixels::ZERO
+}
+
+/// A shelf or rail title as a level two heading, so screen readers can jump from one shelf to
+/// the next. `id` has to be unique on the page.
+fn shelf_heading(id: impl Into<ElementId>, title: SharedString, cx: &App) -> Stateful<Div> {
+    heading(title.clone(), cx)
+        .id(id)
+        .role(Role::Heading)
+        .aria_level(2)
+        .aria_label(title)
 }
