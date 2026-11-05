@@ -22,6 +22,17 @@ const CASKROOMS: [&str; 4] = [
     "/usr/local/Caskroom/sonora-nightly",
 ];
 
+/// Where the Debian package puts Sonora, and the file dpkg keeps for every package it installed.
+#[cfg(target_os = "linux")]
+const DEB_BINARY: &str = "/usr/bin/sonora";
+#[cfg(target_os = "linux")]
+const DEB_RECORD: &str = "/var/lib/dpkg/info/sonora.list";
+/// Asks for the administrator password through the desktop's polkit agent.
+#[cfg(target_os = "linux")]
+const PKEXEC: &str = "/usr/bin/pkexec";
+#[cfg(target_os = "linux")]
+const APT: &str = "/usr/bin/apt-get";
+
 /// How this copy of Sonora was installed, which decides whether it may replace itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Install {
@@ -34,6 +45,9 @@ pub(super) enum Install {
     /// An AppImage, replaced file for file.
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     AppImage(std::path::PathBuf),
+    /// The release's Debian package, upgraded with apt after the user gives the password.
+    #[cfg(target_os = "linux")]
+    Deb,
     /// A package manager or a portable copy, either of which Sonora leaves alone.
     Managed,
 }
@@ -58,6 +72,8 @@ impl Install {
             Self::Bundle(_) => asset.ends_with("-macos.dmg"),
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             Self::AppImage(_) => asset.ends_with(&format!("-{}.AppImage", std::env::consts::ARCH)),
+            #[cfg(target_os = "linux")]
+            Self::Deb => deb_arch().is_some_and(|arch| asset.ends_with(&format!("-{arch}.deb"))),
             Self::Managed => false,
         }
     }
@@ -73,6 +89,8 @@ impl Install {
             Self::Bundle(bundle) => swap_bundle(download, bundle),
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             Self::AppImage(image) => swap_image(download, image),
+            #[cfg(target_os = "linux")]
+            Self::Deb => install_deb(download),
             Self::Managed => anyhow::bail!("a package manager updates this copy of sonora"),
         }
     }
@@ -128,8 +146,65 @@ fn detect() -> Install {
         .filter(|image| image.is_file());
     match image {
         Some(image) if image.parent().is_some_and(writable) => Install::AppImage(image),
+        _ if debian() => Install::Deb,
         _ => Install::Managed,
     }
+}
+
+/// Whether this copy is the one the release's Debian package installed, and apt can upgrade it
+/// once polkit has the password. A copy built from source or run from elsewhere is left alone.
+#[cfg(target_os = "linux")]
+fn debian() -> bool {
+    let packaged = std::env::current_exe()
+        .and_then(|exe| exe.canonicalize())
+        .is_ok_and(|exe| exe == Path::new(DEB_BINARY));
+    packaged
+        && deb_arch().is_some()
+        && [DEB_RECORD, PKEXEC, APT]
+            .iter()
+            .all(|path| Path::new(path).exists())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn debian() -> bool {
+    false
+}
+
+/// The name Debian gives this machine's architecture, as the release's packages carry it.
+#[cfg(target_os = "linux")]
+fn deb_arch() -> Option<&'static str> {
+    debian_arch(std::env::consts::ARCH)
+}
+
+#[cfg(target_os = "linux")]
+fn debian_arch(arch: &str) -> Option<&'static str> {
+    match arch {
+        "x86_64" => Some("amd64"),
+        "aarch64" => Some("arm64"),
+        _ => None,
+    }
+}
+
+/// Upgrades the package with apt, which polkit runs as root once the user gives the password,
+/// then starts the new version after this one quits. Cancelling the password prompt fails the
+/// update and leaves the running version installed.
+#[cfg(target_os = "linux")]
+fn install_deb(package: &Path) -> Result<()> {
+    let output = Command::new(PKEXEC)
+        .args([APT, "install", "--yes", "--allow-downgrades"])
+        .arg(package)
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .output()
+        .context("cannot start pkexec")?;
+    std::fs::remove_file(package).ok();
+    if !output.status.success() {
+        anyhow::bail!(
+            "apt exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    relaunch(&mut Command::new(DEB_BINARY))
 }
 
 #[cfg(unix)]
@@ -261,5 +336,25 @@ fn remove(path: &Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| format!("cannot delete {}", path.display())),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_debian_install_picks_the_package_for_its_architecture() {
+        assert_eq!(debian_arch("x86_64"), Some("amd64"));
+        assert_eq!(debian_arch("aarch64"), Some("arm64"));
+        assert_eq!(debian_arch("riscv64"), None);
+
+        let arch = deb_arch().expect("tests run on amd64 or arm64");
+        assert!(Install::Deb.wants(&format!("sonora-v0.47.0-{arch}.deb")));
+        assert!(!Install::Deb.wants(&format!(
+            "sonora-v0.47.0-{}.AppImage",
+            std::env::consts::ARCH
+        )));
+        assert!(!Install::Deb.wants("Sonora-Setup.exe"));
     }
 }

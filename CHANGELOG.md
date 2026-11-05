@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Update Sonora straight from the update notice when it was installed from the .deb package; it asks for your password, installs and restarts.
+
 ## [0.47.0] - 2026-11-05
 
 ### Added
