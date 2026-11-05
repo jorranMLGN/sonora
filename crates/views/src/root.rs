@@ -5,7 +5,7 @@ use gpui::{App, Font, FontFallbacks, SharedString, StyleRefinement, font, prelud
 use gpui::{Window, div};
 use input::{
     CloseWindow, MinimizeWindow, NavigateBack, NavigateForward, OpenFilter, OpenSearch,
-    OpenSettings, Refresh, ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleQueue,
+    OpenSettings, Refresh, ShowMembers, ToggleFullscreen, ToggleJam, ToggleLyrics, ToggleQueue,
     ToggleWindowFullscreen, ZoomWindow,
 };
 use router::{Destination, NavigationEvent, Screen, back, forward, navigate};
@@ -16,9 +16,14 @@ use state::{
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use ui::WindowFrame;
-use ui::{ActiveTheme as _, Dismiss, Entrance, Look, Stillness, Theme, ThemeKind, clear_listing};
+use ui::{
+    ActiveTheme as _, Dismiss, Entrance, INPUT_CONTEXT, Look, Stillness, Theme, ThemeKind,
+    clear_listing,
+};
 
-use crate::chrome::{Busy, JamInvite, TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
+use crate::chrome::{
+    Busy, JamInvite, ThemeInvite, TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled,
+};
 use crate::screens::search::SearchView;
 use crate::screens::settings::SettingsHeader;
 use crate::shared::ambient::{self, Ambient};
@@ -98,6 +103,8 @@ pub struct Root {
     /// The question before a Jam link is joined, drawn over whichever shell is up so a link
     /// opened in fullscreen is answered there.
     jam_invite: Entity<JamInvite>,
+    /// The question before a linked theme is installed, drawn over whichever shell is up.
+    theme_invite: Entity<ThemeInvite>,
     shells: Shells,
     view: RootView,
     signing_in: bool,
@@ -239,11 +246,20 @@ impl Root {
         let releases = cx.new(|cx| ReleasesView::new(releases, playback.clone(), cx));
         let history = cx.new(|cx| HistoryView::new(history_state, playback.clone(), window, cx));
 
-        let search_library = library.clone();
-
-        let queries = cx.new(|cx| Search::new(session.clone(), search_library, io.clone(), cx));
+        let queries = cx.new(|cx| Search::new(session.clone(), library.clone(), io.clone(), cx));
+        let suggestions =
+            cx.new(|cx| Search::new(session.clone(), library.clone(), io.clone(), cx));
         let genres = cx.new(|cx| Genres::new(session.clone(), io.clone(), cx));
-        let search = cx.new(|cx| SearchView::new(queries, genres.clone(), playback.clone(), cx));
+        let search = cx.new(|cx| {
+            SearchView::new(
+                queries,
+                suggestions,
+                genres.clone(),
+                playback.clone(),
+                window,
+                cx,
+            )
+        });
 
         let settings = cx.new(|cx| SettingsView::new(session.clone(), playback.clone(), cx));
         let equalizer = Sonora::global(cx).equalizer.clone();
@@ -376,6 +392,7 @@ impl Root {
             adaptive,
             ambient,
             jam_invite: cx.new(JamInvite::new),
+            theme_invite: cx.new(ThemeInvite::new),
             background: None,
             font: None,
             #[cfg(target_os = "windows")]
@@ -520,6 +537,13 @@ impl Root {
             .update(cx, |workspace, cx| workspace.show_side(tab, cx));
     }
 
+    /// Opens the right sidebar on `tab`, leaving it be when it already shows there.
+    fn reveal_side(&self, tab: SideTab, cx: &mut Context<Self>) {
+        self.shells
+            .workspace
+            .update(cx, |workspace, cx| workspace.reveal_side(tab, cx));
+    }
+
     /// Tells the adaptive theme, the wake lock and the fullscreen view itself whether fullscreen
     /// is up. The ambient background is painted out of the cover's hues, so fullscreen samples
     /// the cover even with the adaptive theme off, and leaving drops the tint again. The view
@@ -573,9 +597,27 @@ impl Root {
         }
     }
 
-    /// Escape that nothing on the page took: it leaves fullscreen, and on a settings page it
-    /// closes an open menu or dialog, then clears the search. It never leaves settings.
-    fn dismiss(&mut self, cx: &mut Context<Self>) {
+    /// Escape that nothing on the page took. A focused text field lets go of the keyboard first,
+    /// on any screen. Otherwise it leaves fullscreen, and on a settings page it closes an open
+    /// menu or dialog, then clears the search. It never leaves settings.
+    fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typing = window
+            .context_stack()
+            .iter()
+            .any(|context| context.contains(INPUT_CONTEXT));
+        if typing {
+            match self.view {
+                RootView::Workspace => self
+                    .shells
+                    .workspace
+                    .update(cx, |workspace, cx| workspace.focus(window, cx)),
+                RootView::Fullscreen => self
+                    .shells
+                    .fullscreen
+                    .update(cx, |fullscreen, cx| fullscreen.focus(window, cx)),
+            }
+            return;
+        }
         if let RootView::Fullscreen = self.view {
             back(cx);
             return;
@@ -654,6 +696,11 @@ impl Root {
             Destination::Releases => {
                 let releases = self.screens.releases.clone();
                 Box::new(move |cx| releases.read(cx).is_loading(cx))
+            }
+            Destination::Library(slug, _) if *slug == router::LOCAL => {
+                let session = Sonora::global(cx).session.clone();
+                let local = shelf(Shelf::Of(slug));
+                Box::new(move |cx| session.read(cx).scanning() || local(cx))
             }
             Destination::Library(slug, _) => shelf(Shelf::Of(slug)),
             Destination::Album(_) => {
@@ -954,7 +1001,10 @@ impl Root {
                 toolbar = Some(genre.read(cx).toolbar());
                 genre.into()
             }
-            Destination::Search => self.screens.search.clone().into(),
+            Destination::Search => {
+                self.screens.genres.update(cx, |genres, cx| genres.load(cx));
+                self.screens.search.clone().into()
+            }
             Destination::Equalizer => {
                 header = Some(self.screens.settings_header.clone().into());
                 self.screens.equalizer.clone().into()
@@ -1093,23 +1143,33 @@ impl Render for Root {
 
         // AppKit lays the window out again while its toolbar changes and calls back into it, so
         // the change waits until this frame has drawn. Fullscreen has no corners to pick, and
-        // AppKit puts the traffic lights back itself on the way out.
+        // AppKit keeps a fullscreen window's toolbar as a bar above the content, so the toolbar
+        // goes on the way in and the frame is picked again on the way out.
         #[cfg(target_os = "macos")]
-        if !window.is_fullscreen() {
-            let settings = Sonora::global(cx).settings.read(cx);
-            let framed = (
-                settings.window_rounding(),
-                crate::chrome::traffic_lights(
-                    settings,
-                    ui::snapped(theme.metrics.title_bar, window),
-                ),
-            );
-            if self.framed != Some(framed) {
-                self.framed = Some(framed);
-                window.defer(cx, move |window, cx| {
-                    state::apply_window_rounding(window, framed.0, cx);
-                    window.set_traffic_light_position(framed.1);
-                });
+        match window.is_fullscreen() {
+            true => {
+                if self.framed.take().is_some() {
+                    window.defer(cx, |window, cx| {
+                        state::apply_window_rounding(window, ui::Rounding::Square, cx);
+                    });
+                }
+            }
+            false => {
+                let settings = Sonora::global(cx).settings.read(cx);
+                let framed = (
+                    settings.window_rounding(),
+                    crate::chrome::traffic_lights(
+                        settings,
+                        ui::snapped(theme.metrics.title_bar, window),
+                    ),
+                );
+                if self.framed != Some(framed) {
+                    self.framed = Some(framed);
+                    window.defer(cx, move |window, cx| {
+                        state::apply_window_rounding(window, framed.0, cx);
+                        window.set_traffic_light_position(framed.1);
+                    });
+                }
             }
         }
 
@@ -1174,7 +1234,8 @@ impl Render for Root {
                         .opacity(hidden),
                 )
             })
-            .child(self.jam_invite.clone());
+            .child(self.jam_invite.clone())
+            .child(self.theme_invite.clone());
 
         let root = div()
             .relative()
@@ -1233,7 +1294,7 @@ impl Render for Root {
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())
             .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
             .on_action(|_: &ToggleWindowFullscreen, window, _| window.toggle_fullscreen())
-            .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.dismiss(cx)))
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleQueue, _, cx| this.show_side(SideTab::Queue, cx)),
             )
@@ -1241,6 +1302,9 @@ impl Render for Root {
                 cx.listener(|this, _: &ToggleLyrics, _, cx| this.show_side(SideTab::Lyrics, cx)),
             )
             .on_action(cx.listener(|this, _: &ToggleJam, _, cx| this.show_side(SideTab::Jam, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowMembers, _, cx| this.reveal_side(SideTab::Members, cx)),
+            )
             // The ambient background sits behind everything, title bar included.
             .when(ambient, |this| this.child(self.ambient.clone()))
             // The bar only changes when it is told to, so a frame drawn for the lyrics or the

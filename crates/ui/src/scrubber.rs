@@ -35,6 +35,11 @@ const REFLECTED: f32 = 0.35;
 /// How strongly the bars between the playhead and the pointer are lit, against played ones.
 const PREVIEWED: f32 = 0.55;
 
+/// How far the bubble stands off the track unless `lift` says otherwise.
+const LIFT: Pixels = px(12.);
+/// How far one screen reader step moves the slider, as a share of its length.
+const STEP: f32 = 0.05;
+
 /// How a waveform is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WaveStyle {
@@ -410,6 +415,10 @@ pub struct Scrubber {
     thumb: Hsla,
     enabled: bool,
     vertical: bool,
+    /// What a screen reader calls the slider.
+    name: Option<SharedString>,
+    /// What a screen reader reads as the position in place of the bare fraction.
+    value: Option<SharedString>,
     bubble: Option<(f32, SharedString)>,
     lift: Pixels,
     waveform: Option<Arc<[f32]>>,
@@ -431,8 +440,10 @@ impl Scrubber {
             thumb: gpui::white(),
             enabled: true,
             vertical: false,
+            name: None,
+            value: None,
             bubble: None,
-            lift: px(12.),
+            lift: LIFT,
             waveform: None,
             wave_style: WaveStyle::default(),
             density: WaveDensity::default(),
@@ -471,6 +482,12 @@ impl Scrubber {
         self
     }
 
+    /// How far a bubble standing `lift` off the track can reach past it, for an owner that
+    /// composites the scrubber inside a layer of its own and has to leave the bubble room in it.
+    pub fn bubble_reach(lift: Pixels, cx: &App) -> Pixels {
+        lift + px((cx.theme().metrics.pad / px(1.) * BUBBLE).round())
+    }
+
     pub fn colors(mut self, filled: Hsla, empty: Hsla, thumb: Hsla) -> Self {
         self.filled = filled;
         self.empty = empty;
@@ -485,6 +502,19 @@ impl Scrubber {
 
     pub fn vertical(mut self) -> Self {
         self.vertical = true;
+        self
+    }
+
+    /// Names the slider for screen readers after what it sets, such as the volume.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// The position as a screen reader should read it, such as the elapsed time or a percentage,
+    /// in place of the bare fraction between 0 and 1.
+    pub fn value(mut self, value: impl Into<SharedString>) -> Self {
+        self.value = Some(value.into());
         self
     }
 
@@ -530,6 +560,8 @@ impl RenderOnce for Scrubber {
             thumb,
             enabled,
             vertical,
+            name,
+            value,
             bubble,
             lift,
             waveform,
@@ -575,6 +607,23 @@ impl RenderOnce for Scrubber {
                 }
                 if let Some(handler) = on_move.as_ref() {
                     handler(&at(&state, event.event.position), window, cx);
+                }
+            }
+        };
+
+        // A screen reader steps the slider the way a short drag would, moving it and letting go,
+        // so an owner that only commits on release still hears the step.
+        let steps = on_move.is_some();
+        let stepped = {
+            let on_move = on_move.clone();
+            let on_release = on_release.clone();
+            move |by: f32, window: &mut Window, cx: &mut App| {
+                let Some(handler) = on_move.as_ref() else {
+                    return;
+                };
+                handler(&(fraction + by).clamp(0., 1.), window, cx);
+                if let Some(release) = on_release.as_ref() {
+                    release(&MouseUpEvent::default(), window, cx);
                 }
             }
         };
@@ -777,6 +826,26 @@ impl RenderOnce for Scrubber {
         };
 
         let mut scrubber = base
+            .role(gpui::accesskit::Role::Slider)
+            .aria_numeric_value(f64::from(fraction))
+            .aria_min_numeric_value(0.)
+            .aria_max_numeric_value(1.)
+            .aria_orientation(match vertical {
+                true => gpui::accesskit::Orientation::Vertical,
+                false => gpui::accesskit::Orientation::Horizontal,
+            })
+            .when_some(name, |this, name| this.aria_label(name))
+            .when_some(value, |this, value| this.aria_value(value))
+            .when(enabled && steps, |this| {
+                let up = stepped.clone();
+                this.aria_numeric_value_step(f64::from(STEP))
+                    .on_a11y_action(gpui::accesskit::Action::Increment, move |_, window, cx| {
+                        up(STEP, window, cx)
+                    })
+                    .on_a11y_action(gpui::accesskit::Action::Decrement, move |_, window, cx| {
+                        stepped(-STEP, window, cx)
+                    })
+            })
             .relative()
             .flex()
             .when_else(

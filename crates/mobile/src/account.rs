@@ -236,7 +236,8 @@ pub fn options(provider: &dyn MusicProvider) -> Vec<SignInOption> {
 /// The phone's word for a provider's reason.
 pub fn problem(problem: SignInProblem) -> Problem {
     match problem {
-        SignInProblem::Premium => Problem::Premium,
+        // Apple Music, the one provider that reports a missing subscription, is not on the phone
+        SignInProblem::Premium | SignInProblem::Subscription => Problem::Premium,
         SignInProblem::Region => Problem::Region,
         SignInProblem::Credentials => Problem::Credentials,
         SignInProblem::Secret => Problem::Secret,

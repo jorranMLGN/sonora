@@ -5,7 +5,7 @@ use router::{NavEntry, Screen};
 use ui::{MenuItem, OptionCard, Pace, Picker, Rounding, Saver, Stillness, Switch};
 
 use super::appearance::corner;
-use super::rows::{grid, segmented};
+use super::rows::{Announced as _, grid, segmented};
 use super::{Group, LANGUAGES, SettingsView, Slot};
 use crate::shared::popups::matches_query;
 
@@ -78,7 +78,10 @@ impl SettingsView {
                 }
             }));
 
-        self.row(t!("settings-startup"), picker.into_any_element())
+        self.row(
+            t!("settings-startup"),
+            picker.name(t!("settings-startup")).into_any_element(),
+        )
     }
 
     pub(super) fn entries_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -105,7 +108,10 @@ impl SettingsView {
                     }),
             );
 
-        self.row(t!("settings-entries"), picker.into_any_element())
+        self.row(
+            t!("settings-entries"),
+            picker.name(t!("settings-entries")).into_any_element(),
+        )
     }
 
     pub(super) fn language_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -130,11 +136,12 @@ impl SettingsView {
         let submitted = entries.clone();
 
         let picker = Picker::new(LANGUAGES, &self.popovers, current)
+            .name(t!("settings-language"))
             .width(Picker::WIDE)
             .menu(self.languages.menu("languages-menu", Picker::WIDE))
             .items(entries.into_iter().enumerate().map(|(place, (id, label))| {
                 MenuItem::new(id, label)
-                    .selected(place == cursor)
+                    .highlighted(place == cursor)
                     .checked(chosen == id)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings
@@ -172,6 +179,7 @@ impl SettingsView {
         self.row(
             t!("settings-server-side-decorations"),
             Switch::new("server-side-decorations", enabled)
+                .name(t!("settings-server-side-decorations"))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let decorations = this.settings.update(cx, |settings, cx| {
                         settings.set_server_side_decorations(!enabled, cx);
@@ -190,6 +198,7 @@ impl SettingsView {
         self.row(
             t!("settings-window-controls"),
             Switch::new("window-controls", on)
+                .name(t!("settings-window-controls"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_window_controls(!on, cx));
@@ -205,6 +214,7 @@ impl SettingsView {
         self.row(
             t!("settings-traffic-light-controls"),
             Switch::new("traffic-light-controls", on)
+                .name(t!("settings-traffic-light-controls"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
                         settings.set_traffic_light_controls(!on, cx)
@@ -233,19 +243,25 @@ impl SettingsView {
             .filter(|rounding| cfg!(not(target_os = "macos")) || *rounding != Rounding::Square)
             .collect::<Vec<_>>();
 
-        let cards =
-            grid(offered.len() as u16, window, cx).children(offered.into_iter().map(|rounding| {
-                OptionCard::new(SharedString::from(format!("window-{}", rounding.id())))
-                    .thumb(corner(rounding, cx))
-                    .label(rounding.label())
-                    .selected(current == rounding)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings.update(cx, |settings, cx| {
-                            settings.set_window_rounding(rounding, cx)
-                        });
-                        cx.notify();
-                    }))
-            }));
+        let cards = grid(offered.len() as u16, window, cx).children(
+            offered
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(place, rounding)| {
+                    OptionCard::new(SharedString::from(format!("window-{}", rounding.id())))
+                        .choice(rounding.label(), current == rounding, place, offered.len())
+                        .thumb(corner(rounding, cx))
+                        .label(rounding.label())
+                        .selected(current == rounding)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings.update(cx, |settings, cx| {
+                                settings.set_window_rounding(rounding, cx)
+                            });
+                            cx.notify();
+                        }))
+                }),
+        );
 
         self.stacked(t!("settings-window-rounding"), cards)
     }
@@ -274,7 +290,10 @@ impl SettingsView {
         )
         .when(!shown, |bar| bar.opacity(0.4));
 
-        self.row(t!("settings-controls-side"), sides.into_any_element())
+        self.row(
+            t!("settings-controls-side"),
+            sides.name(t!("settings-controls-side")).into_any_element(),
+        )
     }
 
     pub(super) fn motion_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -292,7 +311,10 @@ impl SettingsView {
             }),
         );
 
-        self.row(t!("settings-motion"), choices.into_any_element())
+        self.row(
+            t!("settings-motion"),
+            choices.name(t!("settings-motion")).into_any_element(),
+        )
     }
 
     pub(super) fn pace_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -310,7 +332,10 @@ impl SettingsView {
             }),
         );
 
-        self.row(t!("settings-pace"), choices.into_any_element())
+        self.row(
+            t!("settings-pace"),
+            choices.name(t!("settings-pace")).into_any_element(),
+        )
     }
 
     pub(super) fn saver_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -328,9 +353,12 @@ impl SettingsView {
             }),
         );
 
-        super::Row::new(t!("settings-saver"), choices.into_any_element())
-            .detail(t!("settings-saver-detail"))
-            .into_any_element()
+        super::Row::new(
+            t!("settings-saver"),
+            choices.name(t!("settings-saver")).into_any_element(),
+        )
+        .detail(t!("settings-saver-detail"))
+        .into_any_element()
     }
 
     pub(super) fn adaptive_menu_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -339,6 +367,7 @@ impl SettingsView {
         self.row(
             t!("settings-adaptive-menu"),
             Switch::new("adaptive-menu", on)
+                .name(t!("settings-adaptive-menu"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_adaptive_menu(!on, cx));
@@ -353,6 +382,7 @@ impl SettingsView {
         self.row(
             t!("settings-close-to-tray"),
             Switch::new("close-to-tray", on)
+                .name(t!("settings-close-to-tray"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_close_to_tray(!on, cx));
@@ -367,6 +397,7 @@ impl SettingsView {
         self.row(
             t!("settings-tray-icon"),
             Switch::new("tray-icon", on)
+                .name(t!("settings-tray-icon"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_tray_icon(!on, cx));

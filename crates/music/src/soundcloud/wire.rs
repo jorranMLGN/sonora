@@ -120,6 +120,7 @@ pub fn artist(raw: User, top_tracks: Vec<Model>) -> crate::Artist {
         monthly_listeners: None,
         top_tracks,
         albums: Vec::new(),
+        banner: None,
     }
 }
 

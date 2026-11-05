@@ -299,6 +299,16 @@ impl AppleClient {
         &self.storefront
     }
 
+    /// Whether Apple says the account has an active Apple Music subscription, which a Family
+    /// Sharing member's own Apple ID has too. `None` when the answer does not say either way.
+    pub(crate) async fn subscribed(&self) -> Result<Option<bool>> {
+        let body = self.get("/me/account", &[("meta", "subscription")]).await?;
+        let answered: Value = serde_json::from_str(&body).unwrap_or_default();
+        Ok(answered
+            .pointer("/meta/subscription/active")
+            .and_then(Value::as_bool))
+    }
+
     pub(crate) fn catalog(&self, path: &str) -> String {
         format!("/catalog/{}{path}", escape::component(&self.storefront))
     }
@@ -480,6 +490,29 @@ impl AppleClient {
                 Some("library-albums") => wire::library_album(row).map(GenreItem::Album),
                 Some("playlists") | Some("library-playlists") => {
                     wire::playlist(row).map(GenreItem::Playlist)
+                }
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// A bounded shelf in Apple's addition order. Albums without a playable catalog copy
+    /// are omitted, as they are in the rest of the library.
+    async fn recently_added(&self) -> Result<Vec<GenreItem>> {
+        let body = self
+            .get(
+                "/me/library/recently-added",
+                &[("limit", "10"), ("include", "catalog"), ALBUM_ARTISTS],
+            )
+            .await?;
+        let answered: wire::Answer = wire::answer(&body);
+        Ok(answered
+            .data
+            .iter()
+            .filter_map(|row| match row.kind.as_str() {
+                Some("library-albums") => wire::library_album(row).map(GenreItem::Album),
+                Some("library-playlists") => {
+                    wire::library_playlist(row, OWNER).map(GenreItem::Playlist)
                 }
                 _ => None,
             })
@@ -1521,7 +1554,7 @@ impl MusicApi for AppleClient {
                     ),
                     ("include[songs]", "artists,albums"),
                     ALBUM_ARTISTS,
-                    ("extend", "artistBio"),
+                    ("extend", "artistBio,editorialArtwork"),
                 ],
             )
             .await?;
@@ -1535,6 +1568,10 @@ impl MusicApi for AppleClient {
 
     async fn artist_catalogue(&self, artist_id: &str, _known: &[Track]) -> Result<ArtistCatalogue> {
         recommend::artist_catalogue(self, artist_id).await
+    }
+
+    async fn artist_tracks(&self, artist_id: &str) -> Result<Vec<Track>> {
+        recommend::artist_tracks(self, artist_id).await
     }
 
     async fn artist_profile(&self, artist_id: &str) -> Result<ArtistProfile> {
@@ -1844,11 +1881,25 @@ impl MusicApi for AppleClient {
             sections = self.charts(None).await.unwrap_or_default();
         }
         // Apple's own recently played group is a cached ranking that lags real plays, so the live
-        // list leads Quick picks and the group only stands in when that list cannot be read.
-        let (containers, songs) = futures::join!(
+        // list fills the Recently played shelf and leads Quick picks, and the group only stands
+        // in when that list cannot be read.
+        let (containers, songs, added) = futures::join!(
             self.recent_items(),
-            <Self as MusicApi>::recently_played(self)
+            <Self as MusicApi>::recently_played(self),
+            self.recently_added()
         );
+        match added {
+            Ok(items) if !items.is_empty() => sections.insert(
+                past_mixes(&sections),
+                GenreSection {
+                    title: "home-recently-added".to_owned(),
+                    items,
+                    provider: Some("apple".into()),
+                },
+            ),
+            Ok(_) => {}
+            Err(error) => log::warn!("apple: cannot load recently added: {error:#}"),
+        }
         let containers = match containers {
             Ok(live) if !live.is_empty() => live,
             Ok(_) => recents,
@@ -1857,6 +1908,16 @@ impl MusicApi for AppleClient {
                 recents
             }
         };
+        if !containers.is_empty() {
+            sections.insert(
+                0,
+                GenreSection {
+                    title: "home-recently-played".to_owned(),
+                    items: containers.clone(),
+                    provider: Some("apple".into()),
+                },
+            );
+        }
         let songs = songs.unwrap_or_else(|error| {
             log::warn!("apple: cannot load recently played songs: {error:#}");
             Vec::new()
@@ -1906,6 +1967,19 @@ impl MusicApi for AppleClient {
             name,
             sections: self.charts(Some(genre_id)).await?,
         })
+    }
+
+    /// The cover of the genre's top album, which Apple's genre list leaves out.
+    async fn genre_cover(&self, genre_id: &str) -> Result<Option<String>> {
+        let query = [("types", "albums"), ("limit", "1"), ("genre", genre_id)];
+        let body = self.get(&self.catalog("/charts"), &query).await?;
+        let answered: wire::Answer<wire::Charts> = wire::answer(&body);
+        Ok(answered
+            .results
+            .albums
+            .iter()
+            .flat_map(wire::Relation::rows)
+            .find_map(|row| wire::album(row)?.cover))
     }
 
     /// The station a track seeds, as a queue's worth of tracks.
@@ -2043,8 +2117,23 @@ fn recent_mix(containers: Vec<GenreItem>, songs: Vec<Track>) -> Vec<GenreItem> {
     mixed
 }
 
-/// Whether a recommendation group is the account's recently played one, which Quick picks
-/// replace. Its title is in the storefront's language, so only its kind is checked.
+/// The index right below the last shelf holding one of Apple's personal mixes, the colored
+/// playlists made for the listener, or 0 when no shelf holds one. Personal mix ids start with
+/// `pl.pm-`.
+fn past_mixes(sections: &[GenreSection]) -> usize {
+    sections
+        .iter()
+        .rposition(|section| {
+            section.items.iter().any(|item| {
+                matches!(item, GenreItem::Playlist(playlist) if playlist.id.starts_with("pl.pm-"))
+            })
+        })
+        .map_or(0, |at| at + 1)
+}
+
+/// Whether a recommendation group is the account's recently played one, which the live
+/// Recently played shelf replaces. Its title is in the storefront's language, so only its kind
+/// is checked.
 fn is_recents(group: &Resource) -> bool {
     group
         .attributes

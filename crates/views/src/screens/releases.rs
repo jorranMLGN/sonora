@@ -92,12 +92,15 @@ impl ReleasesView {
     fn vacancy(&self, state: ReleasesState, cx: &App) -> Option<Vacancy> {
         let signed_in = !self.session.read(cx).active_slugs().is_empty();
         match state {
-            _ if !signed_in => {
-                Some(Vacancy::new(t!("releases-signed-out")).icon("icons/disc-3.svg"))
-            }
+            _ if !signed_in => Some(
+                Vacancy::new(t!("releases-signed-out"))
+                    .spoken("releases-signed-out")
+                    .icon("icons/disc-3.svg"),
+            ),
             ReleasesState::Idle | ReleasesState::Loading => None,
             ReleasesState::Ready => Some(
                 Vacancy::new(t!("releases-empty"))
+                    .spoken("releases-empty")
                     .detail(t!("releases-empty-detail"))
                     .icon("icons/disc-3.svg"),
             ),

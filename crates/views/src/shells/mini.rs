@@ -6,7 +6,7 @@ use gpui::{
     SharedString, Window, WindowControlArea, div, px, relative, svg,
 };
 use i18n::t;
-use state::{AppSettings, Playback, PlaybackState, Queue, Sonora, WaveformPlace};
+use state::{AppSettings, Playback, PlaybackState, Sonora, WaveformPlace};
 use ui::{ActiveTheme as _, Artwork, Button, Scrubber, ScrubberState, Text, Visualizer, clock};
 
 use crate::shared::provider_mark;
@@ -19,7 +19,6 @@ const VOLUME: gpui::Pixels = px(56.);
 
 pub struct MiniPlayer {
     playback: Entity<Playback>,
-    queue: Entity<Queue>,
     settings: Entity<AppSettings>,
     visualizer: VisualizerDrive,
     seek: ScrubberState,
@@ -42,7 +41,6 @@ impl MiniPlayer {
 
         Self {
             playback,
-            queue,
             settings,
             visualizer: VisualizerDrive::default(),
             seek: ScrubberState::new("mini-seek"),
@@ -242,7 +240,7 @@ impl Render for MiniPlayer {
                                     .gap_2()
                                     .child(previous(&self.playback, false, cx))
                                     .child(toggle(&self.playback, false, false, cx))
-                                    .child(next(&self.playback, &self.queue, false, cx))
+                                    .child(next(&self.playback, false, cx))
                                     .child(self.loudness(cx)),
                             )
                             .child(

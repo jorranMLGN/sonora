@@ -14,6 +14,7 @@ const GAP: f32 = 3.;
 const BAR: f32 = 3.;
 const BAR_GAP: f32 = 1.5;
 const OPACITY: f32 = 0.32;
+/// The least a mirrored bar or a dot stands, and half the level a peak mark needs to be drawn.
 const FLOOR: f32 = 0.03;
 const STROKE: f32 = 2.;
 const CHANNELS: [f32; 2] = [0.62, 1.];
@@ -557,20 +558,17 @@ fn bars(levels: &Levels, shape: Shape, paint: Paint, marks: Paint) -> impl IntoE
                 return;
             };
             let floor = Floor::new(bounds, shape.radius);
-            let lift = |level: f32| shape.max * level.clamp(FLOOR, 1.) / (1. + shape.ride);
+            let lift = |level: f32| shape.max * level.clamp(0., 1.) / (1. + shape.ride);
             let marked = shape.peaks && peaks.len() >= 2;
             let mut body = Shapes::default();
             let mut caps = Shapes::default();
             for index in 0..count {
                 let left = start + (width + gap) * index as f32;
                 let at = (index as f32 + 0.5) / count as f32;
-                bar(
-                    &mut body,
-                    &floor,
-                    left,
-                    left + width,
-                    lift(sample(&bands, at)),
-                );
+                let height = lift(sample(&bands, at));
+                if height > Pixels::ZERO {
+                    bar(&mut body, &floor, left, left + width, height);
+                }
                 if marked {
                     let peak = sample(&peaks, at);
                     if peak > FLOOR * 2. {
@@ -967,7 +965,7 @@ fn wave(
         // A quiet band at the edge would put its crest below where a rounded floor curves,
         // so every crest keeps above the floor at its own column, stroke included.
         let crest = |x: Pixels, band: f32| {
-            let y = floor - inset - span * band.clamp(FLOOR, 1.);
+            let y = floor - inset - span * band.clamp(0., 1.);
             point(x, y.min(rounded.at(x) - inset))
         };
         let mut points = Vec::with_capacity(bands.len() + 2);

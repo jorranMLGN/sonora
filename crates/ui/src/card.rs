@@ -12,7 +12,7 @@ use crate::artwork::cover_palette;
 use crate::artwork::{Artwork, Avatar, ROUNDED};
 use crate::button::Button;
 use crate::glass::{GLASS_BLUR, blurring};
-use crate::label::upper;
+use crate::label::{Tails as _, upper};
 use crate::metrics::{LEADING, Text, snapped};
 use crate::skeleton::Skeleton;
 use crate::theme::ActiveTheme as _;
@@ -41,6 +41,8 @@ pub struct Card {
     base: Stateful<Div>,
     title: SharedString,
     eyebrow: Option<SharedString>,
+    /// What a screen reader reads after the title, standing in for the meta line it cannot reach.
+    description: Option<SharedString>,
     size: Option<Text>,
     weight: Option<FontWeight>,
     meta: Option<AnyElement>,
@@ -65,6 +67,7 @@ pub struct Card {
     underline: bool,
     playing: bool,
     chosen: bool,
+    tucked: bool,
     action: Option<AnyElement>,
     drag_start: Option<DragStart>,
     menu: Option<Summon>,
@@ -77,6 +80,7 @@ impl Card {
             base: div().id(id),
             title: title.into(),
             eyebrow: None,
+            description: None,
             size: None,
             weight: None,
             meta: None,
@@ -101,6 +105,7 @@ impl Card {
             underline: false,
             playing: false,
             chosen: false,
+            tucked: false,
             action: None,
             drag_start: None,
             menu: None,
@@ -195,6 +200,14 @@ impl Card {
         self
     }
 
+    /// What a screen reader reads after the title, such as the artist and year the meta line
+    /// shows. The meta line is an element no reader can reach, and the eyebrow stands in when
+    /// this is not set.
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
     pub fn size(mut self, size: Text) -> Self {
         self.size = Some(size);
         self
@@ -238,6 +251,13 @@ impl Card {
 
     pub fn flat(mut self) -> Self {
         self.fill = false;
+        self
+    }
+
+    /// Rounds the card to sit inside a padded panel such as a dropdown, so its corners follow
+    /// the panel's instead of bulging past them.
+    pub fn tucked(mut self) -> Self {
+        self.tucked = true;
         self
     }
 
@@ -291,6 +311,7 @@ impl RenderOnce for Card {
             mut base,
             title,
             eyebrow,
+            description,
             size,
             weight,
             meta,
@@ -315,6 +336,7 @@ impl RenderOnce for Card {
             underline,
             playing,
             chosen,
+            tucked,
             action,
             drag_start,
             menu,
@@ -422,7 +444,9 @@ impl RenderOnce for Card {
                                     .rounded(corner)
                                     .cursor_pointer()
                                     .bg(theme.overlay)
-                                    .tip(hint, Perch::Pointer)
+                                    .role(gpui::accesskit::Role::Button)
+                                    .aria_label(i18n::lookup(hint, None))
+                                    .tip(hint, Perch::Below)
                                     .child(
                                         svg()
                                             .path(icons::path(glyph))
@@ -452,10 +476,23 @@ impl RenderOnce for Card {
             }
         };
 
+        // The meta line is an element no reader can reach, so the description or the eyebrow
+        // stands in for it, and the explicit badge is read after them.
+        let about = [
+            description.or_else(|| eyebrow.clone()),
+            explicit.then(|| i18n::lookup("song-explicit", None)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+        let name = title.clone();
         let title = div()
             .id("card-title")
             .min_w_0()
             .truncate()
+            .tails()
             .when_some(drag_start.clone(), |this, drag_start| {
                 this.on_mouse_down(MouseButton::Right, move |event, window, cx| {
                     drag_start(event, window, cx)
@@ -464,7 +501,7 @@ impl RenderOnce for Card {
             .when_some(weight, |this, weight| this.font_weight(weight))
             .when(underline, |this| this.hover(|style| style.underline()))
             .when(hint && !title.is_empty(), |this| {
-                this.tip_label(title.clone(), Perch::Pointer)
+                this.tip_label(title.clone(), Perch::Below)
             })
             .text_color(tint.unwrap_or(theme.foreground))
             .when_some(size, |this, size| this.text_size(theme.text(size)))
@@ -485,6 +522,7 @@ impl RenderOnce for Card {
             false => div()
                 .min_w_0()
                 .truncate()
+                .tails()
                 .text_size(theme.text(Text::Small))
                 .text_color(theme.muted_foreground)
                 .child(meta),
@@ -507,6 +545,15 @@ impl RenderOnce for Card {
         });
 
         let mut card = base
+            // A card that opens something reads as one button named for its
+            // title, while a still card is a group so the title stays reachable.
+            .role(match press.is_some() {
+                true => gpui::accesskit::Role::Button,
+                false => gpui::accesskit::Role::Group,
+            })
+            .aria_label(name)
+            .when(!about.is_empty(), |this| this.aria_description(about))
+            .when(chosen, |this| this.aria_selected(true))
             .group(CARD_GROUP)
             .flex()
             .when_else(
@@ -514,7 +561,10 @@ impl RenderOnce for Card {
                 |this| this.flex_col().gap_2().w(art),
                 |this| this.items_center().gap_3().px(inset),
             )
-            .rounded(theme.radius)
+            .rounded(match tucked {
+                true => crate::metrics::tucked(theme.radius, window),
+                false => theme.radius,
+            })
             .when(listed, |this| {
                 this.flex_none().h(height).py(inset).w_full().min_w_0()
             })

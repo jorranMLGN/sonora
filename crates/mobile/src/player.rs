@@ -519,7 +519,7 @@ impl Deck {
                     self.failed(&item, why);
                 }
             }
-            PlaybackEvent::OutputChanged => {
+            PlaybackEvent::OutputChanged { .. } => {
                 log::info!("player: the audio output changed, dropping the {slug} engine");
                 self.engines.remove(slug);
                 self.active = None;

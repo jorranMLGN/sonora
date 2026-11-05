@@ -3,92 +3,62 @@
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
-
-use crate::connect::{Collection, Command, Connect, Event, NowPlaying, Roster, Start};
+use crate::connect::{
+    Collection, Command, Connect, Event, QueuedTrack, Request, Roster, Snapshot, Start,
+};
 use crate::tag;
 
-/// A `Connect` that speaks tagged ids to the app and bare ids to the provider underneath.
-pub(super) struct TaggedConnect {
-    pub(super) slug: &'static str,
-    pub(super) inner: Arc<dyn Connect>,
-}
-
-impl Connect for TaggedConnect {
-    fn enable(&self, on: bool) {
-        self.inner.enable(on);
+/// A `Connect` that speaks tagged ids to the app and bare ids to `inner`, the provider's own.
+/// Two threads carry the traffic across, since both ends are read from outside any runtime.
+/// Dropping the returned handle ends both threads, and with them the hold on `inner`.
+pub(super) fn wrap(slug: &'static str, inner: Arc<Connect>) -> Option<Arc<Connect>> {
+    let (outer, mut requests, events) = Connect::new(inner.device().to_owned());
+    let bare = inner.events();
+    let spawned = std::thread::Builder::new()
+        .name(format!("{slug}-connect-requests"))
+        .spawn(move || {
+            while let Some(request) = requests.blocking_recv() {
+                inner.send(untag_request(slug, request));
+            }
+        });
+    if let Err(error) = spawned {
+        log::error!("connect: cannot spawn the {slug} request thread: {error}");
+        return None;
     }
-
-    fn rename(&self, naming: crate::connect::Naming) {
-        self.inner.rename(naming);
-    }
-
-    /// Reports only this network's own tracks. Another provider's track playing is nothing the
-    /// network can show, so it hears that nothing of its own plays.
-    fn publish(&self, now: Option<NowPlaying>) {
-        let own = |id: &str| tag::slug_of(id) == Some(self.slug);
-        self.inner
-            .publish(now.filter(|now| own(&now.track)).map(|mut now| {
-                now.track = tag::untag(&now.track).to_owned();
-                now.upcoming.retain(|id| own(id));
-                untag_all(&mut now.upcoming);
-                now.context = now.context.map(untag_collection);
-                now
-            }));
-    }
-
-    /// The provider's events, tagged by a thread of their own, since the receiver is read from
-    /// outside any runtime.
-    fn events(&self) -> Option<UnboundedReceiver<Event>> {
-        let mut bare = self.inner.events()?;
-        let (sender, tagged) = unbounded_channel();
-        let slug = self.slug;
+    if let Some(mut bare) = bare {
         let spawned = std::thread::Builder::new()
             .name(format!("{slug}-connect-events"))
             .spawn(move || {
                 while let Some(event) = bare.blocking_recv() {
-                    if sender.send(tag_event(slug, event)).is_err() {
+                    if events.send(tag_event(slug, event)).is_err() {
                         return;
                     }
                 }
             });
         if let Err(error) = spawned {
             log::error!("connect: cannot spawn the {slug} event thread: {error}");
-            return None;
         }
-        Some(tagged)
     }
+    Some(Arc::new(outer))
+}
 
-    fn device(&self) -> String {
-        self.inner.device()
-    }
-
-    fn transfer(&self, to: &str) {
-        self.inner.transfer(to);
-    }
-
-    fn control(&self, device: &str, command: Command) {
-        self.inner.control(device, untag_command(command));
-    }
-
-    fn join(&self, link: &str) {
-        self.inner.join(link);
-    }
-
-    fn start(&self) {
-        self.inner.start();
-    }
-
-    fn peek(&self, link: &str) {
-        self.inner.peek(link);
-    }
-
-    fn leave(&self) {
-        self.inner.leave();
-    }
-
-    fn kick(&self, member: &str) {
-        self.inner.kick(member);
+/// `request` as the provider underneath takes it. A report of what plays keeps only this
+/// network's own tracks: another provider's track playing is nothing the network can show, so it
+/// hears that nothing of its own plays.
+fn untag_request(slug: &str, request: Request) -> Request {
+    let own = |queued: &QueuedTrack| tag::slug_of(&queued.id) == Some(slug);
+    match request {
+        Request::Publish(Some(state)) => {
+            if state.track.as_ref().is_some_and(|track| !own(track)) {
+                return Request::Publish(None);
+            }
+            let mut state = (*state).clone();
+            state.previous.retain(own);
+            state.upcoming.retain(own);
+            Request::Publish(Some(Arc::new(map_snapshot(state, &untag))))
+        }
+        Request::Control(device, command) => Request::Control(device, map_command(command, &untag)),
+        other => other,
     }
 }
 
@@ -99,10 +69,7 @@ fn tag_event(slug: &str, event: Event) -> Event {
         Event::Roster(Roster { devices, elsewhere }) => Event::Roster(Roster {
             devices,
             elsewhere: elsewhere.map(|mut elsewhere| {
-                elsewhere.track = elsewhere.track.as_deref().map(tagged);
-                for listed in &mut elsewhere.upcoming {
-                    listed.id = tagged(&listed.id);
-                }
+                elsewhere.state = Arc::new(map_snapshot((*elsewhere.state).clone(), &tagged));
                 elsewhere
             }),
         }),
@@ -110,12 +77,13 @@ fn tag_event(slug: &str, event: Event) -> Event {
             track: tagged(&track),
             liked,
         },
+        Event::PlaylistChanged(id) => Event::PlaylistChanged(tagged(&id)),
         other => other,
     }
 }
 
-fn untag_command(command: Command) -> Command {
-    map_command(command, &|id: &str| tag::untag(id).to_owned())
+fn untag(id: &str) -> String {
+    tag::untag(id).to_owned()
 }
 
 /// `command` with every id it carries passed through `map`.
@@ -125,19 +93,41 @@ fn map_command(command: Command, map: &dyn Fn(&str) -> String) -> Command {
             id: map(&id),
             added_by,
         },
-        Command::Start(start) => Command::Start(map_start(start, map)),
+        Command::Start(start) => Command::Start(Start {
+            state: Arc::new(map_snapshot((*start.state).clone(), map)),
+            ..start
+        }),
+        Command::SetQueue { previous, upcoming } => Command::SetQueue {
+            previous: map_queued(previous, map),
+            upcoming: map_queued(upcoming, map),
+        },
         other => other,
     }
 }
 
-fn map_start(start: Start, map: &dyn Fn(&str) -> String) -> Start {
-    Start {
-        collection: start
-            .collection
+fn map_snapshot(state: Snapshot, map: &dyn Fn(&str) -> String) -> Snapshot {
+    Snapshot {
+        track: state.track.map(|track| map_track(track, map)),
+        previous: map_queued(state.previous, map),
+        upcoming: map_queued(state.upcoming, map),
+        context: state
+            .context
             .map(|collection| map_collection(collection, map)),
-        track: start.track.as_deref().map(map),
-        upcoming: start.upcoming.iter().map(|id| map(id)).collect(),
-        ..start
+        ..state
+    }
+}
+
+fn map_queued(tracks: Vec<QueuedTrack>, map: &dyn Fn(&str) -> String) -> Vec<QueuedTrack> {
+    tracks
+        .into_iter()
+        .map(|track| map_track(track, map))
+        .collect()
+}
+
+fn map_track(track: QueuedTrack, map: &dyn Fn(&str) -> String) -> QueuedTrack {
+    QueuedTrack {
+        id: map(&track.id),
+        ..track
     }
 }
 
@@ -150,85 +140,56 @@ fn map_collection(collection: Collection, map: &dyn Fn(&str) -> String) -> Colle
     }
 }
 
-fn untag_collection(collection: Collection) -> Collection {
-    map_collection(collection, &|id: &str| tag::untag(id).to_owned())
-}
-
-fn untag_all(ids: &mut [String]) {
-    for id in ids {
-        *id = tag::untag(id).to_owned();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A device network that keeps what it was told is playing.
-    #[derive(Default)]
-    struct Told(std::sync::Mutex<Vec<Option<NowPlaying>>>);
-
-    impl Connect for Told {
-        fn enable(&self, _: bool) {}
-        fn rename(&self, _: crate::connect::Naming) {}
-        fn publish(&self, now: Option<NowPlaying>) {
-            self.0.lock().unwrap().push(now);
-        }
-        fn events(&self) -> Option<UnboundedReceiver<Event>> {
-            None
-        }
-        fn device(&self) -> String {
-            String::new()
-        }
-        fn transfer(&self, _: &str) {}
-        fn control(&self, _: &str, _: Command) {}
-        fn join(&self, _: &str) {}
-        fn start(&self) {}
-        fn peek(&self, _: &str) {}
-        fn leave(&self) {}
-        fn kick(&self, _: &str) {}
+    fn queued(id: &str) -> QueuedTrack {
+        QueuedTrack::new(id.to_owned(), false)
     }
 
-    fn playing(track: &str, upcoming: &[&str]) -> NowPlaying {
-        NowPlaying {
-            track: track.to_owned(),
-            upcoming: upcoming.iter().map(|id| (*id).to_owned()).collect(),
-            context: None,
-            index: None,
+    fn playing(track: &str, upcoming: &[&str]) -> Snapshot {
+        Snapshot {
+            track: Some(queued(track)),
+            upcoming: upcoming.iter().map(|id| queued(id)).collect(),
             playing: true,
-            position: std::time::Duration::ZERO,
-            duration: std::time::Duration::ZERO,
             volume: 1.,
-            shuffle: false,
-            repeat: crate::connect::RepeatMode::Off,
+            ..Snapshot::default()
+        }
+    }
+
+    fn published(request: Request) -> Option<Snapshot> {
+        match request {
+            Request::Publish(state) => state.map(|state| (*state).clone()),
+            _ => panic!("a publish stays a publish"),
         }
     }
 
     #[test]
     fn only_the_networks_own_tracks_are_reported_as_playing() {
-        let told = Arc::new(Told::default());
-        let connect = TaggedConnect {
-            slug: "spotify",
-            inner: told.clone(),
-        };
+        let own = untag_request(
+            "spotify",
+            Request::Publish(Some(Arc::new(playing(
+                "spotify:a",
+                &["youtube-video:b", "spotify:c"],
+            )))),
+        );
+        let other = untag_request(
+            "spotify",
+            Request::Publish(Some(Arc::new(playing("youtube-video:b", &["spotify:c"])))),
+        );
 
-        connect.publish(Some(playing(
-            "spotify:a",
-            &["youtube-video:b", "spotify:c"],
-        )));
-        connect.publish(Some(playing("youtube-video:b", &["spotify:c"])));
-
-        let told = told.0.lock().unwrap();
-        assert_eq!(told[0], Some(playing("a", &["c"])));
-        assert_eq!(told[1], None);
+        assert_eq!(published(own), Some(playing("a", &["c"])));
+        assert_eq!(published(other), None);
     }
 
     #[test]
     fn a_start_from_the_network_comes_in_tagged_and_goes_out_bare() {
         let start = Start {
-            collection: Some(Collection::Album("album".into())),
-            track: Some("song".into()),
-            upcoming: vec!["next".into()],
+            state: Arc::new(Snapshot {
+                context: Some(Collection::Album("album".into())),
+                ..playing("song", &["next"])
+            }),
             ..Start::default()
         };
         let Event::Command(Command::Start(tagged)) =
@@ -237,11 +198,17 @@ mod tests {
             panic!("a start stays a start");
         };
         assert_eq!(
-            tagged.collection,
+            tagged.state.context,
             Some(Collection::Album(tag::tag("spotify", "album")))
         );
-        assert_eq!(tagged.track, Some(tag::tag("spotify", "song")));
-        assert_eq!(tagged.upcoming, vec![tag::tag("spotify", "next")]);
-        assert_eq!(untag_command(Command::Start(tagged)), Command::Start(start));
+        assert_eq!(
+            tagged.state.track.as_ref().map(|track| track.id.as_str()),
+            Some(tag::tag("spotify", "song").as_str())
+        );
+        assert_eq!(tagged.state.upcoming[0].id, tag::tag("spotify", "next"));
+        assert_eq!(
+            map_command(Command::Start(tagged), &untag),
+            Command::Start(start)
+        );
     }
 }

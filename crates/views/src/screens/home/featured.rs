@@ -59,7 +59,6 @@ pub(crate) fn hero(
                         .child(
                             HeroPlayButton::new(
                                 "home-featured-play",
-                                t!("home-featured-play"),
                                 discover.featured_tracks().as_ref().clone(),
                                 playback.clone(),
                             )
@@ -86,13 +85,8 @@ pub(crate) fn hero(
             .cover(cover(featured, discover))
             .eyebrow(t!("home-featured-mix"))
             .actions(
-                HeroPlayButton::new(
-                    "home-featured-play",
-                    t!("home-featured-play"),
-                    mix.tracks.clone(),
-                    playback.clone(),
-                )
-                .from(Some(Origin::radio(seed))),
+                HeroPlayButton::new("home-featured-play", mix.tracks.clone(), playback.clone())
+                    .from(Some(Origin::radio(seed))),
             )
         }
     };

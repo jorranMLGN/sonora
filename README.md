@@ -21,7 +21,7 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/a8N8Tx23rV)
 [![Matrix](https://img.shields.io/badge/Matrix-000000?style=for-the-badge&logo=matrix&logoColor=white)](https://matrix.to/#/#sonora:nolight.dev)
 
-### A native music streaming client, built with Rust and GPUI
+### A native, familiar music streaming client
 
 Stream from your favorite services and play local files — all in one **native** app.
 </div>
@@ -30,15 +30,15 @@ Stream from your favorite services and play local files — all in one **native*
     <table>
       <tr>
         <td colspan="2">
-          <img width="1613" height="981" alt="image" src="https://github.com/user-attachments/assets/7952a912-7fbc-4186-b467-a08dd7e71e22" />
+          <img width="1556" height="967" alt="image" src="https://github.com/user-attachments/assets/c797cb19-9631-45b0-91b6-695f28f4143d" />
         </td>
       </tr>
       <tr>
         <td width="50%">
-          <img width="1623" height="987" alt="image" src="https://github.com/user-attachments/assets/580bf9d6-db85-4fde-b599-82ba2a28cc51" />
+          <img width="1555" height="966" alt="image" src="https://github.com/user-attachments/assets/b556bcd0-2823-485f-83f3-41e1099fdc45" />
         </td>
         <td width="50%">
-          <img width="1623" height="987" alt="image" src="https://github.com/user-attachments/assets/64fcd709-5917-432c-a418-2e07527343d2" />
+          <img width="1555" height="966" alt="image" src="https://github.com/user-attachments/assets/f27400ab-9264-4d82-9a70-e0a60e0c3a5f" />
         </td>
       </tr>
     </table>
@@ -87,6 +87,8 @@ After installing (thanks Apple):
 xattr -dr com.apple.quarantine /Applications/Sonora.app
 ```
 
+Or install the [disk image](https://github.com/sonorahq/sonora/releases/latest), which updates itself.
+
 ### Linux
 
 #### Arch
@@ -97,19 +99,13 @@ Install from the AUR with your AUR helper of choice:
 yay -S sonora-bin
 ```
 
-`sonora-bin` installs the prebuilt release binary. `sonora` builds the same version from source
-instead, which takes a while on a Rust and GPUI tree but links against your own system libraries:
+Or:
 
 ```sh
 yay -S sonora
 ```
 
-Either `pipewire-alsa` or `pulseaudio-alsa` is required, matching your sound server. Sonora
-warns you at startup when the one your sound server needs is missing.
-
 #### Flatpak
-
-Add the Sonora repository (updates with `flatpak update`):
 
 ```sh
 flatpak install --user https://sonorahq.github.io/sonora/sonora.flatpakref
@@ -117,8 +113,7 @@ flatpak install --user https://sonorahq.github.io/sonora/sonora.flatpakref
 
 #### AppImage
 
-Download the `x86_64` AppImage from the
-[latest release](https://github.com/sonorahq/sonora/releases/latest), make it executable and run
+Download from the [latest release](https://github.com/sonorahq/sonora/releases/latest), make it executable and run
 it:
 
 ```sh
@@ -126,13 +121,9 @@ chmod +x sonora-*.AppImage
 ./sonora-*.AppImage
 ```
 
-An `aarch64` build is published beside it. The AppImage carries no Vulkan driver and no ALSA
-bridge, so both still come from your system. It does not update itself, but it carries its update
-information, so [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) or an
-AppImage manager such as [AppManager](https://github.com/kem-a/AppManager) can fetch a new release
-for you.
-
 ### Nix
+
+Add either of those inputs:
 
 ```nix
 inputs.sonora.url = "github:sonorahq/sonora";
@@ -145,25 +136,9 @@ inputs.sonora.packages.${system}.sonora-bin  (prebuilt, x86_64-linux, aarch64-li
 inputs.sonora.packages.${system}.sonora-src  (always built from source)
 ```
 
-The prebuilt package downloads the latest tagged release. `sonora-src` compiles whatever
-revision of the flake you point it at, so pin the input to a tag such as
-`github:sonorahq/sonora/v0.43.0` to build a release. Building from source on macOS needs Xcode
-added to the Nix store, because the shaders compile with Apple's Metal compiler.
+Building from source on macOS needs Xcode added to the Nix store, because the shaders compile with Apple's Metal compiler.
 
-You can set configuration options via the included Home Manager module under `programs.sonora`:
-
-```nix
-{
-  imports = [ inputs.sonora.homeManagerModules.default ];
-  programs.sonora = {
-    enable = true;
-    settings = {
-      provider = "youtube";
-      appearance.theme = "dark";
-    };
-  };
-}
-```
+Configuration with Home Manager is provided by the module under `programs.sonora`.
 
 ### Windows
 
@@ -202,46 +177,27 @@ scrobbling are not there yet.
 Feel free to join our [Discord](https://discord.gg/a8N8Tx23rV) server and [Matrix](https://matrix.to/#/#sonora:nolight.dev) space.
 Discord is the primary one, but we do have a Matrix bridge.
 
-## AI policy
-
-We have nothing against the usage of LLMs in the project — in fact, we use them ourselves.
-We believe that AI can speed up development in a lot of meaningful ways and be a useful
-tool for learning new concepts. We have also found it particularly helpful for
-contributing to substantial codebases such as GPUI and librespot, where it has helped
-us quickly locate the relevant parts of the code.
-
-**However**, using AI cannot act as an excuse for failing to
-understand, review, and test the changes proposed. Furthermore, we expect communication
-with a real person, not a computer. This includes but is not limited to PR/issue text
-generation, comments in discussions, etc. A short summary of minor changes can be
-generated and does not need to be disclosed explicitly, but the reasoning and motivation
-behind a change must come from the contributor and reflect their own understanding.
-
-Note that PRs that fail to adhere to these requirements may be rejected without further notice.
-
-AI-assisted proofreading and translation of human-written text are permitted.
-
 ## Translations
 
 <!-- i18n:start -->
 
 | Language | Translated | Coverage |
 | --- | --- | --- |
-| English (`en-US`) | 1479/1479 | 100% |
-| Deutsch (`de`) | 1114/1479 | 75% |
-| Español (`es`) | 1114/1479 | 75% |
-| Français (`fr`) | 1114/1479 | 75% |
-| Italiano (`it`) | 1114/1479 | 75% |
-| Bahasa Indonesia (`id`) | 1114/1479 | 75% |
-| 日本語 (`ja`) | 1114/1479 | 75% |
-| Русский (`ru`) | 1121/1479 | 76% |
-| Українська (`uk`) | 1121/1479 | 76% |
-| Polski (`pl`) | 1121/1479 | 76% |
-| Čeština (`cs`) | 1114/1479 | 75% |
-| Português (Brasil) (`pt-BR`) | 1114/1479 | 75% |
-| 简体中文 (`zh-CN`) | 1114/1479 | 75% |
-| Türkçe (`tr`) | 1114/1479 | 75% |
-| Shqip (`sq`) | 1114/1479 | 75% |
+| English (`en-US`) | 1586/1586 | 100% |
+| Deutsch (`de`) | 1106/1586 | 70% |
+| Español (`es`) | 1106/1586 | 70% |
+| Français (`fr`) | 1107/1586 | 70% |
+| Italiano (`it`) | 1106/1586 | 70% |
+| Bahasa Indonesia (`id`) | 1106/1586 | 70% |
+| 日本語 (`ja`) | 1106/1586 | 70% |
+| Русский (`ru`) | 1159/1586 | 73% |
+| Українська (`uk`) | 1115/1586 | 70% |
+| Polski (`pl`) | 1115/1586 | 70% |
+| Čeština (`cs`) | 1106/1586 | 70% |
+| Português (Brasil) (`pt-BR`) | 1106/1586 | 70% |
+| 简体中文 (`zh-CN`) | 1106/1586 | 70% |
+| Türkçe (`tr`) | 1106/1586 | 70% |
+| Shqip (`sq`) | 1106/1586 | 70% |
 
 <!-- i18n:end -->
 

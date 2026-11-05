@@ -42,7 +42,7 @@ pub struct Tagged {
 }
 
 /// A provider's device network and the tagged wrapping made for it.
-type Wrapped = (Arc<dyn Connect>, Arc<dyn Connect>);
+type Wrapped = (Arc<Connect>, Arc<Connect>);
 
 pub fn new(slug: &'static str, inner: Arc<dyn MusicApi>) -> Arc<dyn MusicApi> {
     Arc::new(Tagged {
@@ -360,7 +360,7 @@ impl MusicApi for Tagged {
         Ok(value)
     }
 
-    fn connect(&self) -> Option<Arc<dyn Connect>> {
+    fn connect(&self) -> Option<Arc<Connect>> {
         let inner = self.inner.connect()?;
         let mut held = self.connect.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((known, wrapped)) = held.as_ref()
@@ -368,10 +368,7 @@ impl MusicApi for Tagged {
         {
             return Some(wrapped.clone());
         }
-        let wrapped: Arc<dyn Connect> = Arc::new(connect::TaggedConnect {
-            slug: self.slug,
-            inner: inner.clone(),
-        });
+        let wrapped = connect::wrap(self.slug, inner.clone())?;
         *held = Some((inner, wrapped.clone()));
         Some(wrapped)
     }
