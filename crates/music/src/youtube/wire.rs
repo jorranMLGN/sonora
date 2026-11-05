@@ -199,6 +199,22 @@ pub fn cover_large(thumbnails: &[ytmusic::Thumbnail]) -> Option<String> {
     thumbnails.last().map(|thumb| thumb.url.clone())
 }
 
+/// The `YYYY-MM-DD` a Music-client player response says its video was published, which for a
+/// release's own audio track is the day the release came out. `None` when it names no whole
+/// date.
+pub fn publish_day(response: &serde_json::Value) -> Option<String> {
+    let published = response
+        .pointer("/microformat/microformatDataRenderer/publishDate")?
+        .as_str()?;
+    let day = published.get(..10)?;
+    let whole = day.char_indices().all(|(place, letter)| match place {
+        4 | 7 => letter == '-',
+        _ => letter.is_ascii_digit(),
+    });
+
+    whole.then(|| day.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +244,26 @@ mod tests {
             "1999"
         );
         assert_eq!(album_detail(detail(None)).tracks[0].release_date, "");
+    }
+
+    #[test]
+    fn a_player_response_names_the_day_it_was_published() {
+        let response = serde_json::json!({
+            "microformat": {
+                "microformatDataRenderer": { "publishDate": "2026-10-24T03:09:51-07:00" }
+            }
+        });
+
+        assert_eq!(publish_day(&response).as_deref(), Some("2026-10-24"));
+    }
+
+    #[test]
+    fn a_player_response_without_a_whole_date_names_no_day() {
+        let year = serde_json::json!({
+            "microformat": { "microformatDataRenderer": { "publishDate": "2026" } }
+        });
+
+        assert_eq!(publish_day(&serde_json::json!({})), None);
+        assert_eq!(publish_day(&year), None);
     }
 }

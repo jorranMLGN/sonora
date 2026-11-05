@@ -247,6 +247,7 @@ impl Releases {
             )
         };
         let io = self.io.clone();
+        let today = now() / 86_400;
         self.task = Some(cx.spawn(async move |this, cx| {
             let found = join(io.spawn(async move {
                 let mut albums: Vec<Album> = Vec::new();
@@ -254,7 +255,7 @@ impl Releases {
                 for chunk in artists.chunks(IN_FLIGHT) {
                     let lookups = chunk
                         .iter()
-                        .map(|(id, client)| releases_of(id.clone(), client.clone()));
+                        .map(|(id, client)| releases_of(id.clone(), client.clone(), today));
                     for found in futures::future::join_all(lookups)
                         .await
                         .into_iter()
@@ -272,7 +273,7 @@ impl Releases {
                 this.task = None;
                 match found {
                     Ok(albums) => {
-                        this.albums = Rc::new(merged(albums, now() / 86_400, &preferred));
+                        this.albums = Rc::new(merged(albums, today, &preferred));
                         this.state = ReleasesState::Ready;
                         this.loaded_at = now();
                     }
@@ -378,10 +379,7 @@ pub(crate) fn merged(
     };
     let mut kept: Vec<Copies> = Vec::new();
     for album in albums {
-        if !matches!(
-            album.release_type,
-            ReleaseType::Album | ReleaseType::Single | ReleaseType::Ep
-        ) {
+        if !listed(album.release_type) {
             continue;
         }
         let Some(day) = day_of(&album.release_date) else {
@@ -428,9 +426,35 @@ pub(crate) fn day_of(date: &str) -> Option<i64> {
     Some(era * 146_097 + of_cycle - 719_468)
 }
 
+/// Whether `album` names only its year, a year that could still hold a day within `WINDOW` of
+/// `today`, so the provider is worth asking for the whole date. A kind the page leaves out is
+/// never worth it.
+pub(crate) fn wants_day(album: &Album, today: i64) -> bool {
+    if !listed(album.release_type) || album.year <= 0 || day_of(&album.release_date).is_some() {
+        return false;
+    }
+    let (Some(first), Some(last)) = (
+        day_of(&format!("{}-01-01", album.year)),
+        day_of(&format!("{}-12-31", album.year)),
+    ) else {
+        return false;
+    };
+
+    first <= today && today - last <= WINDOW
+}
+
+/// Whether the page lists a release of this kind: albums, singles and EPs.
+fn listed(kind: ReleaseType) -> bool {
+    matches!(
+        kind,
+        ReleaseType::Album | ReleaseType::Single | ReleaseType::Ep
+    )
+}
+
 /// One artist's releases, each credited to the artist when the provider left that out, or none
-/// when the provider cannot answer for them.
-async fn releases_of(id: String, client: Arc<dyn MusicApi>) -> Option<Vec<Album>> {
+/// when the provider cannot answer for them. A recent release the provider lists with only its
+/// year is asked for its day, so it can be placed on the page.
+async fn releases_of(id: String, client: Arc<dyn MusicApi>, today: i64) -> Option<Vec<Album>> {
     let artist = client
         .artist(&id)
         .await
@@ -440,9 +464,28 @@ async fn releases_of(id: String, client: Arc<dyn MusicApi>) -> Option<Vec<Album>
         name: artist.name,
         id: Some(id),
     };
+    let dated = artist.albums.into_iter().map(|album| {
+        let client = client.clone();
+        async move {
+            if !wants_day(&album, today) {
+                return album;
+            }
+            match client.release_day(&album.id).await {
+                Ok(Some(day)) => Album {
+                    release_date: day,
+                    ..album
+                },
+                Ok(None) => album,
+                Err(error) => {
+                    log::warn!("releases: cannot date album {}: {error:#}", album.id);
+                    album
+                }
+            }
+        }
+    });
     Some(
-        artist
-            .albums
+        futures::future::join_all(dated)
+            .await
             .into_iter()
             .map(|album| album.credit(&credit))
             .collect(),
@@ -687,6 +730,31 @@ mod tests {
         assert_eq!(day_of("1970-01-01"), Some(0));
         assert_eq!(day_of("2000-03-01"), Some(11_017));
         assert_eq!(day_of("2026-10-30T00:00:00Z"), Some(20_756));
+    }
+
+    #[test]
+    fn only_a_recent_year_without_a_day_is_worth_asking_about() {
+        let year = |date: &str, year: i32| Album {
+            year,
+            ..album("youtube:a", "A", "A", date)
+        };
+
+        assert!(wants_day(&year("2026", 2026), today()));
+        assert!(!wants_day(&year("2026-10-20", 2026), today()));
+        assert!(!wants_day(&year("2025", 2025), today()));
+        assert!(!wants_day(&year("", 0), today()));
+        assert!(wants_day(
+            &year("2025", 2025),
+            day_of("2026-01-10").unwrap()
+        ));
+        assert!(!wants_day(&year("2027", 2027), today()));
+        assert!(!wants_day(
+            &Album {
+                release_type: ReleaseType::Compilation,
+                ..year("2026", 2026)
+            },
+            today()
+        ));
     }
 
     #[test]

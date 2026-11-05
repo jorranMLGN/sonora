@@ -132,6 +132,7 @@ impl Render for ReleasesView {
                 self.playback.clone(),
             )
             .dated()
+            .marked()
             .into_any_element(),
             true => match self.vacancy(state, cx) {
                 Some(vacancy) => vacancy.into_any_element(),
