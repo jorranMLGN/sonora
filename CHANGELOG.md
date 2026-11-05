@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-11-05
+
 ### Added
 
 - Update Sonora straight from the update notice when it was installed from the .deb package; it asks for your password, installs and restarts.
@@ -2626,7 +2628,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/jorranMLGN/sonora/compare/v0.47.0...HEAD
+[unreleased]: https://github.com/jorranMLGN/sonora/compare/v0.47.1...HEAD
+[0.47.1]: https://github.com/jorranMLGN/sonora/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/jorranMLGN/sonora/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/jorranMLGN/sonora/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/jorranMLGN/sonora/compare/v0.44.2...v0.45.0
