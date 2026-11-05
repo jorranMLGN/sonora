@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- New releases shows each release's service logo when you are signed in to more than one.
+
+### Fixed
+
+- New releases shows the day each YouTube Music release came out, where YouTube Music itself
+  names only the year.
+
 ## [0.46.0] - 2026-11-02
 
 ### Added

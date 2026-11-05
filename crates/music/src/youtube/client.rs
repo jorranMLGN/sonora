@@ -383,6 +383,26 @@ impl MusicApi for YouTubeClient {
         Ok(self.album(album_id).await?.tracks)
     }
 
+    /// An album page names only the year, so the day comes from the player response of the
+    /// release's first track, which YouTube publishes on the day the release comes out.
+    async fn release_day(&self, album_id: &str) -> Result<Option<String>> {
+        let detail = self.api.album(album_id).await?;
+        let Some(video) = detail
+            .tracks
+            .iter()
+            .find_map(|track| track.video_id.clone())
+        else {
+            return Ok(None);
+        };
+        let response = self
+            .api
+            .player_response(&video, ytmusic::Client::Music)
+            .await
+            .with_context(|| format!("cannot read the player response of {video}"))?;
+
+        Ok(wire::publish_day(&response))
+    }
+
     /// The artist's own releases without the album the page is already showing. Similar
     /// artists stay out: the client library reads no similarity off artist pages.
     async fn album_catalogue(

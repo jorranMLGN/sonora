@@ -358,6 +358,13 @@ pub trait MusicApi: Send + Sync {
     async fn album(&self, album_id: &str) -> Result<AlbumDetail>;
     async fn album_tracks(&self, album_id: &str) -> Result<Vec<Track>>;
 
+    /// The `YYYY-MM-DD` the album came out, for a provider whose listings name only its year.
+    /// `None` when the provider cannot tell. A provider whose listings carry the whole date
+    /// leaves the default.
+    async fn release_day(&self, _album_id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// The rest of an album page, fetched once `album` has put the tracks up: the releases
     /// the provider lists as related, with more from the same artist first and similar
     /// artists' releases topping the rail up. `artist_id` is

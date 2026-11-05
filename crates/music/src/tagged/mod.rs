@@ -253,6 +253,10 @@ impl MusicApi for Tagged {
         Ok(value)
     }
 
+    async fn release_day(&self, album_id: &str) -> Result<Option<String>> {
+        self.inner.release_day(tag::untag(album_id)).await
+    }
+
     async fn album_tracks(&self, album_id: &str) -> Result<Vec<Track>> {
         let mut values = self.inner.album_tracks(tag::untag(album_id)).await?;
         for value in &mut values {

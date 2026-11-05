@@ -481,7 +481,7 @@ impl RenderOnce for Card {
                 .into_any_element(),
         };
         let words = meta.map(|meta| match bare {
-            true => div().child(meta),
+            true => div().min_w_0().child(meta),
             false => div()
                 .min_w_0()
                 .truncate()

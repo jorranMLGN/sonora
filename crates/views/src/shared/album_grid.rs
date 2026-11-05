@@ -76,6 +76,7 @@ pub(crate) struct AlbumGrid {
     albums: Vec<(usize, Album)>,
     playback: Entity<Playback>,
     dated: bool,
+    marked: bool,
 }
 
 impl AlbumGrid {
@@ -91,12 +92,20 @@ impl AlbumGrid {
             albums: albums.into_iter().collect(),
             playback,
             dated: false,
+            marked: false,
         }
     }
 
     /// Names the day each album came out rather than only its year, for a page of new releases.
     pub(crate) fn dated(mut self) -> Self {
         self.dated = true;
+        self
+    }
+
+    /// Puts each album's provider logo on its card, for a grid that mixes providers. The logo
+    /// shows only while more than one provider is signed in.
+    pub(crate) fn marked(mut self) -> Self {
+        self.marked = true;
         self
     }
 }
@@ -109,6 +118,7 @@ impl RenderOnce for AlbumGrid {
             albums,
             playback,
             dated,
+            marked,
         } = self;
         let cards = albums.into_iter().map(|(index, album)| {
             album_card(id, index, &album, &playback, layout.card, cx)
@@ -119,6 +129,12 @@ impl RenderOnce for AlbumGrid {
                         cx.theme(),
                     ))
                 })
+                .when_some(
+                    marked
+                        .then(|| crate::shared::provider_mark(&album.id, cx))
+                        .flatten(),
+                    Card::mark,
+                )
                 .into_any_element()
         });
 
