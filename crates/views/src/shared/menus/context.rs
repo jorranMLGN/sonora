@@ -186,30 +186,41 @@ impl ItemMenu {
     }
 
     /// The Save to submenu for `addition`: the `lead` rows, New playlist, then the playlists on
-    /// `shelf` the listener can add to. The lead rows hide while a search narrows the playlists.
-    /// A playlist holding every named track is checked, and picking it takes the tracks out
-    /// again with the menu left open. An album is never checked, since its tracks are only read
-    /// once it is added, and picking a playlist for it closes the menu.
+    /// `shelf` the listener can add to, followed by the local playlists, which take `mixed`
+    /// since they may hold any provider's tracks. The lead rows hide while a search narrows the
+    /// playlists. A playlist holding every named track is checked, and picking it takes the
+    /// tracks out again with the menu left open. An album is never checked, since its tracks are
+    /// only read once it is added, and picking a playlist for it closes the menu.
     fn playlist_rows(
         &self,
         addition: Addition,
+        mixed: Addition,
         shelf: Shelf,
         lead: Vec<MenuItem>,
         cx: &App,
     ) -> Menu {
         let library = Sonora::global(cx).library.clone();
-        let playlists: Vec<Playlist> = library
-            .read(cx)
-            .state(shelf)
-            .playlists()
-            .iter()
-            .filter(|playlist| playlist.owned || playlist.collaborative)
-            .cloned()
-            .collect();
-        let ids = match &addition {
-            Addition::Tracks(ids) => ids.clone(),
-            Addition::Album(_) => Vec::new(),
+        let editable = |shelf: Shelf| -> Vec<Playlist> {
+            library
+                .read(cx)
+                .state(shelf)
+                .playlists()
+                .iter()
+                .filter(|playlist| playlist.owned || playlist.collaborative)
+                .cloned()
+                .collect()
         };
+        let mut playlists: Vec<(Playlist, Addition)> = editable(shelf)
+            .into_iter()
+            .map(|playlist| (playlist, addition.clone()))
+            .collect();
+        if !shelf.local() && !mixed.is_empty() {
+            playlists.extend(
+                editable(Shelf::Local)
+                    .into_iter()
+                    .map(|playlist| (playlist, mixed.clone())),
+            );
+        }
         let album = matches!(addition, Addition::Album(_));
         let created = addition.clone();
         let new_playlist = MenuItem::new("new-playlist", t!("menu-new-playlist"))
@@ -224,19 +235,35 @@ impl ItemMenu {
                     cx,
                 );
             });
+        // A local playlist is the one place another provider's tracks can join this addition.
+        let new_mixed = (!shelf.local() && !mixed.is_empty()).then(|| {
+            MenuItem::new("new-mixed-playlist", t!("menu-new-mixed-playlist"))
+                .icon("icons/plus.svg")
+                .on_click(move |_, window, cx| {
+                    PlaylistEditor::open(
+                        Edit::Create {
+                            addition: mixed.clone(),
+                            shelf: Shelf::Local,
+                        },
+                        window,
+                        cx,
+                    );
+                })
+        });
         if playlists.is_empty() {
             Menu::new("playlist-submenu")
                 .w(gpui::px(220.))
                 .items(lead)
                 .item(new_playlist)
+                .items(new_mixed)
                 .item(MenuItem::separator("playlist-separator"))
                 .item(MenuItem::new("no-playlists", t!("menu-no-playlists")).disabled())
         } else {
             let query = self.playlist_search.query(cx);
             let searching = !query.is_empty();
-            let found: Vec<Playlist> = playlists
+            let found: Vec<(Playlist, Addition)> = playlists
                 .into_iter()
-                .filter(|playlist| playlist.name.to_lowercase().contains(&query))
+                .filter(|(playlist, _)| playlist.name.to_lowercase().contains(&query))
                 .collect();
             let unmatched = found.is_empty();
             Menu::new("playlist-submenu")
@@ -247,6 +274,7 @@ impl ItemMenu {
                 .when(!searching, |menu| {
                     menu.items(lead)
                         .item(new_playlist)
+                        .items(new_mixed)
                         .item(MenuItem::separator("playlist-separator"))
                 })
                 .when(unmatched, |menu| {
@@ -254,7 +282,11 @@ impl ItemMenu {
                         MenuItem::new("no-matching-playlists", t!("search-no-matches")).disabled(),
                     )
                 })
-                .items(found.into_iter().map(|playlist| {
+                .items(found.into_iter().map(|(playlist, addition)| {
+                    let ids = match &addition {
+                        Addition::Tracks(ids) => ids.clone(),
+                        Addition::Album(_) => Vec::new(),
+                    };
                     let held = !ids.is_empty()
                         && ids
                             .iter()
@@ -267,7 +299,6 @@ impl ItemMenu {
                     if album {
                         let library = library.clone();
                         let playlist_id = playlist.id.clone();
-                        let addition = addition.clone();
                         return item.on_click(move |_, _, cx| {
                             library.update(cx, |library, cx| {
                                 library.add_tracks_to_playlist(
@@ -334,6 +365,8 @@ impl ItemMenu {
         let count = tracks.len();
         let many = count > 1;
         let held: Vec<String> = tracks.iter().filter_map(|track| track.id.clone()).collect();
+        // A local playlist takes every track, whichever provider it comes from.
+        let mixed = held.clone();
         let imported = !held.is_empty() && held.iter().all(|id| music::is_local_id(id));
         let owner = held
             .iter()
@@ -509,7 +542,7 @@ impl ItemMenu {
             .on_click(move |_, _, cx| Confirm::delete_track_files(ids.clone(), cx))
         });
 
-        let add_to_playlist = match ids.is_empty() {
+        let add_to_playlist = match mixed.is_empty() {
             true => None,
             false => Some(
                 MenuItem::new(
@@ -518,7 +551,13 @@ impl ItemMenu {
                 )
                 .icon("icons/square-plus.svg")
                 .submenu(
-                    self.playlist_rows(Addition::Tracks(ids.clone()), shelf, Vec::new(), cx),
+                    self.playlist_rows(
+                        Addition::Tracks(ids.clone()),
+                        Addition::Tracks(mixed.clone()),
+                        shelf,
+                        Vec::new(),
+                        cx,
+                    ),
                     self.playlist_submenu.clone(),
                 ),
             ),
@@ -1033,6 +1072,7 @@ pub(crate) fn album_menu(
         .icon("icons/square-plus.svg")
         .submenu(
             menus.playlist_rows(
+                Addition::Album(album_id.clone()),
                 Addition::Album(album_id.clone()),
                 Shelf::of(&album_id),
                 Vec::new(),

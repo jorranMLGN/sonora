@@ -25,6 +25,8 @@ const FATAL: [LibraryPart; 3] = [
 const FATAL_LOCAL: [LibraryPart; 2] = [LibraryPart::Tracks, LibraryPart::Albums];
 /// How often the pins are read again from a provider that does not say when they change.
 const PIN_POLL: Duration = Duration::from_secs(60);
+/// How many remote tracks a mixed playlist reads at once while they are added.
+const READ_AT_ONCE: usize = 6;
 
 /// Lets a few playlists have their contents or mosaic covers read at a time. A library asks for
 /// all of its playlists at once. Each read holds every track of its playlist until it is cut down,
@@ -267,19 +269,42 @@ impl Addition {
         matches!(self, Self::Tracks(ids) if ids.is_empty())
     }
 
-    /// The track ids to add, reading an album's tracks from `client` first.
-    async fn resolve(self, client: &Arc<dyn MusicApi>) -> anyhow::Result<Vec<String>> {
+    /// The tracks to add, reading an album's tracks first. A playlist on another provider reads
+    /// from `target`, the playlist's own client. A `mixed` playlist keeps any provider's tracks,
+    /// so it reads the album and every remote track from their own provider in `sources`.
+    async fn gather(
+        self,
+        target: &Arc<dyn MusicApi>,
+        mixed: bool,
+        sources: &Sources,
+    ) -> anyhow::Result<Vec<Track>> {
+        let source = |id: &str| match mixed {
+            false => Ok(target.clone()),
+            true => music::tag::slug_of(id)
+                .and_then(|slug| sources.get(slug))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("cannot read {id}: its provider is signed out")),
+        };
         match self {
-            Self::Tracks(ids) => Ok(ids),
-            Self::Album(id) => Ok(client
+            Self::Tracks(ids) => {
+                entries(ids, mixed, |id| {
+                    let source = source(&id);
+                    async move { source?.track(&id).await }
+                })
+                .await
+            }
+            Self::Album(id) => Ok(source(&id)?
                 .album_tracks(&id)
                 .await?
                 .into_iter()
-                .filter_map(|track| track.id)
+                .filter(|track| track.id.is_some())
                 .collect()),
         }
     }
 }
+
+/// The client of every signed-in provider by slug, for reading what a mixed playlist takes in.
+type Sources = HashMap<&'static str, Arc<dyn MusicApi>>;
 
 /// Where a track moved into a playlist is taken out of once the playlist has it.
 #[derive(Clone, Debug)]
@@ -1305,10 +1330,7 @@ impl Library {
         let session = self.session.read(cx);
         let provider = match shelf {
             Shelf::Streaming => session.provider_slug(),
-            Shelf::Local => (!session.local_paths().is_empty()).then(|| session.local_slug()),
-            Shelf::Of(slug) if slug == music::tag::LOCAL => {
-                (!session.local_paths().is_empty()).then(|| session.local_slug())
-            }
+            Shelf::Local => Some(session.local_slug()),
             Shelf::Of(slug) => Some(slug),
         };
         let Some(provider) = provider else {
@@ -1970,6 +1992,9 @@ impl Library {
         shelf: Shelf,
         cx: &mut Context<Self>,
     ) {
+        // Local playlists live in Sonora, so they may hold any provider's tracks.
+        let mixed = shelf.local();
+        let sources = self.sources(mixed, cx);
         self.mutate_playlist(
             PlaylistMutation {
                 action: "create playlist",
@@ -1980,9 +2005,9 @@ impl Library {
                 shelf,
             },
             move |client| async move {
-                let tracks = addition.resolve(&client).await?;
+                let tracks = addition.gather(&client, mixed, &sources).await?;
                 let id = client.create_playlist(&name).await?;
-                client.add_tracks_to_playlist(&id, &tracks).await?;
+                client.add_known_tracks_to_playlist(&id, &tracks).await?;
                 let fetched = client.playlist(&id).await.map(|detail| detail.playlist);
                 Ok(fetched.unwrap_or_else(|error| {
                     log::warn!("library: a new playlist is not readable yet: {error:#}");
@@ -2217,22 +2242,26 @@ impl Library {
             .playlist(&playlist_id)
             .map(|playlist| playlist.name.clone());
         let target = Some(Target::Playlist(SharedString::from(playlist_id.clone())));
+        let shelf = Shelf::of(&playlist_id);
+        // Local playlists live in Sonora, so they may hold any provider's tracks.
+        let mixed = shelf.local();
+        let sources = self.sources(mixed, cx);
         self.mutate_playlist(
             PlaylistMutation {
                 action: "add track to playlist",
                 done: Some("toast-track-added"),
                 name,
                 target,
-                shelf: Shelf::of(&playlist_id),
+                shelf,
                 invalidated: vec![playlist_id.clone()],
             },
             move |client| async move {
-                let mut track_ids = addition.resolve(&client).await?;
-                track_ids.retain(|id| !known.contains(id));
+                let mut tracks = addition.gather(&client, mixed, &sources).await?;
+                tracks.retain(|track| track.id.as_ref().is_some_and(|id| !known.contains(id)));
                 client
-                    .add_tracks_to_playlist(&playlist_id, &track_ids)
+                    .add_known_tracks_to_playlist(&playlist_id, &tracks)
                     .await?;
-                Ok(track_ids)
+                Ok(tracks.into_iter().filter_map(|track| track.id).collect())
             },
             move |this, track_ids, cx| this.note_added(&added, track_ids, cx),
             cx,
@@ -2943,6 +2972,19 @@ impl Library {
             .map(|ready| &mut ready.playlists)
     }
 
+    /// Every signed-in provider's client when a change is for a `mixed` playlist, which reads
+    /// tracks from their own provider, and nothing otherwise.
+    fn sources(&self, mixed: bool, cx: &App) -> Sources {
+        if !mixed {
+            return Sources::new();
+        }
+        let session = self.session.read(cx);
+        music::tag::SLUGS
+            .iter()
+            .filter_map(|slug| Some((*slug, session.client_for_slug(slug)?)))
+            .collect()
+    }
+
     fn mutate_playlist<F, R, T, A>(
         &mut self,
         mutation_info: PlaylistMutation,
@@ -3476,4 +3518,95 @@ where
         }
     }
     Ok(done)
+}
+
+/// The tracks behind `ids`, in order, for adding them to a playlist. A `mixed` playlist keeps
+/// other providers' tracks, so each id that is not a local file is read through `fetch`; every
+/// other id goes in as just its id. One track that cannot be read fails the whole addition.
+async fn entries<F, R>(ids: Vec<String>, mixed: bool, fetch: F) -> anyhow::Result<Vec<Track>>
+where
+    F: Fn(String) -> R,
+    R: Future<Output = anyhow::Result<Track>>,
+{
+    use futures::{StreamExt as _, TryStreamExt as _};
+
+    futures::stream::iter(ids)
+        .map(|id| {
+            let read = (mixed && !music::is_local_id(&id)).then(|| fetch(id.clone()));
+            async move {
+                match read {
+                    Some(read) => read.await,
+                    None => Ok(Track {
+                        id: Some(id),
+                        ..Default::default()
+                    }),
+                }
+            }
+        })
+        .buffered(READ_AT_ONCE)
+        .try_collect()
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use music::Track;
+
+    use super::entries;
+
+    fn named(id: &str) -> Track {
+        Track {
+            id: Some(id.to_owned()),
+            name: format!("name of {id}"),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mixed_playlist_reads_each_remote_track_from_its_own_provider() {
+        let asked = Mutex::new(Vec::new());
+        let ids = vec![
+            "local:/a.flac".to_owned(),
+            "spotify:abc".to_owned(),
+            "youtube:xyz".to_owned(),
+        ];
+
+        let tracks = entries(ids, true, |id| {
+            asked.lock().unwrap().push(id.clone());
+            async move { Ok(named(&id)) }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(*asked.lock().unwrap(), vec!["spotify:abc", "youtube:xyz"]);
+        let names: Vec<&str> = tracks.iter().map(|track| track.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["", "name of spotify:abc", "name of youtube:xyz"]
+        );
+        assert_eq!(tracks[0].id.as_deref(), Some("local:/a.flac"));
+    }
+
+    #[tokio::test]
+    async fn a_provider_playlist_reads_nothing() {
+        let tracks = entries(vec!["spotify:abc".to_owned()], false, |_| async {
+            anyhow::bail!("must not be asked")
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(tracks[0].id.as_deref(), Some("spotify:abc"));
+    }
+
+    #[tokio::test]
+    async fn a_track_its_provider_cannot_read_fails_the_addition() {
+        let result = entries(vec!["spotify:gone".to_owned()], true, |_| async {
+            anyhow::bail!("not found")
+        })
+        .await;
+
+        assert!(result.is_err());
+    }
 }

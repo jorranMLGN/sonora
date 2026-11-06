@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Mix providers in one playlist: pick New mixed playlist under Add to playlist, or add to any local playlist, and it takes songs and albums from Spotify, YouTube, SoundCloud and every other service. No music folder is needed.
+
 ## [0.47.1] - 2026-11-05
 
 ### Added

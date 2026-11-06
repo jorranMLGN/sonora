@@ -122,6 +122,7 @@ menu-add-tracks-to-playlist = { $count ->
    *[other] Add { $count } tracks to playlist
 }
 menu-new-playlist = New playlist
+menu-new-mixed-playlist = New mixed playlist
 menu-import-playlist = Import playlist…
 menu-edit-tags = Edit tags
 menu-no-playlists = No playlists

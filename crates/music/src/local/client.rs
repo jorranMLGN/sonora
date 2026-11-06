@@ -72,15 +72,27 @@ impl LocalClient {
         }
     }
 
+    /// The tracks `ids` name, in order: a file from the scanned library, and another provider's
+    /// track from the copy kept when it was added. An id with neither is left out.
     fn listed(&self, ids: &[String]) -> Vec<Track> {
+        let remote: Vec<&str> = ids
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !crate::is_local_id(id))
+            .collect();
+        let mut kept = self.store.snapshots(&remote).unwrap_or_else(|error| {
+            log::warn!("local: {error:#}");
+            HashMap::new()
+        });
         let scanned = self.scanned.read().unwrap();
         ids.iter()
-            .filter_map(|id| {
-                scanned
+            .filter_map(|id| match crate::is_local_id(id) {
+                true => scanned
                     .tracks
                     .iter()
                     .find(|track| track.id.as_deref() == Some(id.as_str()))
-                    .cloned()
+                    .cloned(),
+                false => kept.remove(id),
             })
             .collect()
     }
@@ -434,6 +446,30 @@ impl MusicApi for LocalClient {
         self.store.add(playlist_id, track_id)
     }
 
+    async fn add_tracks_to_playlist(&self, playlist_id: &str, track_ids: &[String]) -> Result<()> {
+        self.store.extend(playlist_id, track_ids)
+    }
+
+    async fn add_known_tracks_to_playlist(
+        &self,
+        playlist_id: &str,
+        tracks: &[Track],
+    ) -> Result<()> {
+        let remote: Vec<Track> = tracks
+            .iter()
+            .filter(|track| {
+                track
+                    .id
+                    .as_deref()
+                    .is_some_and(|id| !crate::is_local_id(id))
+            })
+            .cloned()
+            .collect();
+        self.store.remember(&remote)?;
+        let ids: Vec<String> = tracks.iter().filter_map(|track| track.id.clone()).collect();
+        self.store.extend(playlist_id, &ids)
+    }
+
     async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
         self.store.remove(playlist_id, track_id)
     }
@@ -781,6 +817,7 @@ fn resolve<'a>(known: &HashSet<&'a str>) -> HashMap<PathBuf, &'a str> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use super::*;
@@ -865,6 +902,72 @@ mod tests {
         assert!(ids.contains(&"local:1"));
         assert!(ids.contains(&"local:2"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A local client behind its tag, the way the app holds it, over a throwaway database.
+    fn tagged_client(local: Vec<Track>) -> (Arc<dyn MusicApi>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("sonora-test-{}", fastrand::u64(..)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Database::at(dir.join("state.sqlite"));
+        let index = Index::new(storage::Cache::at(dir.join("cache.sqlite")));
+        let scanned = Scanned {
+            tracks: local,
+            albums: vec![],
+            portraits: HashMap::new(),
+            artists: vec![],
+        };
+        let client = Arc::new(LocalClient::new(scanned, db, index));
+        (crate::tagged::new(crate::tag::LOCAL, client), dir)
+    }
+
+    #[tokio::test]
+    async fn a_local_playlist_holds_tracks_from_other_providers() {
+        let file = test_track("local:/music/a.flac", "Here", "Me", "Disk");
+        let (client, dir) = tagged_client(vec![file.clone()]);
+        let mut remote = test_track("spotify:abc", "There", "Them", "Cloud");
+        remote.album_id = Some("spotify:album".to_owned());
+        remote.cover = Some("https://i.scdn.co/cover".to_owned());
+        let playlist = client.create_playlist("Mixed").await.unwrap();
+
+        client
+            .add_known_tracks_to_playlist(&playlist, &[file.clone(), remote.clone()])
+            .await
+            .unwrap();
+
+        let tracks = client.playlist_tracks(&playlist).await.unwrap();
+        assert_eq!(tracks, vec![file.clone(), remote.clone()]);
+        let detail = client.playlist(&playlist).await.unwrap();
+        assert_eq!(detail.playlist.track_count, 2);
+
+        client
+            .remove_track_from_playlist(&playlist, "spotify:abc")
+            .await
+            .unwrap();
+        assert_eq!(client.playlist_tracks(&playlist).await.unwrap(), vec![file]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_remote_track_added_by_id_alone_keeps_its_provider() {
+        let (client, dir) = tagged_client(Vec::new());
+        let remote = test_track("youtube:xyz", "Video", "Someone", "");
+        let playlist = client.create_playlist("Mixed").await.unwrap();
+        client
+            .add_known_tracks_to_playlist(&playlist, std::slice::from_ref(&remote))
+            .await
+            .unwrap();
+
+        client
+            .add_tracks_to_playlist(&playlist, &["youtube:xyz".to_owned()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            client.playlist_tracks(&playlist).await.unwrap(),
+            vec![remote]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

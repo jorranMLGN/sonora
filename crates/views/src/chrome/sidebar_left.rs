@@ -655,11 +655,13 @@ impl SidebarLeft {
     }
 
     /// Whether `target` takes the dragged `song`: a playlist the listener may edit, on the same
-    /// shelf as the song, since a provider adds only its own tracks.
+    /// shelf as the song, since a provider adds only its own tracks, or any local playlist,
+    /// which holds tracks from every provider.
     fn accepts(&self, song: &Pin, target: &Pin, cx: &App) -> bool {
+        let shelf = Shelf::of(&target.id);
         song.kind == PinKind::Song
             && target.kind == PinKind::Playlist
-            && Shelf::of(&song.id) == Shelf::of(&target.id)
+            && (shelf.local() || Shelf::of(&song.id) == shelf)
             && self.library.read(cx).is_editable(&target.id)
     }
 
@@ -696,6 +698,10 @@ impl SidebarLeft {
     /// What a moved song leaves. The favorites count only on a `Shape::Saved` shelf, since a
     /// catalog page lists every song.
     fn leaves(&self, song: &Pin, target: &str, cx: &App) -> Option<Leaving> {
+        // A move takes the song out through the target's provider, which reaches only its own.
+        if Shelf::of(&song.id) != Shelf::of(target) {
+            return None;
+        }
         let library = self.library.read(cx);
         match leaving(song.origin.as_deref()?) {
             Leaving::Liked => {

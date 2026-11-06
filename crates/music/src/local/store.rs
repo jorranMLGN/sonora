@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use rusqlite::{Connection, OptionalExtension as _, params};
 use storage::Database;
 
-use crate::LOCAL_PLAYLIST_PREFIX;
+use crate::{LOCAL_PLAYLIST_PREFIX, Track};
 
 pub struct Stored {
     pub id: String,
@@ -274,6 +275,57 @@ impl Store {
             )
             .context("cannot remove a track from a local playlist")?;
         touch(&connection, id)
+    }
+
+    /// Keeps a copy of each of another provider's `tracks`, so a playlist holding them can show
+    /// them without asking that provider. A track kept before is replaced by the newer copy.
+    pub fn remember(&self, tracks: &[Track]) -> Result<()> {
+        let mut connection = self.open()?;
+        let transaction = connection
+            .transaction()
+            .context("cannot keep a playlist track")?;
+        for track in tracks {
+            let Some(id) = track.id.as_deref() else {
+                continue;
+            };
+            let json = serde_json::to_string(track).context("cannot encode a playlist track")?;
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO playlist_snapshots (track_id, track) VALUES (?, ?)",
+                    params![id, json],
+                )
+                .context("cannot keep a playlist track")?;
+        }
+        transaction.commit().context("cannot keep a playlist track")
+    }
+
+    /// The kept copies of whichever of `ids` were remembered, by id. A copy that no longer
+    /// decodes is logged and left out.
+    pub fn snapshots(&self, ids: &[&str]) -> Result<HashMap<String, Track>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let connection = self.open()?;
+        let mut query = connection
+            .prepare("SELECT track FROM playlist_snapshots WHERE track_id = ?")
+            .context("cannot read a playlist track")?;
+        let mut found = HashMap::new();
+        for id in ids {
+            let json: Option<String> = query
+                .query_row(params![id], |row| row.get(0))
+                .optional()
+                .context("cannot read a playlist track")?;
+            let Some(json) = json else {
+                continue;
+            };
+            match serde_json::from_str::<Track>(&json) {
+                Ok(track) => {
+                    found.insert((*id).to_owned(), track);
+                }
+                Err(error) => log::warn!("local: cannot decode kept track {id}: {error}"),
+            }
+        }
+        Ok(found)
     }
 
     pub fn tracks(&self, id: &str) -> Result<Vec<String>> {
