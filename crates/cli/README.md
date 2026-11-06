@@ -160,6 +160,14 @@ claude mcp add sonora -- sonora mcp
 | `search` | `sonora search`, ten hits unless told otherwise |
 | `queue` | `add`, `play-next` and `play`, as `when` `last`, `next` and `now` |
 | `providers`, `switch_provider` | `sonora providers`, `sonora provider <slug>` |
+| `playlists`, `playlist_tracks` | every playlist of every signed-in provider, and one's tracks |
+| `create_playlist`, `add_to_playlist` | make or fill a playlist, as the Add to playlist menu does |
+
+The playlist tools have no command of their own yet. They take track ids, which `search`,
+`now_playing` and `playlist_tracks` answer and which may be of any provider, so a playlist kept by
+Sonora mixes providers without switching. Links, files and a search are read from the current
+provider, as `queue` reads them. `create_playlist` without a `provider` makes such a mixed
+playlist. A change answers once the provider has taken it.
 
 It stays attached while Sonora starts and quits: each call opens its own connection, and one made
 while Sonora is not running answers that as a tool error. A file to queue needs an absolute path.

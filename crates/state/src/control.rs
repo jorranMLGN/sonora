@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cli::commands::{
-    self, Item, Kind, Level, PlaybackCommand, ProviderCommand, QueueCommand, Request, SearchQuery,
-    SessionCommand, Switch, Time, Watch,
+    self, Item, Kind, Level, PlaybackCommand, PlaylistCommand, ProviderCommand, QueueCommand,
+    Request, SearchQuery, SessionCommand, Songs, Switch, Time, Watch,
 };
 use cli::wire::{self, Current, Failure, Reply, SessionInfo, State, Value};
 use futures::future;
@@ -16,8 +16,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::search::{self, Catalog};
 use crate::{
-    Hit, Io, Library, Origin, Playback, PlaybackState, QueuePlacement, Repeat, Session,
-    SessionState, Shelf, Sonora, Whence, join, noted,
+    Addition, Hit, Io, Library, Origin, Playback, PlaybackState, QueuePlacement, Repeat, Session,
+    SessionState, Shelf, Sonora, Told, Whence, join, noted,
 };
 
 /// What `sonora current` calls the provider of a local file, the slug `sonora providers` gives it.
@@ -187,6 +187,7 @@ impl Control {
             Request::Queue(command) => return self.queue(command, reply, cx),
             Request::Provider(command) => return self.provider(command, reply, cx),
             Request::Search(query) => return self.search(query, reply, cx),
+            Request::Playlist(command) => return self.playlist(command, reply, cx),
             Request::Session(command) => session(command, cx),
             // a watch is answered as a stream, by `watch`, and never reaches here
             Request::Watch(_) => Reply::Failed(Failure::Malformed),
@@ -207,13 +208,31 @@ impl Control {
             QueueCommand::PlayNext(items) => (items, Place::Queue(QueuePlacement::Next)),
             QueueCommand::Play(items) => (items, Place::Now),
         };
+        self.collect(items, cx, move |this, collected, cx| {
+            let answer = match collected {
+                Ok(batches) => {
+                    this.place(batches, placement, cx);
+                    Reply::Done
+                }
+                Err(failure) => Reply::Failed(failure),
+            };
+            reply.send(answer).ok();
+        });
+    }
+
+    /// Reads `items` into their tracks and hands them to `then`, finding the best hit of a
+    /// search first. A search is taken alone, as the command line holds it to.
+    fn collect(
+        &mut self,
+        items: Vec<Item>,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Result<Vec<Batch>, Failure>, &mut Context<Self>) + 'static,
+    ) {
         if !items.iter().any(|item| matches!(item, Item::Search { .. })) {
-            return self.enqueue(items, placement, reply, cx);
+            return self.gather(items, cx, then);
         }
-        // a search is queued alone, as the command line holds it to
         let Ok([Item::Search { text, kind }]) = <[Item; 1]>::try_from(items) else {
-            reply.send(Reply::Failed(Failure::Malformed)).ok();
-            return;
+            return then(self, Err(Failure::Malformed), cx);
         };
         let query = SearchQuery {
             text: text.clone(),
@@ -221,25 +240,21 @@ impl Control {
             limit: 1,
         };
         self.find(query, cx, move |this, found, cx| {
-            let failure = match found.map(|hits| hits.into_iter().next()) {
-                Ok(Some(hit)) => {
-                    return this.enqueue(vec![Item::Link(hit.link)], placement, reply, cx);
-                }
-                Ok(None) => Failure::NothingFound(text),
-                Err(failure) => failure,
-            };
-            reply.send(Reply::Failed(failure)).ok();
+            match found.map(|hits| hits.into_iter().next()) {
+                Ok(Some(hit)) => this.gather(vec![Item::Link(hit.link)], cx, then),
+                Ok(None) => then(this, Err(Failure::NothingFound(text)), cx),
+                Err(failure) => then(this, Err(failure), cx),
+            }
         });
     }
 
-    /// Fetches every item at once and queues them together, in the order they were given. One
-    /// that fails refuses the whole command, so nothing is queued half.
-    fn enqueue(
+    /// Fetches every item at once and hands `then` their tracks together, in the order they
+    /// were given. One that fails fails them all, so nothing is used half.
+    fn gather(
         &mut self,
         items: Vec<Item>,
-        placement: Place,
-        reply: oneshot::Sender<Reply>,
         cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Result<Vec<Batch>, Failure>, &mut Context<Self>) + 'static,
     ) {
         let sources = items
             .into_iter()
@@ -247,10 +262,7 @@ impl Control {
             .collect::<Result<Vec<_>, _>>();
         let sources = match sources {
             Ok(sources) => sources,
-            Err(failure) => {
-                reply.send(Reply::Failed(failure)).ok();
-                return;
-            }
+            Err(failure) => return then(self, Err(failure), cx),
         };
 
         let session = self.session.read(cx);
@@ -267,28 +279,178 @@ impl Control {
         let task = cx.spawn(async move |this, cx| {
             let fetched = join(fetch).await;
             this.update(cx, |this, cx| {
-                let answer = match fetched {
-                    Ok(Ok(batches)) => {
-                        this.place(batches, placement, cx);
-                        Reply::Done
-                    }
+                this.pending.remove(&key);
+                let gathered = match fetched {
+                    Ok(Ok(batches)) => Ok(batches),
                     Ok(Err(missed)) => {
                         if let Some(error) = &missed.error {
                             noted(error, cx);
                         }
-                        Reply::Failed(missed.failure)
+                        Err(missed.failure)
                     }
                     Err(error) => {
-                        log::warn!("control: cannot queue: {error:#}");
-                        Reply::Failed(Failure::Malformed)
+                        log::warn!("control: cannot fetch: {error:#}");
+                        Err(Failure::Malformed)
                     }
                 };
-                reply.send(answer).ok();
-                this.pending.remove(&key);
+                then(this, gathered, cx);
             })
             .ok();
         });
         self.pending.insert(key, task);
+    }
+
+    /// Lists, reads, makes or fills playlists. A change answers once the provider has taken
+    /// it, so the caller hears whether it went through.
+    fn playlist(
+        &mut self,
+        command: PlaylistCommand,
+        reply: oneshot::Sender<Reply>,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            PlaylistCommand::List => {
+                reply
+                    .send(Reply::Value(Value::Playlists(self.playlists(cx))))
+                    .ok();
+            }
+            PlaylistCommand::Tracks(id) => self.playlist_tracks(id, reply, cx),
+            PlaylistCommand::Create {
+                name,
+                provider,
+                songs,
+            } => {
+                let shelf = match provider {
+                    None => Shelf::Local,
+                    Some(slug) => match music::tag::SLUGS.iter().find(|known| **known == slug) {
+                        Some(known) => Shelf::Of(known),
+                        None => {
+                            reply
+                                .send(Reply::Failed(Failure::UnknownProvider(slug)))
+                                .ok();
+                            return;
+                        }
+                    },
+                };
+                self.songs(songs, cx, move |this, ids, cx| {
+                    let ids = match ids {
+                        Ok(ids) => ids,
+                        Err(failure) => {
+                            reply.send(Reply::Failed(failure)).ok();
+                            return;
+                        }
+                    };
+                    let told = told(reply, |id| Reply::Value(Value::Created(id)));
+                    this.library.update(cx, |library, cx| {
+                        library.create_playlist(name, Addition::Tracks(ids), shelf, Some(told), cx)
+                    });
+                });
+            }
+            PlaylistCommand::Add { playlist, songs } => {
+                self.songs(songs, cx, move |this, ids, cx| {
+                    let ids = match ids {
+                        Ok(ids) => ids,
+                        Err(failure) => {
+                            reply.send(Reply::Failed(failure)).ok();
+                            return;
+                        }
+                    };
+                    let told = told(reply, |_| Reply::Done);
+                    this.library.update(cx, |library, cx| {
+                        library.add_tracks_to_playlist(
+                            playlist,
+                            Addition::Tracks(ids),
+                            Some(told),
+                            cx,
+                        )
+                    });
+                });
+            }
+        }
+    }
+
+    /// Every playlist the library holds, on every signed-in provider and in Sonora itself.
+    fn playlists(&self, cx: &App) -> Vec<wire::PlaylistInfo> {
+        let library = self.library.read(cx);
+        music::tag::SLUGS
+            .iter()
+            .flat_map(|slug| {
+                library
+                    .state_for(slug)
+                    .playlists()
+                    .iter()
+                    .map(move |playlist| wire::PlaylistInfo {
+                        id: playlist.id.clone(),
+                        name: playlist.name.clone(),
+                        provider: (*slug).to_owned(),
+                        tracks: playlist.track_count,
+                        editable: playlist.owned || playlist.collaborative,
+                    })
+            })
+            .collect()
+    }
+
+    /// Reads a playlist's tracks from the provider it lives on.
+    fn playlist_tracks(
+        &mut self,
+        id: String,
+        reply: oneshot::Sender<Reply>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.session.read(cx).client_of(Shelf::of(&id)) else {
+            reply.send(Reply::Failed(Failure::SignedOut)).ok();
+            return;
+        };
+        let fetch = {
+            let id = id.clone();
+            Io::global(cx).spawn(async move { client.playlist_tracks(&id).await })
+        };
+        let key = self.issued;
+        self.issued += 1;
+        let task = cx.spawn(async move |this, cx| {
+            let fetched = join(fetch).await;
+            this.update(cx, |this, _| {
+                this.pending.remove(&key);
+                let answer = match fetched {
+                    Ok(tracks) => {
+                        Reply::Value(Value::Tracks(tracks.iter().map(wire_track).collect()))
+                    }
+                    Err(error) => {
+                        log::warn!("control: cannot read playlist {id}: {error:#}");
+                        Reply::Failed(Failure::Playlist(format!("{error:#}")))
+                    }
+                };
+                reply.send(answer).ok();
+            })
+            .ok();
+        });
+        self.pending.insert(key, task);
+    }
+
+    /// Reads `songs` into track ids, the ids given first and then those of the items, and
+    /// hands them to `then`, or why an item could not be read.
+    fn songs(
+        &mut self,
+        songs: Songs,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Result<Vec<String>, Failure>, &mut Context<Self>) + 'static,
+    ) {
+        let Songs { mut ids, items } = songs;
+        if items.is_empty() {
+            return then(self, Ok(ids), cx);
+        }
+        self.collect(items, cx, move |this, collected, cx| {
+            let read = collected.map(|batches| {
+                ids.extend(
+                    batches
+                        .into_iter()
+                        .flat_map(|batch| batch.tracks)
+                        .filter_map(|track| track.id),
+                );
+                ids
+            });
+            then(this, read, cx);
+        });
     }
 
     /// Searches the current provider and answers with the hits.
@@ -609,7 +771,7 @@ fn play(playback: &mut Playback, command: PlaybackCommand, cx: &mut Context<Play
 /// A search hit as the command line lists it, or `None` for one with no link to act on, as an
 /// artist drawn from a track that names no id.
 fn wire_hit(hit: Hit, client: &dyn MusicApi) -> Option<wire::Hit> {
-    let (kind, media, id, title, by, duration) = match hit {
+    let (kind, media, id, title, by, duration, playable) = match hit {
         Hit::Song(track) => (
             Kind::Song,
             MediaKind::Track,
@@ -617,6 +779,7 @@ fn wire_hit(hit: Hit, client: &dyn MusicApi) -> Option<wire::Hit> {
             track.name,
             track.artists,
             Some(track.duration.as_secs()),
+            Some(track.playable),
         ),
         Hit::Album(album) => (
             Kind::Album,
@@ -624,6 +787,7 @@ fn wire_hit(hit: Hit, client: &dyn MusicApi) -> Option<wire::Hit> {
             album.id,
             album.name,
             album.artists,
+            None,
             None,
         ),
         Hit::Artist(artist) => (
@@ -633,6 +797,7 @@ fn wire_hit(hit: Hit, client: &dyn MusicApi) -> Option<wire::Hit> {
             artist.name,
             String::new(),
             None,
+            None,
         ),
         Hit::Playlist(playlist) => (
             Kind::Playlist,
@@ -640,6 +805,7 @@ fn wire_hit(hit: Hit, client: &dyn MusicApi) -> Option<wire::Hit> {
             playlist.id,
             playlist.name,
             playlist.owner,
+            None,
             None,
         ),
     };
@@ -650,6 +816,20 @@ fn wire_hit(hit: Hit, client: &dyn MusicApi) -> Option<wire::Hit> {
         by,
         duration,
         link,
+        id: Some(id),
+        playable,
+    })
+}
+
+/// Turns how a playlist change ended into the reply the command line waits for: `done` with
+/// the playlist's id, or the provider's reason.
+fn told(reply: oneshot::Sender<Reply>, done: impl FnOnce(String) -> Reply + 'static) -> Told {
+    Box::new(move |ended| {
+        let answer = match ended {
+            Ok(id) => done(id),
+            Err(why) => Reply::Failed(Failure::Playlist(why)),
+        };
+        reply.send(answer).ok();
     })
 }
 

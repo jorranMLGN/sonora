@@ -151,6 +151,7 @@ fn show(value: &Value) -> String {
             },
             session.members.join(", ")
         ),
+        Value::Playlists(_) | Value::Tracks(_) | Value::Created(_) => json(value),
     }
 }
 
@@ -165,6 +166,9 @@ pub(crate) fn json(value: &Value) -> String {
         Value::Provider(slug) => serde_json::to_string(slug),
         Value::Hits(hits) => serde_json::to_string(hits),
         Value::Session(session) => serde_json::to_string(session),
+        Value::Playlists(playlists) => serde_json::to_string(playlists),
+        Value::Tracks(tracks) => serde_json::to_string(tracks),
+        Value::Created(id) => serde_json::to_string(id),
     };
     printed.unwrap_or_default()
 }
@@ -226,5 +230,6 @@ pub(crate) fn describe(failure: &Failure) -> String {
         Failure::SignInFailed(name) => format!("{name} did not sign in"),
         Failure::Busy => "a sign-in is already on its way; try again in a moment".to_owned(),
         Failure::NothingFound(query) => format!("nothing found for '{query}'"),
+        Failure::Playlist(why) => format!("cannot change the playlist: {why}"),
     }
 }

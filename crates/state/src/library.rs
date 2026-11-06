@@ -254,6 +254,10 @@ impl Landed {
     }
 }
 
+/// Hears once how a playlist change ended: the id of the playlist it changed or made, or why
+/// it did not go through. The toast is shown either way.
+pub type Told = Box<dyn FnOnce(Result<String, String>)>;
+
 /// What a playlist change puts in: tracks already named, or every track of an album, which
 /// the provider is asked for only once the change runs.
 #[derive(Clone, Debug)]
@@ -1990,12 +1994,14 @@ impl Library {
         name: String,
         addition: Addition,
         shelf: Shelf,
+        told: Option<Told>,
         cx: &mut Context<Self>,
     ) {
         // Local playlists live in Sonora, so they may hold any provider's tracks.
         let mixed = shelf.local();
         let sources = self.sources(mixed, cx);
-        self.mutate_playlist(
+        self.mutate_playlist_told(
+            told,
             PlaylistMutation {
                 action: "create playlist",
                 done: Some("toast-playlist-created"),
@@ -2019,7 +2025,11 @@ impl Library {
                     }
                 }))
             },
-            Self::insert_playlist,
+            |this, playlist, cx| {
+                let id = playlist.id.clone();
+                this.insert_playlist(playlist, cx);
+                id
+            },
             cx,
         );
     }
@@ -2218,7 +2228,7 @@ impl Library {
         track_id: String,
         cx: &mut Context<Self>,
     ) {
-        self.add_tracks_to_playlist(playlist_id, Addition::Tracks(vec![track_id]), cx);
+        self.add_tracks_to_playlist(playlist_id, Addition::Tracks(vec![track_id]), None, cx);
     }
 
     /// Adds `addition` to a playlist. An album leaves out the tracks the playlist is known to
@@ -2228,9 +2238,13 @@ impl Library {
         &mut self,
         playlist_id: String,
         addition: Addition,
+        told: Option<Told>,
         cx: &mut Context<Self>,
     ) {
         if addition.is_empty() {
+            if let Some(told) = told {
+                told(Ok(playlist_id));
+            }
             return;
         }
         let added = playlist_id.clone();
@@ -2246,7 +2260,8 @@ impl Library {
         // Local playlists live in Sonora, so they may hold any provider's tracks.
         let mixed = shelf.local();
         let sources = self.sources(mixed, cx);
-        self.mutate_playlist(
+        self.mutate_playlist_told(
+            told,
             PlaylistMutation {
                 action: "add track to playlist",
                 done: Some("toast-track-added"),
@@ -2263,7 +2278,10 @@ impl Library {
                     .await?;
                 Ok(tracks.into_iter().filter_map(|track| track.id).collect())
             },
-            move |this, track_ids, cx| this.note_added(&added, track_ids, cx),
+            move |this, track_ids, cx| {
+                this.note_added(&added, track_ids, cx);
+                added
+            },
             cx,
         );
     }
@@ -2764,7 +2782,7 @@ impl Library {
             .into_iter()
             .filter(|track| !held.is_some_and(|held| held.contains(track)))
             .collect();
-        self.add_tracks_to_playlist(playlist_id, Addition::Tracks(tracks), cx);
+        self.add_tracks_to_playlist(playlist_id, Addition::Tracks(tracks), None, cx);
     }
 
     /// A listed album, from the shelf's pages or its favorites.
@@ -2997,6 +3015,38 @@ impl Library {
         T: Send + 'static,
         A: FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
     {
+        self.mutate_playlist_told(
+            None,
+            mutation_info,
+            mutation,
+            move |this, outcome, cx| {
+                on_done(this, outcome, cx);
+                String::new()
+            },
+            cx,
+        );
+    }
+
+    /// Runs a playlist change as `mutate_playlist` does, and tells `told` how it ended: with
+    /// the id `on_done` answers, or why the change was refused or failed.
+    fn mutate_playlist_told<F, R, T, A>(
+        &mut self,
+        told: Option<Told>,
+        mutation_info: PlaylistMutation,
+        mutation: F,
+        on_done: A,
+        cx: &mut Context<Self>,
+    ) where
+        F: FnOnce(Arc<dyn MusicApi>) -> R + Send + 'static,
+        R: Future<Output = anyhow::Result<T>> + Send + 'static,
+        T: Send + 'static,
+        A: FnOnce(&mut Self, T, &mut Context<Self>) -> String + 'static,
+    {
+        let tell = |told: Option<Told>, answer: Result<String, String>| {
+            if let Some(told) = told {
+                told(answer);
+            }
+        };
         let PlaylistMutation {
             action,
             done,
@@ -3009,12 +3059,15 @@ impl Library {
         if slug.is_some_and(|slug| self.playlist_tasks.contains_key(slug)) {
             log::warn!("library: cannot {action} while another change is running");
             Toasts::show(Outcome::Failed, "toast-playlist-busy", cx);
-            return;
+            return tell(
+                told,
+                Err("another playlist change is still running".to_owned()),
+            );
         }
         let Some(client) = self.session.read(cx).client_of(shelf) else {
             log::warn!("library: cannot {action} while signed out");
             Toasts::show(Outcome::Failed, "toast-playlist-signed-out", cx);
-            return;
+            return tell(told, Err("its provider is signed out".to_owned()));
         };
         let catalog = invalidated
             .first()
@@ -3034,7 +3087,8 @@ impl Library {
                 }
                 match result {
                     Ok(outcome) => {
-                        on_done(this, outcome, cx);
+                        let id = on_done(this, outcome, cx);
+                        tell(told, Ok(id));
                         match (done, name) {
                             (Some(done), Some(name)) => {
                                 Toasts::linked(Outcome::Done, done, name, target, cx)
@@ -3045,6 +3099,7 @@ impl Library {
                     }
                     Err(error) => {
                         log::warn!("library: cannot {action}: {error:#}");
+                        tell(told, Err(format!("{error:#}")));
                         let key = match music::cover::unusable(&error) {
                             Some(unusable) => cover_problem(unusable),
                             None => "toast-playlist-failed",

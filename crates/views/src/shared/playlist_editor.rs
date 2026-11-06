@@ -155,7 +155,7 @@ impl PlaylistEditor {
         match edit {
             Edit::Create { addition, shelf } if !name.is_empty() => {
                 library.update(cx, |library, cx| {
-                    library.create_playlist(name, addition, shelf, cx);
+                    library.create_playlist(name, addition, shelf, None, cx);
                 })
             }
             Edit::Details(playlist) => {

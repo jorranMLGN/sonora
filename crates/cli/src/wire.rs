@@ -46,6 +46,26 @@ pub enum Value {
     Hits(Vec<Hit>),
     /// The Sonora Session Sonora is in, `None` while it is in none.
     Session(Option<SessionInfo>),
+    /// Every playlist Sonora knows, as `PlaylistCommand::List` asks.
+    Playlists(Vec<PlaylistInfo>),
+    /// The tracks of a playlist, in its order.
+    Tracks(Vec<Track>),
+    /// The id of a playlist just made.
+    Created(String),
+}
+
+/// A playlist as a playlist command lists it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistInfo {
+    /// What the other playlist commands take to name it.
+    pub id: String,
+    pub name: String,
+    /// The slug of the provider it lives on, `local` for one kept by Sonora.
+    pub provider: String,
+    /// How many tracks it holds, zero also when the provider does not say.
+    pub tracks: u32,
+    /// Whether songs can be added to it.
+    pub editable: bool,
 }
 
 /// A Sonora Session as `sonora session` prints it.
@@ -72,6 +92,13 @@ pub struct Hit {
     pub duration: Option<u64>,
     /// What `sonora add` and `sonora play-next` take.
     pub link: String,
+    /// The provider's id for it, carrying the provider, as a playlist command takes it.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Whether the provider lets a song stream, so a caller can pass over one that only greys
+    /// out in a playlist. `None` for every other kind, and from a Sonora that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playable: Option<bool>,
 }
 
 /// A provider as `sonora providers` lists it.
@@ -184,6 +211,8 @@ pub enum Failure {
     Busy,
     /// A search to queue the best hit of found nothing.
     NothingFound(String),
+    /// A playlist could not be read or changed, and why, in the provider's words.
+    Playlist(String),
 }
 
 /// Why a line could not be read off the socket.

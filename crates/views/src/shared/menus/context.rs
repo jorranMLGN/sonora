@@ -304,6 +304,7 @@ impl ItemMenu {
                                 library.add_tracks_to_playlist(
                                     playlist_id.clone(),
                                     addition.clone(),
+                                    None,
                                     cx,
                                 )
                             });
@@ -340,6 +341,7 @@ impl ItemMenu {
                                     library.add_tracks_to_playlist(
                                         playlist_id.clone(),
                                         Addition::Tracks(missing),
+                                        None,
                                         cx,
                                     )
                                 });

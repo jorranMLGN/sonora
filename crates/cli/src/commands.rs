@@ -49,6 +49,8 @@ pub enum Request {
     Watch(Watch),
     /// Commands serving Sonora Session, listening together with other Sonora apps
     Session(SessionCommand),
+    /// Reads and fills playlists. Only `sonora mcp` sends these for now
+    Playlist(PlaylistCommand),
 }
 
 impl Request {
@@ -139,6 +141,34 @@ pub enum SessionCommand {
     Join(Option<String>),
     /// Leaves the session, ending it when Sonora hosts it. Stands for `sonora session leave`
     Leave,
+}
+
+/// Commands reading and filling playlists, on every signed-in provider at once.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlaylistCommand {
+    /// Every playlist of every signed-in provider and of Sonora itself.
+    List,
+    /// The tracks of the playlist this id names.
+    Tracks(String),
+    /// Makes a playlist and fills it. With no provider it lives in Sonora and may hold songs
+    /// of every provider; with one it is made there and holds only that provider's songs.
+    Create {
+        name: String,
+        provider: Option<String>,
+        songs: Songs,
+    },
+    /// Adds songs to the end of the playlist this id names.
+    Add { playlist: String, songs: Songs },
+}
+
+/// The songs a playlist command puts in: track ids as `sonora current` and a search answer
+/// them, which may be of any provider, followed by the tracks of `items`, which are read as
+/// `sonora add` reads them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Songs {
+    pub ids: Vec<String>,
+    pub items: Vec<Item>,
 }
 
 /// Commands serving queue manipulation

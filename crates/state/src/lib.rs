@@ -71,7 +71,7 @@ pub use home::Home;
 pub use jam::{Cap, Caps, Jam, JamEvent, JamRole, Listener};
 pub use library::{
     Addition, CoverEdit, Leaving, Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready,
-    Shelf, cover_problem,
+    Shelf, Told, cover_problem,
 };
 pub use links::{Links, Opened};
 pub use listening::{CODE_LENGTH as SESSION_CODE_LENGTH, Listening, Member as RoomMember, Room};
