@@ -345,6 +345,18 @@ pub trait MusicApi: Send + Sync {
         }
         Ok(())
     }
+
+    /// Adds whole tracks to the end of a playlist, for a provider whose playlists may hold
+    /// another provider's tracks and so keep what it needs to show them. The default adds them
+    /// by id through [`MusicApi::add_tracks_to_playlist`].
+    async fn add_known_tracks_to_playlist(
+        &self,
+        playlist_id: &str,
+        tracks: &[Track],
+    ) -> Result<()> {
+        let ids: Vec<String> = tracks.iter().filter_map(|track| track.id.clone()).collect();
+        self.add_tracks_to_playlist(playlist_id, &ids).await
+    }
     async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()>;
 
     /// Reads the M3U or M3U8 playlist at `path` into a new playlist named after the file, for a

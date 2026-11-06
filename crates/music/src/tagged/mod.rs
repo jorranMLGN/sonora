@@ -41,6 +41,17 @@ pub struct Tagged {
     connect: Mutex<Option<Wrapped>>,
 }
 
+impl Tagged {
+    /// A track id as the provider's playlists store it. Local playlists may hold any
+    /// provider's tracks, so they keep the tag; every other provider gets its bare id.
+    fn entry<'a>(&self, track_id: &'a str) -> &'a str {
+        match self.slug == tag::LOCAL {
+            true => track_id,
+            false => tag::untag(track_id),
+        }
+    }
+}
+
 /// A provider's device network and the tagged wrapping made for it.
 type Wrapped = (Arc<Connect>, Arc<Connect>);
 
@@ -209,13 +220,13 @@ impl MusicApi for Tagged {
 
     async fn add_track_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
         self.inner
-            .add_track_to_playlist(tag::untag(playlist_id), tag::untag(track_id))
+            .add_track_to_playlist(tag::untag(playlist_id), self.entry(track_id))
             .await
     }
 
     async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
         self.inner
-            .remove_track_from_playlist(tag::untag(playlist_id), tag::untag(track_id))
+            .remove_track_from_playlist(tag::untag(playlist_id), self.entry(track_id))
             .await
     }
 
@@ -437,10 +448,26 @@ impl MusicApi for Tagged {
     async fn add_tracks_to_playlist(&self, playlist_id: &str, track_ids: &[String]) -> Result<()> {
         let bare: Vec<String> = track_ids
             .iter()
-            .map(|id| tag::untag(id).to_owned())
+            .map(|id| self.entry(id).to_owned())
             .collect();
         self.inner
             .add_tracks_to_playlist(tag::untag(playlist_id), &bare)
+            .await
+    }
+
+    async fn add_known_tracks_to_playlist(
+        &self,
+        playlist_id: &str,
+        tracks: &[Track],
+    ) -> Result<()> {
+        let mut entries = tracks.to_vec();
+        if self.slug != tag::LOCAL {
+            for value in &mut entries {
+                models::bare::track(value);
+            }
+        }
+        self.inner
+            .add_known_tracks_to_playlist(tag::untag(playlist_id), &entries)
             .await
     }
 
