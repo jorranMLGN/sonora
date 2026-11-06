@@ -18,6 +18,7 @@ mod single;
 mod thumbbar;
 mod tray;
 
+use std::io;
 use std::path::PathBuf;
 use std::process::{ExitCode, exit};
 use std::sync::Arc;
@@ -76,6 +77,11 @@ fn main() -> ExitCode {
                 Ok(mut stream) => cli::run(&mut stream, &request, format),
                 Err(_) => cli::not_running(),
             };
+        }
+        Ok(CommandType::Mcp) => {
+            return cli::mcp::serve(io::stdin().lock(), io::stdout().lock(), || {
+                single::connect(false)
+            });
         }
         Err(refusal) => return refusal.exit(),
     };

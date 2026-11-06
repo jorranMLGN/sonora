@@ -1,6 +1,7 @@
 mod args;
 pub mod commands;
 pub mod item;
+pub mod mcp;
 mod run;
 pub mod wire;
 

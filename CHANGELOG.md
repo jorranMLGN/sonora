@@ -10,6 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Mix providers in one playlist: pick New mixed playlist under Add to playlist, or add to any local playlist, and it takes songs and albums from Spotify, YouTube, SoundCloud and every other service. No music folder is needed.
+- Let an AI assistant such as Claude play, pause, skip, search and queue music: add `sonora mcp` as an MCP server.
 
 ## [0.47.1] - 2026-11-05
 

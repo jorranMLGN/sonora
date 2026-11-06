@@ -12,6 +12,9 @@ pub enum CommandType {
     /// Sent to the running instance, which is started first if the request allows it. The
     /// answer is printed in `Format`.
     Remote(Request, Format),
+    /// Serves MCP on stdin and stdout until the client hangs up, sending each tool call to the
+    /// running Sonora. Stands for `sonora mcp`
+    Mcp,
 }
 
 /// How a command line prints what it is answered.

@@ -155,7 +155,7 @@ fn show(value: &Value) -> String {
 }
 
 /// A queried value for a script, as one line of JSON without the envelope around it.
-fn json(value: &Value) -> String {
+pub(crate) fn json(value: &Value) -> String {
     let printed = match value {
         Value::Current(current) => serde_json::to_string(current),
         Value::Volume(level) => serde_json::to_string(level),
@@ -205,7 +205,7 @@ fn clock(seconds: u64) -> String {
     }
 }
 
-fn describe(failure: &Failure) -> String {
+pub(crate) fn describe(failure: &Failure) -> String {
     match failure {
         Failure::Version(v) => format!("the running Sonora speaks protocol {v}; restart it"),
         Failure::Malformed => {

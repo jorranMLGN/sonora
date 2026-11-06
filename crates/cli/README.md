@@ -31,6 +31,7 @@ sonora search crescent shaped depression | fzf | awk '{print $NF}' | xargs sonor
 | `sonora search <query> [-t TYPE] [-n N]` | Search the current provider |
 | `sonora providers` | List the providers and which one is current |
 | `sonora provider [slug]` | Print the current provider, or switch to one that has an account |
+| `sonora mcp` | Serve these controls to an AI assistant over MCP, on stdin and stdout |
 | `sonora completions <shell>` | Print a completion script for bash, zsh, fish, elvish or PowerShell |
 | `sonora -v` | Print the version |
 
@@ -140,6 +141,29 @@ A line is `null` while nothing is loaded. It runs until stopped, and ends with c
 quits. With nothing reading its lines any more, as after `| head -1`, it ends at its next line, as
 `tail -f` does, so within a second with `--position` and at the next change without.
 
+### MCP
+
+`sonora mcp` lets an AI assistant such as Claude Code drive the running Sonora. It speaks the
+Model Context Protocol over stdin and stdout and turns each tool call into the request the
+matching command sends:
+
+```sh
+claude mcp add sonora -- sonora mcp
+```
+
+| Tool | Stands for |
+|---|---|
+| `now_playing` | `sonora current` |
+| `playback` | `play`, `pause`, `toggle`, `next`, `prev` |
+| `seek` | `seek 1:30` as `to`, `seek +10` as `by`, in seconds |
+| `volume`, `shuffle`, `repeat` | the commands of the same name |
+| `search` | `sonora search`, ten hits unless told otherwise |
+| `queue` | `add`, `play-next` and `play`, as `when` `last`, `next` and `now` |
+| `providers`, `switch_provider` | `sonora providers`, `sonora provider <slug>` |
+
+It stays attached while Sonora starts and quits: each call opens its own connection, and one made
+while Sonora is not running answers that as a tool error. A file to queue needs an absolute path.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -220,6 +244,7 @@ a file manager's launch still uses.
 | `wire.rs` | The envelope, `Reply`, the answer types and `Failure` |
 | `run.rs` | Sending a request, printing the answer, exit codes |
 | `item.rs` | Telling paths from links, and `file://` URIs |
+| `mcp.rs` | `sonora mcp`: the MCP handshake, the tools and how each becomes a `Request` |
 
 Outside this crate:
 

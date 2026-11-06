@@ -150,6 +150,8 @@ enum Sub {
     },
     /// Print the completion script for a shell.
     Completions { shell: Shell },
+    /// Serve the running Sonora's controls to an AI assistant over MCP on stdin and stdout.
+    Mcp,
 }
 
 /// What `sonora session` does with a Sonora Session.
@@ -316,6 +318,7 @@ fn into_command(args: Args, line: &mut Command) -> Result<CommandType, clap::Err
             Some(SessionSub::Leave) => SessionCommand::Leave,
         }),
         Sub::Completions { shell } => return Ok(CommandType::Local(Local::Completions(shell))),
+        Sub::Mcp => return Ok(CommandType::Mcp),
     };
     Ok(CommandType::Remote(request, format))
 }
