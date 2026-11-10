@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.47.1"
@@ -47,8 +48,8 @@ fastrand = "2.5"
 futures = "0.3"
 gethostname = "1.1"
 fluent-bundle = "0.16"
-gpui = { git = "https://github.com/sonorahq/gpui", rev = "494c588e2950ebf1ca952ef03abbc07e7f0bb3c0" }
-gpui_platform = { git = "https://github.com/sonorahq/gpui", rev = "494c588e2950ebf1ca952ef03abbc07e7f0bb3c0", features = [
+gpui = { git = "https://github.com/sonorahq/gpui", rev = "6f271bf242b34c174aca298dd40f796995075494" }
+gpui_platform = { git = "https://github.com/sonorahq/gpui", rev = "6f271bf242b34c174aca298dd40f796995075494", features = [
   "font-kit",
   "wayland",
   "x11",
@@ -58,6 +59,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 winresource = "0.1"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
@@ -65,6 +67,7 @@ windows = { version = "0.62", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_Registry",
   "Win32_UI_Controls",
+  "Win32_UI_HiDpi",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
@@ -150,7 +153,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "form",
   "json",
   "query",
-  "rustls",
+  "rustls-no-provider",
 ] }
 qrcodegen = "1"
 raw-window-handle = "0.6"
@@ -179,7 +182,6 @@ unic-langid = { version = "0.9", features = ["macros"] }
 unicode-bidi = "0.3"
 unicode-segmentation = "1.12"
 uniffi = "0.32"
-x11rb = "0.13"
 ytmusic = { git = "https://github.com/jorranMLGN/ytmusic-rs", rev = "f4e6849" }
 
 # The root store is picked per target in `crates/music`: iOS cannot list native roots.

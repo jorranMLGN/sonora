@@ -26,6 +26,7 @@ pub mod netease;
 pub mod output;
 pub mod potoken;
 pub mod progress;
+mod redact;
 pub mod scrobble;
 mod sink;
 pub mod soundcloud;
@@ -70,6 +71,7 @@ pub use models::{
     SavedArtist, Track, TrackKey, TrackTags, UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use output::{Server as SoundServer, missing_bridge};
+pub use redact::redact;
 pub use spectrum::{Analyzer, Level, Listening, Spectrum, Watch};
 pub use waveform::{Analysis, BUCKETS as WAVEFORM_BUCKETS, Measuring, Waveform};
 
@@ -466,8 +468,9 @@ pub trait MusicApi: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Artists (or channels) matching `query`, for a provider whose search lists them directly.
-    /// Defaults to none, in which case artists are derived from the track and album results.
+    /// The artists the provider finds for `query`, best match first. A provider without an
+    /// artist search keeps the default of none, and search then names only the artists behind
+    /// the songs and albums it found.
     async fn search_artists(&self, _query: &str) -> Result<Vec<SavedArtist>> {
         Ok(Vec::new())
     }

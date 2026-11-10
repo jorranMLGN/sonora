@@ -12,6 +12,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Mix providers in one playlist: pick New mixed playlist under Add to playlist, or add to any local playlist, and it takes songs and albums from Spotify, YouTube, SoundCloud and every other service. No music folder is needed.
 - Let an AI assistant such as Claude play, pause, skip, search and queue music, and make or fill playlists, mixed ones included: add `sonora mcp` as an MCP server.
 - Watch the music video on a Jam's web page: when the host plays a song with a video, listeners can turn on Show the music video and it plays in sync with the sound.
+- Swipe two fingers sideways on a touchpad to go back or forward a page.
+- A quick flick on a touchpad under Wayland keeps the page scrolling for a moment after your fingers lift.
+- An artist's page links to the songs of theirs you have in your Favorites, so you can see and play them together, and take one out with the X that appears when you point at it.
+- Turn off Show lyrics in the lyrics settings to hide the lyrics buttons in the player bar and
+  Now playing, and stop Sonora looking lyrics up.
+
+### Changed
+
+- Lyrics line spacing scales with the text size for a more balanced layout.
+- Fullscreen controls start hiding after one second of inactivity, with the same smooth cover transition.
+- A song's right-click menu lists Go to artist, Go to album, Go to song radio and View details directly again instead of under Go to.
+- Quick picks from YouTube Music show every song YouTube suggests instead of the first 15.
+- A YouTube Music artist page shows a blurred wash of the artist's portrait behind the header instead of the same picture twice.
+- Search suggestions open without a heading above them.
+
+### Fixed
+
+- Reduce redraw work when scrolling large Favorites collections.
+- Song durations stay aligned when hovering over an artist's favorite songs.
+- Reduce fullscreen visualizer redraws while keeping animation at up to 120 FPS.
+- Mixed English and Japanese lyrics no longer show duplicate English romanizations or misplaced spaces inside parentheses.
+- M4A tracks on Subsonic servers start before downloading in full, including files with metadata at the end when the server supports byte ranges.
+- Opening an artist's favorite songs no longer crashes when a song appears under the pointer.
+- Back and forward buttons stay beside the sidebar toggle with enough space between them.
+- App and tray icons stay sharp at more display scales, and Linux windows show the Sonora icon without desktop integration.
+- Lyrics keep equal left and right insets at every window and text size.
+- Apple Music lyrics can be found when the album has a different edition name in the lyrics catalogue.
+- Lyrics sources retry when their cached answers cannot be shown, and newly found lyrics stay available after restarting.
+- On macOS, Widevine is also found in registered browsers that have been renamed or moved.
+- On macOS, scrolling and clicks no longer lag behind in fullscreen and with lyrics open.
+- Opening Sonora with a paused song no longer keeps your computer from sleeping, and media
+  controls show it as paused instead of playing.
+- Pointing at the leave fullscreen button no longer highlights the queue rows behind it.
+- The language and font pickers no longer show a check on the row you move to with the arrow keys.
+- In fullscreen on macOS, the sidebar toggle on the left of the title bar sits as close to the edge as the one on the right.
+- The log file you attach to a bug report and the error details in notifications no longer show sign-in tokens, your Subsonic or Navidrome login, your YouTube account name and email, or your home folder.
+- Local albums show a cover.jpg or folder.jpg from their folder however its name is capitalised, from the album folder above a CD1 or Disc 2 folder, and as soon as you add or rename it.
 
 ## [0.47.1] - 2026-11-05
 

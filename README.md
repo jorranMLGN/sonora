@@ -58,19 +58,6 @@ Stream from your favorite services and play local files — all in one **native*
 >
 > Features aimed at ripping, downloading, distributing, or gaining access to protected streaming content are out of scope for the project.
 
-## Features
-
-- **Apple Music, Spotify, YouTube Music, YouTube, SoundCloud, Deezer, Tidal, Subsonic/Navidrome** and local playback
-- Several providers connected at once, each with its own library
-- A jam: send what you are playing to the phones, tablets and laptops on your network
-- A mini player that stays above other windows
-- Gapless playback, audio normalization, shuffle, sleep timer
-- Synced/karaoke lyrics, background vocals, and romanization
-- Scrobbling with LastFM, ListenBrainz, LibreFM, and Maloja
-- Themes, fonts, icons, transparency, blur, and window styling
-- Discord Rich Presence, native file opening
-- macOS, Windows, Linux, and (probably) FreeBSD support
-
 ## Installation
 
 ### macOS
@@ -152,25 +139,15 @@ on Windows on ARM.
 
 Download the latest `windows-msvc.exe` for your architecture from [Releases](https://github.com/sonorahq/sonora/releases/latest).
 
-### iPhone (sideload)
+### Nightly
 
-There is an iPhone app in `apps/ios`: an Expo front end over the same Rust providers. It is not on
-the App Store. The `ios.yml` workflow builds it on GitHub's macOS runners and uploads an unsigned
-IPA as the `sonora-ipa` artifact of each run.
+[Nightly builds](https://github.com/sonorahq/sonora/releases/tag/nightly) are available.
 
-1. Download `sonora-ipa` from the latest successful run in the Actions tab and unzip it.
-2. Install [SideStore](https://sidestore.io/) on the phone and sign in with a free Apple ID.
-3. Open the IPA in SideStore.
-
-A free Apple ID signs an app for 7 days, so SideStore has to re-sign it every week, and it allows
-three sideloaded apps at a time.
-
-It is built for SoundCloud, Spotify and YouTube Music. SoundCloud plays without an account; sign
-in to Spotify (Premium) or YouTube Music, or to your SoundCloud account, under Library, Accounts.
-Home, your library, and the album, playlist and artist pages show what each signed-in provider has,
-and the heart saves a track, album or playlist. Apple Music, Deezer and every
-other provider that needs Widevine do not work on iOS, and local files, Subsonic, jam, lyrics and
-scrobbling are not there yet.
+```sh
+brew install --cask nolight132/tap/sonora-nightly
+yay -S sonora-nightly-bin
+nix run github:sonorahq/sonora/nightly
+```
 
 ## Community
 
@@ -183,21 +160,21 @@ Discord is the primary one, but we do have a Matrix bridge.
 
 | Language | Translated | Coverage |
 | --- | --- | --- |
-| English (`en-US`) | 1586/1586 | 100% |
-| Deutsch (`de`) | 1106/1586 | 70% |
-| Español (`es`) | 1106/1586 | 70% |
-| Français (`fr`) | 1107/1586 | 70% |
-| Italiano (`it`) | 1106/1586 | 70% |
-| Bahasa Indonesia (`id`) | 1106/1586 | 70% |
-| 日本語 (`ja`) | 1106/1586 | 70% |
-| Русский (`ru`) | 1159/1586 | 73% |
-| Українська (`uk`) | 1115/1586 | 70% |
-| Polski (`pl`) | 1115/1586 | 70% |
-| Čeština (`cs`) | 1106/1586 | 70% |
-| Português (Brasil) (`pt-BR`) | 1106/1586 | 70% |
-| 简体中文 (`zh-CN`) | 1106/1586 | 70% |
-| Türkçe (`tr`) | 1106/1586 | 70% |
-| Shqip (`sq`) | 1106/1586 | 70% |
+| English (`en-US`) | 1590/1590 | 100% |
+| Deutsch (`de`) | 1105/1590 | 69% |
+| Español (`es`) | 1105/1590 | 69% |
+| Français (`fr`) | 1106/1590 | 70% |
+| Italiano (`it`) | 1105/1590 | 69% |
+| Bahasa Indonesia (`id`) | 1105/1590 | 69% |
+| 日本語 (`ja`) | 1105/1590 | 69% |
+| Русский (`ru`) | 1158/1590 | 73% |
+| Українська (`uk`) | 1114/1590 | 70% |
+| Polski (`pl`) | 1114/1590 | 70% |
+| Čeština (`cs`) | 1105/1590 | 69% |
+| Português (Brasil) (`pt-BR`) | 1105/1590 | 69% |
+| 简体中文 (`zh-CN`) | 1105/1590 | 69% |
+| Türkçe (`tr`) | 1105/1590 | 69% |
+| Shqip (`sq`) | 1105/1590 | 69% |
 
 <!-- i18n:end -->
 

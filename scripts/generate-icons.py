@@ -13,23 +13,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "assets" / "icon.svg"
 
-LINUX_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
-WINDOWS_SIZES = [16, 24, 32, 48, 64, 128, 256]
-TRAY_SIZES = [32, 64]
+LINUX_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512]
+WINDOWS_SIZES = [16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 256]
+TRAY_SIZES = [18, 36]
 TRAY_STROKE = 3.2
 IOS_SIZE = 1024
 
 ICNS_TYPES = [
-    ("icp4", 16),
-    ("icp5", 32),
-    ("ic11", 32),
-    ("ic12", 64),
-    ("ic07", 128),
-    ("ic13", 256),
-    ("ic08", 256),
-    ("ic14", 512),
-    ("ic09", 512),
-    ("ic10", 1024),
+    ("icp4", 16, 1),
+    ("icp5", 32, 1),
+    ("ic11", 16, 2),
+    ("ic12", 32, 2),
+    ("ic07", 128, 1),
+    ("ic13", 128, 2),
+    ("ic08", 256, 1),
+    ("ic14", 256, 2),
+    ("ic09", 512, 1),
+    ("ic10", 512, 2),
 ]
 
 SQUIRCLE_FILL = 824 / 1024
@@ -41,6 +41,8 @@ OPTICAL_STROKE = [(16, 4.0), (24, 3.2), (32, 2.8), (48, 2.3)]
 
 
 class Master:
+    """Reads the background and equalizer bars shared by the platform icons."""
+
     def __init__(self, path):
         if not path.exists():
             sys.exit(f"icons: {path} is missing")
@@ -84,6 +86,7 @@ class Master:
 
 
 def stroke_for(pixels, master):
+    """Thickens small glyphs using their displayed size, before any Retina scaling."""
     for limit, width in OPTICAL_STROKE:
         if pixels <= limit:
             return width * master.stroke / 2
@@ -91,6 +94,7 @@ def stroke_for(pixels, master):
 
 
 def squircle(side, radius, smoothing):
+    """Builds a square with smooth corners, keeping each corner within half its side."""
     budget = side / 2
     reach = (1 + smoothing) * radius
     if reach > budget:
@@ -149,6 +153,7 @@ def round_svg(master, pixels):
 
 
 def squircle_svg(master, pixels):
+    """Draws the macOS icon with its Dock margin at the requested logical size."""
     canvas = 1024.0
     side = canvas * SQUIRCLE_FILL
     inset = (canvas - side) / 2
@@ -214,6 +219,7 @@ def square_svg(master, pixels):
 
 
 def rasterize(svg_text, pixels, workdir, name):
+    """Renders directly from vector artwork onto a transparent pixel canvas."""
     source = workdir / f"{name}.svg"
     target = workdir / f"{name}.png"
     source.write_text(svg_text, encoding="utf-8")
@@ -233,6 +239,7 @@ def rasterize(svg_text, pixels, workdir, name):
 
 
 def write_ico(entries, path):
+    """Packs RGBA PNGs into a Windows icon family with 32-bit directory entries."""
     header = struct.pack("<HHH", 0, 1, len(entries))
     offset = len(header) + 16 * len(entries)
     directory = b""
@@ -255,6 +262,7 @@ def write_ico(entries, path):
 
 
 def write_icns(entries, path):
+    """Packs standard and Retina PNG representations into a macOS icon family."""
     body = b""
     for kind, blob in entries:
         body += kind.encode("ascii") + struct.pack(">I", len(blob) + 8) + blob
@@ -300,13 +308,11 @@ def main():
             target.write_bytes(blob)
 
         icns = []
-        rendered = {}
-        for kind, pixels in ICNS_TYPES:
-            if pixels not in rendered:
-                rendered[pixels] = rasterize(
-                    squircle_svg(master, pixels), pixels, workdir, f"m{pixels}"
-                )
-            icns.append((kind, rendered[pixels]))
+        for kind, points, scale in ICNS_TYPES:
+            blob = rasterize(
+                squircle_svg(master, points), points * scale, workdir, kind
+            )
+            icns.append((kind, blob))
         write_icns(icns, assets / "macos" / "sonora.icns")
 
         ico = [
@@ -325,9 +331,8 @@ def main():
         for pixels in TRAY_SIZES:
             blob = rasterize(template_svg(master), pixels, workdir, f"t{pixels}")
             (tray / f"template-{pixels}.png").write_bytes(blob)
-        (tray / "sonora.png").write_bytes(
-            rasterize(round_svg(master, 32), 32, workdir, "tray")
-        )
+        for obsolete in ["template-32.png", "template-64.png", "sonora.png"]:
+            (tray / obsolete).unlink(missing_ok=True)
 
         ios = ROOT / "apps" / "ios" / "assets"
         ios.mkdir(parents=True, exist_ok=True)
@@ -347,7 +352,7 @@ def main():
 
     print(
         f"icons: {len(LINUX_SIZES)} linux png, 1 linux svg, 1 icns, 1 ico,"
-        f" {len(TRAY_SIZES) + 1} tray png, 1 readme svg, 1 macos svg, 1 windows svg, 1 ios png"
+        f" {len(TRAY_SIZES)} tray png, 1 readme svg, 1 macos svg, 1 windows svg, 1 ios png"
     )
 
 
