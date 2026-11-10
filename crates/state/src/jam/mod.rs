@@ -24,7 +24,7 @@ use crate::{
 };
 use cast::Broadcast;
 use receiver::ReceiverEvent;
-use server::{Playing, ServerEvent, Serving, Sheet, Transport};
+use server::{Playing, Reel, ServerEvent, Serving, Sheet, Transport};
 use snapshot::{Controls, Lineup, Seat, Snapshot, Words};
 use wire::{Act, Denial, Hit, Line, Pack, Refusal};
 
@@ -46,6 +46,9 @@ const BACKOFF: [Duration; 3] = [
 const PROBE: [&str; 2] = ["8.8.8.8:80", "192.168.1.1:9"];
 const PER_PROVIDER: usize = 6;
 const ASKS: usize = 8;
+/// The tallest video a jam serves, whatever the app itself shows: a phone on the local network
+/// gains nothing from more, and every listener shares the one download.
+const FILM_HEIGHT: u32 = 720;
 
 pub struct Parts {
     pub playback: Entity<Playback>,
@@ -115,6 +118,12 @@ pub struct Jam {
     now: watch::Sender<Option<Playing>>,
     transport: watch::Sender<Transport>,
     snapshot: watch::Sender<Arc<Snapshot>>,
+    /// The playing track's video, while hosting with the video setting on and the provider
+    /// has said the track has one.
+    reel: watch::Sender<Option<Reel>>,
+    /// The track `reel` was last decided for, so the provider is asked once per track.
+    filmed: Option<String>,
+    filming: Option<Task<()>>,
     grants: HashMap<String, Caps>,
     kicks: tokio::sync::broadcast::Sender<String>,
     serve: Option<Task<()>>,
@@ -146,12 +155,11 @@ impl Jam {
                 return this.leave(cx);
             }
 
-            let large = this.cover.read(cx).max().map(str::to_owned);
+            this.film(cx);
+            this.renew(cx);
             let playback = playback.read(cx);
             this.broadcast
                 .follow(playback.current_slug().and_then(known));
-            this.now
-                .send_replace(playback.track().map(|track| playing(track, large)));
             this.transport.send_replace(Transport {
                 playing: matches!(playback.state(), PlaybackState::Playing),
                 position_ms: playback.live_position().as_millis() as u64,
@@ -169,13 +177,8 @@ impl Jam {
         cx.observe(&lyrics, |this: &mut Self, _, cx| this.publish(cx))
             .detach();
 
-        cx.observe(&cover, |this: &mut Self, cover, cx| {
-            let large = cover.read(cx).max().map(str::to_owned);
-            let track = this.playback.read(cx).track().cloned();
-            this.now
-                .send_replace(track.map(|track| playing(&track, large)));
-        })
-        .detach();
+        cx.observe(&cover, |this: &mut Self, _, cx| this.renew(cx))
+            .detach();
 
         Self {
             role: JamRole::Idle,
@@ -193,6 +196,9 @@ impl Jam {
             now: watch::channel(None).0,
             transport: watch::channel(Transport::default()).0,
             snapshot: watch::channel(Arc::new(Snapshot::default())).0,
+            reel: watch::channel(None).0,
+            filmed: None,
+            filming: None,
             grants: HashMap::new(),
             kicks: tokio::sync::broadcast::channel(8).0,
             serve: None,
@@ -347,12 +353,10 @@ impl Jam {
             false => name.to_owned(),
         };
 
-        let large = self.cover.read(cx).max().map(str::to_owned);
+        self.renew(cx);
         let playback = self.playback.read(cx);
         self.broadcast
             .follow(playback.current_slug().and_then(known));
-        self.now
-            .send_replace(playback.track().map(|track| playing(track, large)));
         self.transport.send_replace(Transport {
             playing: matches!(playback.state(), PlaybackState::Playing),
             position_ms: playback.live_position().as_millis() as u64,
@@ -374,6 +378,7 @@ impl Jam {
             now: self.now.subscribe(),
             snapshot: self.snapshot.subscribe(),
             events,
+            reel: self.reel.subscribe(),
         };
 
         let served = self.io.spawn(server::run(listener, serving));
@@ -393,6 +398,7 @@ impl Jam {
             listeners: Vec::new(),
             lead: lead::FLOOR,
         };
+        self.film(cx);
         cx.emit(JamEvent::Started);
         cx.notify();
         self.publish(cx);
@@ -409,8 +415,80 @@ impl Jam {
         self.grants.clear();
         self.snapshot.send_replace(Arc::new(Snapshot::default()));
         self.role = JamRole::Idle;
+        self.film(cx);
         cx.emit(JamEvent::Stopped);
         cx.notify();
+    }
+
+    /// Tells listeners what is playing, with the key of its video when one may be watched.
+    fn renew(&mut self, cx: &mut Context<Self>) {
+        let large = self.cover.read(cx).max().map(str::to_owned);
+        let track = self.playback.read(cx).track();
+        let video = self
+            .reel
+            .borrow()
+            .as_ref()
+            .filter(|reel| track.and_then(|track| track.id.as_ref()) == Some(&reel.id))
+            .map(|reel| reel.key.clone());
+        self.now
+            .send_replace(track.map(|track| playing(track, large, video)));
+    }
+
+    /// Keeps `reel` on the playing track's video while hosting with the video setting on,
+    /// asking the provider once per track whether there is one. Nothing is downloaded here.
+    fn film(&mut self, cx: &mut Context<Self>) {
+        let settings = self.settings.read(cx);
+        let height = settings.video_max_height().min(FILM_HEIGHT);
+        let id = match self.hosting() && settings.video() {
+            true => self
+                .playback
+                .read(cx)
+                .track()
+                .and_then(|track| track.id.clone()),
+            false => None,
+        };
+        if id == self.filmed {
+            return;
+        }
+
+        self.filmed = id.clone();
+        self.filming = None;
+        if self.reel.borrow().is_some() {
+            self.reel.send_replace(None);
+        }
+        let Some(id) = id else {
+            return;
+        };
+        let session = self.session.read(cx);
+        let Some(client) = session
+            .slug_for(&id)
+            .and_then(|slug| session.client_for_slug(slug))
+        else {
+            return;
+        };
+
+        let io = self.io.clone();
+        self.filming = Some(cx.spawn(async move |this, cx| {
+            let asking = client.clone();
+            let asked = id.clone();
+            let has = join(io.spawn(async move { asking.has_video(&asked).await })).await;
+            if !matches!(has, Ok(true)) {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                if this.filmed.as_deref() != Some(id.as_str()) {
+                    return;
+                }
+                this.reel.send_replace(Some(Reel {
+                    key: fingerprint(&id),
+                    id,
+                    client,
+                    height,
+                }));
+                this.renew(cx);
+            })
+            .ok();
+        }));
     }
 
     fn arrived(&mut self, event: ServerEvent, cx: &mut Context<Self>) {
@@ -898,7 +976,7 @@ fn hit(track: music::Track, slug: &'static str) -> Hit {
     }
 }
 
-fn playing(track: &music::Track, large: Option<String>) -> Playing {
+fn playing(track: &music::Track, large: Option<String>, video: Option<String>) -> Playing {
     log::debug!(
         "jam: artwork for {} is {:?}",
         track.name,
@@ -918,7 +996,17 @@ fn playing(track: &music::Track, large: Option<String>) -> Playing {
         cover: large.or_else(|| track.cover.clone()),
         duration_ms: track.duration.as_millis() as u64,
         provider: provider.to_owned(),
+        video,
     }
+}
+
+/// A short key for a track's video that tells a listener's browser one track's video from the
+/// next without putting the track id in a URL.
+fn fingerprint(id: &str) -> String {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn row(track: &music::Track) -> Hit {

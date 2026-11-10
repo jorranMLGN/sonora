@@ -100,6 +100,17 @@ impl VideoDownload {
     pub fn broken(&self) -> bool {
         self.0.failed().is_some()
     }
+
+    /// Another cursor over the same download, from its first byte, for a second reader such as
+    /// the jam serving the video to a browser.
+    pub fn reader(&self) -> impl std::io::Read + std::io::Seek + Send + use<> {
+        self.0.reader()
+    }
+
+    /// The length the server announced for the file, if it announced one.
+    pub fn total(&self) -> Option<u64> {
+        self.0.total()
+    }
 }
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";

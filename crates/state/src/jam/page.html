@@ -83,6 +83,15 @@
         height: 42%;
         pointer-events: none;
       }
+      .art.film { aspect-ratio: 16 / 9; background-image: none !important; }
+      .art video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: var(--fill);
+      }
       .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font-size: 13px; color: var(--dim); }
       .toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
       .scope {
@@ -342,7 +351,10 @@
     <main>
       <div class="rail">
         <div class="eyebrow" id="room">{{jam-page-title}}</div>
-        <div class="art" id="art"><canvas id="spectrum" hidden></canvas></div>
+        <div class="art" id="art">
+          <video id="film" muted playsinline preload="auto" disablepictureinpicture hidden></video>
+          <canvas id="spectrum" hidden></canvas>
+        </div>
 
         <h1 id="title">{{jam-page-nothing}}</h1>
         <div class="artist" id="artist"></div>
@@ -380,6 +392,10 @@
         <div class="card">
           <label for="here">{{jam-page-here}}</label>
           <input id="here" type="range" min="0" max="100" step="1" value="100" />
+          <label class="toggle" for="filmOn" id="filmToggle" hidden>
+            <span>{{jam-page-video}}</span>
+            <input id="filmOn" type="checkbox" />
+          </label>
           <label class="toggle" for="spectrumOn">
             <span>{{jam-page-spectrum}}</span>
             <input id="spectrumOn" type="checkbox" checked />
@@ -536,6 +552,12 @@
       const NAME_KEY = "sonora.jam.name";
       const DEVICE_KEY = "sonora.jam.device";
       const SPECTRUM_KEY = "sonora.jam.spectrum";
+      const FILM_KEY = "sonora.jam.video";
+      // how far the picture may stray from the sound before it jumps rather than catches up
+      const FILM_JUMP = 0.6;
+      // how hard a small stray is evened out through the playback rate
+      const FILM_PULL = 0.5;
+      const FILM_RATE = 0.08;
       // the same shape the app draws: 32 bands from 100 Hz to 6 kHz, read off as thin bars
       const BANDS = 32;
       const LOW_HZ = 100;
@@ -609,6 +631,9 @@
       let scoping = 0;
       let grabbed = null;
       let spectrumOn = true;
+      let filmOn = false;
+      // the key of the playing track's video, when the host offers one
+      let reel = null;
       let format = null;
       let lead = 250;
       let origin = 0;
@@ -653,6 +678,7 @@
         me = localStorage.getItem(NAME_KEY) || "";
         device = localStorage.getItem(DEVICE_KEY) || "";
         spectrumOn = localStorage.getItem(SPECTRUM_KEY) !== "off";
+        filmOn = localStorage.getItem(FILM_KEY) === "on";
         const curve = JSON.parse(localStorage.getItem(EQ_KEY) || "null");
         if (curve && Array.isArray(curve.gains) && curve.gains.length === FREQUENCIES.length) {
           eqGains = curve.gains.map((db) => Math.min(EQ_REACH, Math.max(-EQ_REACH, Number(db) || 0)));
@@ -674,6 +700,7 @@
       el("offsetValue").textContent = `${trim} ms`;
       el("here").value = String(here);
       el("spectrumOn").checked = spectrumOn;
+      el("filmOn").checked = filmOn;
       el("me").value = me;
 
       window.addEventListener("error", (event) => fault(event.message));
@@ -698,6 +725,14 @@
         try {
           localStorage.setItem(HERE_KEY, String(here));
         } catch (_) {}
+      });
+
+      el("filmOn").addEventListener("change", (event) => {
+        filmOn = event.target.checked;
+        try {
+          localStorage.setItem(FILM_KEY, filmOn ? "on" : "off");
+        } catch (_) {}
+        film();
       });
 
       el("spectrumOn").addEventListener("change", (event) => {
@@ -951,6 +986,8 @@
             duration = message.duration_ms || 0;
             el("total").textContent = clock(duration);
             show("provider", LABELS[message.provider] || message.provider);
+            reel = message.video || null;
+            film();
             break;
           case "Transport":
             hostPlaying = message.playing;
@@ -1161,6 +1198,49 @@
           list.append(row);
         }
         el("shelfSaid").textContent = shelf.length ? "" : TEXT.library_empty;
+      }
+
+      // Shows the playing track's video in place of the cover while the host offers one and this
+      // listener wants it, and loads it again only when the track changes.
+      function film() {
+        const video = el("film");
+        const shown = Boolean(reel) && filmOn;
+        el("filmToggle").hidden = !reel;
+        el("art").classList.toggle("film", shown);
+        video.hidden = !shown;
+        if (!shown) {
+          if (video.getAttribute("src")) {
+            video.pause();
+            video.removeAttribute("src");
+            video.load();
+          }
+          return;
+        }
+        if (video.dataset.reel === reel) return;
+        video.dataset.reel = reel;
+        video.src = `${location.pathname}/video.mp4?v=${encodeURIComponent(reel)}`;
+        follow();
+      }
+
+      // Keeps the picture on the sound as this listener hears it, which runs behind the host by
+      // the lead and the listener's own offset.
+      function follow() {
+        const video = el("film");
+        if (video.hidden || video.readyState < 1) return;
+        if (!hostPlaying) {
+          if (!video.paused) video.pause();
+          return;
+        }
+        const heard = (position + (performance.now() - positionAt) - lead - trim) / 1000;
+        const target = Math.max(0, heard);
+        const stray = video.currentTime - target;
+        if (Math.abs(stray) > FILM_JUMP) {
+          video.currentTime = target;
+          video.playbackRate = 1;
+        } else {
+          video.playbackRate = 1 - clamp(stray * FILM_PULL, FILM_RATE);
+        }
+        if (video.paused) video.play().catch(() => {});
       }
 
       function lyrics() {
@@ -1717,6 +1797,7 @@
             duration > 0 ? `${Math.min(100, (moved / duration) * 100)}%` : "0";
         }
         sung();
+        follow();
 
         const scheduled = ctx && running && playAt !== null;
         const ahead = scheduled ? Math.round((playAt - ctx.currentTime) * 1000) : 0;

@@ -1589,6 +1589,7 @@ jam-page-shuffle = Shuffle
 jam-page-repeat = Repeat
 jam-page-here = Volume on this device
 jam-page-spectrum = Show the spectrum
+jam-page-video = Show the music video
 jam-page-equalizer = Equalizer on this device
 jam-page-equalizer-on = Use the equalizer
 jam-page-everyone = Volume for everyone

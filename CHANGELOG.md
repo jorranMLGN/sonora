@@ -11,6 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Mix providers in one playlist: pick New mixed playlist under Add to playlist, or add to any local playlist, and it takes songs and albums from Spotify, YouTube, SoundCloud and every other service. No music folder is needed.
 - Let an AI assistant such as Claude play, pause, skip, search and queue music, and make or fill playlists, mixed ones included: add `sonora mcp` as an MCP server.
+- Watch the music video on a Jam's web page: when the host plays a song with a video, listeners can turn on Show the music video and it plays in sync with the sound.
 
 ## [0.47.1] - 2026-11-05
 

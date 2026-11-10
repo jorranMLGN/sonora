@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 pub const MAGIC: [u8; 4] = *b"SNJ1";
 pub const HEADER: usize = 16;
 
@@ -259,6 +259,9 @@ pub enum FromHost {
         cover: Option<String>,
         duration_ms: u64,
         provider: String,
+        /// The key of the track's video, served at `video.mp4?v=<key>`, or `None` when it has
+        /// none to show.
+        video: Option<String>,
     },
     Transport {
         playing: bool,
@@ -375,9 +378,26 @@ mod tests {
             cover: None,
             duration_ms: 214_000,
             provider: "spotify".into(),
+            video: None,
         };
         let line = encode(&sent).unwrap();
         assert!(!line.contains('\n'));
+        assert_eq!(decode::<FromHost>(&line).unwrap(), sent);
+    }
+
+    #[test]
+    fn a_now_tells_which_video_to_ask_for() {
+        let sent = FromHost::Now {
+            title: "clip".into(),
+            artist: "x".into(),
+            album: String::new(),
+            cover: None,
+            duration_ms: 200_000,
+            provider: "youtube".into(),
+            video: Some("9f2c4a71e0b3d855".into()),
+        };
+        let line = encode(&sent).unwrap();
+        assert!(line.contains(r#""video":"9f2c4a71e0b3d855""#), "{line}");
         assert_eq!(decode::<FromHost>(&line).unwrap(), sent);
     }
 

@@ -160,6 +160,7 @@ async fn join(
                         cover,
                         duration_ms,
                         provider,
+                        video: _,
                     } => {
                         events
                             .send(ReceiverEvent::Now(Playing {
@@ -169,6 +170,8 @@ async fn join(
                                 cover,
                                 duration_ms,
                                 provider,
+                                // a joining Sonora plays the sound only
+                                video: None,
                             }))
                             .ok();
                     }

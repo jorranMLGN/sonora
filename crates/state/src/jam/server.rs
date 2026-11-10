@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::net::{IpAddr, SocketAddr, TcpListener as StdListener};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,6 +16,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use music::{MusicApi, VideoDownload};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -50,6 +52,11 @@ const FORMAT_WAIT: Duration = Duration::from_secs(120);
 const OPEN_WAIT: Duration = Duration::from_secs(2);
 const WAV_HEADER: usize = 44;
 const ENDLESS: u32 = u32::MAX;
+/// The most of the video one request is answered with, so a browser asking for the rest of
+/// the file gets a piece it can start on while the download is still on its way.
+const PIECE: u64 = 2 * 1024 * 1024;
+/// How long opening a track's video may take before its request is turned down.
+const FILM_WAIT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Playing {
@@ -59,6 +66,27 @@ pub struct Playing {
     pub cover: Option<String>,
     pub duration_ms: u64,
     pub provider: String,
+    /// The key of the playing track's video, when a listener may watch it.
+    pub video: Option<String>,
+}
+
+/// The video a listener may watch: the playing track's, and the provider to open it from. The
+/// download starts only when a browser first asks for it.
+#[derive(Clone)]
+pub struct Reel {
+    /// The key a listener asks for it by, as told in `FromHost::Now`.
+    pub key: String,
+    /// The tagged id of the track.
+    pub id: String,
+    pub client: Arc<dyn MusicApi>,
+    /// The tallest stream to open.
+    pub height: u32,
+}
+
+/// The download of the video being served, shared by every listener watching it.
+struct Film {
+    key: String,
+    download: VideoDownload,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -148,6 +176,7 @@ pub struct Serving {
     pub transport: watch::Receiver<Transport>,
     pub snapshot: watch::Receiver<Arc<Snapshot>>,
     pub events: UnboundedSender<ServerEvent>,
+    pub reel: watch::Receiver<Option<Reel>>,
 }
 
 struct Shared {
@@ -158,6 +187,9 @@ struct Shared {
     lead: Mutex<Lead>,
     leads: watch::Sender<u32>,
     page: String,
+    /// The video download, opened on the first request for it and dropped when the track
+    /// changes, so a jam nobody watches downloads nothing.
+    film: tokio::sync::Mutex<Option<Film>>,
 }
 
 pub fn bind(port: u16) -> Result<(StdListener, u16)> {
@@ -190,6 +222,22 @@ pub async fn run(listener: StdListener, serving: Serving) {
         limits: Mutex::new(HashMap::new()),
         kicked: Mutex::new(HashSet::new()),
         listeners: AtomicUsize::new(0),
+        film: tokio::sync::Mutex::new(None),
+    });
+
+    let mut reel = shared.serving.reel.clone();
+    let dropping = shared.clone();
+    tokio::spawn(async move {
+        while reel.changed().await.is_ok() {
+            let key = reel
+                .borrow_and_update()
+                .as_ref()
+                .map(|reel| reel.key.clone());
+            let mut film = dropping.film.lock().await;
+            if film.as_ref().map(|film| &film.key) != key.as_ref() {
+                *film = None;
+            }
+        }
     });
 
     loop {
@@ -231,6 +279,7 @@ async fn answer(
     let page = format!("/c/{}", shared.serving.code);
     let socket = format!("{page}/ws");
     let stream = format!("{page}/stream.wav");
+    let video = format!("{page}/video.mp4");
 
     if req.method() == Method::GET && path == page {
         return Ok(Response::builder()
@@ -264,6 +313,10 @@ async fn answer(
         return Ok(answer
             .body(wav(format, opening, chunks))
             .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR)));
+    }
+
+    if req.method() == Method::GET && path == video {
+        return Ok(filmed(&req, &shared).await);
     }
 
     if path == socket && upgrading(&req) {
@@ -448,6 +501,7 @@ async fn session(
                         cover: playing.cover,
                         duration_ms: playing.duration_ms,
                         provider: playing.provider,
+                        video: playing.video,
                     };
                     if say(&mut socket, &told).await.is_err() {
                         break;
@@ -851,6 +905,124 @@ fn strike(shared: &Shared, peer: IpAddr) {
     entry.0 += 1;
 }
 
+/// Answers a browser's request for a piece of the playing track's video, opening its download
+/// first if nobody has watched it yet.
+async fn filmed(req: &Request<Incoming>, shared: &Arc<Shared>) -> Response<Body> {
+    let reel = shared.serving.reel.borrow().clone();
+    let Some(reel) = reel else {
+        return refuse(StatusCode::NOT_FOUND);
+    };
+    let Some(download) = projected(shared, &reel).await else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    let Some(total) = download.0 else {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE);
+    };
+
+    let asked = req
+        .headers()
+        .get(hyper::header::RANGE)
+        .and_then(|value| value.to_str().ok());
+    let Some(range) = span(asked, total) else {
+        return Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header("content-range", format!("bytes */{total}"))
+            .body(boxed(Bytes::new()))
+            .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR));
+    };
+
+    let mut reader = download.1;
+    let wanted = range.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        reader.seek(SeekFrom::Start(wanted.start))?;
+        let mut out = vec![0; (wanted.end - wanted.start) as usize];
+        reader.read_exact(&mut out)?;
+        std::io::Result::Ok(out)
+    })
+    .await;
+    let bytes = match read {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) => {
+            log::debug!("jam: cannot read the video: {error}");
+            return refuse(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        Err(error) => {
+            log::warn!("jam: the video read stopped: {error}");
+            return refuse(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header("content-type", "video/mp4")
+        .header("accept-ranges", "bytes")
+        .header("cache-control", "no-store")
+        .header(
+            "content-range",
+            format!("bytes {}-{}/{total}", range.start, range.end - 1),
+        )
+        .body(boxed(Bytes::from(bytes)))
+        .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR))
+}
+
+/// The length and a fresh cursor of the reel's download, opening it when it is not the one
+/// already running or that one broke.
+async fn projected(
+    shared: &Arc<Shared>,
+    reel: &Reel,
+) -> Option<(
+    Option<u64>,
+    impl std::io::Read + std::io::Seek + Send + use<>,
+)> {
+    let mut film = shared.film.lock().await;
+    let stale = film
+        .as_ref()
+        .is_none_or(|film| film.key != reel.key || film.download.broken());
+    if stale {
+        *film = None;
+        let opening = reel.client.video(&reel.id, reel.height);
+        let feed = match tokio::time::timeout(FILM_WAIT, opening).await {
+            Ok(Ok(Some(feed))) => feed,
+            Ok(Ok(None)) => return None,
+            Ok(Err(error)) => {
+                log::warn!("jam: cannot open the video: {error:#}");
+                return None;
+            }
+            Err(_) => {
+                log::warn!("jam: opening the video timed out");
+                return None;
+            }
+        };
+        *film = Some(Film {
+            key: reel.key.clone(),
+            download: feed.stream,
+        });
+    }
+    let download = &film.as_ref()?.download;
+    Some((download.total(), download.reader()))
+}
+
+/// The bytes a `Range` header asks for, as a half-open range no longer than `PIECE`. No header
+/// reads as the whole file. Suffix ranges, several ranges and a start past the end are refused.
+fn span(asked: Option<&str>, total: u64) -> Option<std::ops::Range<u64>> {
+    let (start, end) = match asked {
+        None => (0, None),
+        Some(asked) => {
+            let (start, end) = asked.trim().strip_prefix("bytes=")?.split_once('-')?;
+            let end = match end.trim() {
+                "" => None,
+                end => Some(end.parse::<u64>().ok()?.checked_add(1)?),
+            };
+            (start.trim().parse::<u64>().ok()?, end)
+        }
+    };
+    let end = end
+        .unwrap_or(u64::MAX)
+        .min(total)
+        .min(start.saturating_add(PIECE));
+    (start < end).then_some(start..end)
+}
+
 fn refuse(status: StatusCode) -> Response<Body> {
     Response::builder()
         .status(status)
@@ -958,4 +1130,37 @@ fn millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOTAL: u64 = 10 * 1024 * 1024;
+
+    #[test]
+    fn an_open_range_is_capped_at_one_piece() {
+        assert_eq!(span(Some("bytes=0-"), TOTAL), Some(0..PIECE));
+        assert_eq!(span(None, TOTAL), Some(0..PIECE));
+    }
+
+    #[test]
+    fn a_closed_range_ends_after_its_last_byte() {
+        assert_eq!(span(Some("bytes=100-199"), TOTAL), Some(100..200));
+    }
+
+    #[test]
+    fn a_range_past_the_end_is_cut_to_the_file() {
+        assert_eq!(span(Some("bytes=10-"), 50), Some(10..50));
+        assert_eq!(span(Some("bytes=10-999"), 50), Some(10..50));
+    }
+
+    #[test]
+    fn a_range_that_cannot_be_served_is_refused() {
+        assert_eq!(span(Some("bytes=50-"), 50), None);
+        assert_eq!(span(Some("bytes=20-10"), 50), None);
+        assert_eq!(span(Some("bytes=-500"), 50), None);
+        assert_eq!(span(Some("bytes=0-1,5-9"), 50), None);
+        assert_eq!(span(Some("items=0-"), 50), None);
+    }
 }
